@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]
 #[command(name = "uwubot", version, about = "Run Cthuwu's one-to-one XMTP companion")]
 struct Cli {
-    #[arg(long, env = "UWUBOT_DATA_DIR", default_value = ".uwubot")]
+    #[arg(long, env = "UWUBOT_DATA_DIR", default_value = ".")]
     data_dir: PathBuf,
 
     #[arg(long, env = "UWUBOT_XMTP_ENV", value_enum, default_value_t = Network::Dev)]
