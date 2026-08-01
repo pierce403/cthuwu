@@ -80,7 +80,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Identity creation is atomic, reusable, permission-restricted, and environment-locked in unit tests.
   - [x] Rust passes an allowlisted environment that excludes model credentials.
   - [x] SIGINT/SIGTERM close protocol input, permit graceful Agent SDK shutdown, and force-kill only after a timeout.
-  - [ ] The container image builds in CI.
+  - [x] The container image builds in CI.
   - [ ] Reconnect and graceful shutdown are verified against a live XMTP stream.
 
 ### One-to-one conversation processing
