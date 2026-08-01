@@ -16,18 +16,26 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 - renders text history and streams new messages;
 - sends text messages.
 
-The current low-friction identity is an ephemeral EOA stored in browser local storage. It must be presented honestly: clearing site data loses that local key unless the identity has another recovery path.
+The low-friction identity is a randomly generated EOA stored in browser local storage alongside a separate XMTP database key. The client connects automatically on load. It must be presented honestly: clearing site data loses that local key unless the identity has another recovery path.
 
 ### Rust runtime
 
-The `cthuwu` binary will expose:
+The backend is one binary and one normal invocation: `uwubot`. It owns the XMTP client, contact store, onboarding policy, and model adapter. Operational diagnostics should be flags or startup checks rather than a family of subcommands.
 
-- `cthuwu init`: create/configure a dedicated companion identity and data directory;
-- `cthuwu serve`: sync and stream XMTP conversations, generate replies, and shut down cleanly;
-- `cthuwu status`: show non-secret identity and configuration health;
-- `cthuwu doctor`: test storage, network, and model connectivity without sending a chat message.
+By default, contact notes live at `contacts/<inbox-id>.md`. `UWUBOT_DATA_DIR` can relocate the whole runtime data root. The exact XMTP inbox ID is validated before it becomes a filename.
 
-The initial crate establishes the command and configuration boundary. Direct libxmtp integration follows behind a `Transport` trait so protocol churn does not spread through persona/model code.
+Direct libxmtp integration remains behind a transport boundary so protocol churn does not spread through contact and persona code.
+
+### Contact memory
+
+A newly observed inbox gets a Markdown note with timestamps and an onboarding stage. Cthuwu asks, in order:
+
+1. what the person wants to be called;
+2. their hopes and dreams;
+3. resources, skills, time, or knowledge they may want to share;
+4. resources or support they need.
+
+Answers are stored as quoted Markdown to prevent user text from altering the note structure. The bot records user-provided statements, not inferred traits presented as facts. Contact notes are personal data: they are ignored by git and need future export, correction, deletion, and retention controls.
 
 ### Companion core
 
