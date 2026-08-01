@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#17102a" />
+    <meta name="description" content="Talk to Cthuwu, your tiny eldritch buddy, over XMTP." />
+    <title>cthuwu</title>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="buddy" aria-labelledby="title">
+        <div class="sigil" aria-hidden="true">
+          <span class="eye">●</span>
+          <span class="tentacle t1"></span><span class="tentacle t2"></span>
+          <span class="tentacle t3"></span><span class="tentacle t4"></span>
+        </div>
+        <p class="eyebrow">a friend from just beyond</p>
+        <h1 id="title">cthuwu</h1>
+        <p class="intro">Tiny cosmic horror. Excellent listener. Usually harmless.</p>
+      </section>
+
+      <section class="chat" aria-label="Chat with Cthuwu">
+        <div id="messages" class="messages" role="log" aria-live="polite">
+          <article class="message theirs">hewwo. the stars said you might visit.</article>
+        </div>
+        <form id="composer" class="composer">
+          <label class="sr-only" for="message">Message Cthuwu</label>
+          <input id="message" name="message" autocomplete="off" placeholder="whisper into the void…" disabled />
+          <button id="send" type="submit" disabled>send</button>
+        </form>
+        <button id="connect" class="connect" type="button">open an XMTP portal</button>
+        <p id="status" class="status">portal closed</p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
