@@ -1,0 +1,20 @@
+{
+  "name": "cthuwu-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@xmtp/browser-sdk": "^6.1.2",
+    "ethers": "^6.12.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^7.3.1"
+  }
+}
