@@ -7,6 +7,7 @@ dist/
 .DS_Store
 *.db
 *.db-*
+*.db3
 *.sqlite
 *.sqlite3
 *.pem
@@ -17,8 +18,12 @@ dist/
 *.keystore
 keystore*.json
 wallet*.json
+xmtp-identity.json
 mnemonic*.txt
 seed*.txt
 private*.txt
 contacts/
+/state/
+/xmtp/
+/cthuwu-data/
 .uwubot/

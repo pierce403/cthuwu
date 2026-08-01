@@ -1,61 +1,132 @@
 # cthuwu
 
-A tiny eldritch companion you can message over [XMTP](https://xmtp.org).
+A tiny eldritch companion people can message over [XMTP](https://xmtp.org).
 
-Cthuwu has two parts:
+Cthuwu has two user-facing pieces:
 
-- `web/`: a small browser client that builds to static files and automatically creates a dedicated local XMTP identity.
-- `cthuwu/`: the Rust `uwubot` backend, which owns the companion identity and one-to-one contact memory.
+- `web/`: a static browser client that creates a dedicated local identity and opens a one-to-one DM;
+- `cthuwu/`: the single Rust command, `uwubot`, which owns contact memory, consent, matching policy, and model access.
 
-## Current behavior
+`uwubot` supervises the supported `@xmtp/agent-sdk` transport in `agent/`. Node is an internal transport detail: the operator still starts and stops one command. Direct libxmtp crates are not currently a stable, published Rust integration surface.
 
-On first visit, the browser generates a random EOA private key and a separate XMTP database-encryption key, stores both in local storage, and automatically connects to the configured XMTP network. Returning visits reuse those keys. Clearing site data loses this browser identity.
+The detailed product contract and remaining release gates live in [FEATURES.md](FEATURES.md).
 
-The Rust contact engine creates `contacts/<inbox-id>.md` when it sees a new inbox. Its onboarding conversation asks what the person wants to be called, about their hopes and dreams, resources they may want to share, and support they need. The notes contain only answers the person supplied; model guesses must never be written as facts.
+## What works
 
-The contact engine and stdin integration harness are working. Native libxmtp transport wiring remains the next backend step.
+- The browser generates an environment-scoped wallet before connecting, reuses it on reload, and supports passphrase-encrypted identity export/import and confirmed reset.
+- The web client loads text history, streams new text, and preserves a draft after a failed send.
+- `uwubot` creates a persistent XMTP wallet and encrypted database on first start, then reuses both.
+- A new sender gets exactly `contacts/<inbox-id>.md` and a deterministic conversation about their name, hopes, possible contributions, and needs.
+- `/profile`, `/set`, `/skip`, `/share`, `/matches`, `/pause`, `/resume`, and `/forget confirm` provide inspectable consent and data controls.
+- Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
+- Deterministic, Ollama, and OpenAI-compatible model modes are available. No message reaches a model provider unless the operator explicitly selects it.
 
-The detailed roadmap and acceptance criteria live in [FEATURES.md](FEATURES.md).
+The code paths and local tests are working. A live browser-to-bot XMTP exchange still has to pass the release gate before this project claims production interoperability.
 
-## Repository layout
+## Build and verify
 
-```text
-cthuwu/        Rust uwubot backend
-web/           Static browser chat client
-docs/          Architecture, decisions, and research notes
-skills/        Reusable project-specific agent procedures
-```
-
-## Development
+Requirements: Node 22 or newer and Rust 1.97 or newer.
 
 ```bash
-cargo test --manifest-path cthuwu/Cargo.toml
+npm --prefix agent ci
+npm --prefix agent run typecheck
+npm --prefix agent test
+npm --prefix agent run build
+
 npm --prefix web ci
+npm --prefix web run typecheck
+npm --prefix web test
 npm --prefix web run build
+
+cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
+cargo test --manifest-path cthuwu/Cargo.toml --locked
+cargo clippy --manifest-path cthuwu/Cargo.toml --all-targets --locked -- -D warnings
+cargo build --manifest-path cthuwu/Cargo.toml --release --locked
 ```
 
-Exercise the contact flow locally:
+## Run `uwubot`
+
+Build once, then run from the repository root so the default sidecar path resolves:
+
+```bash
+UWUBOT_DATA_DIR="$PWD/cthuwu-data" \
+UWUBOT_XMTP_ENV=dev \
+./cthuwu/target/release/uwubot
+```
+
+The first successful connection logs the bot's public Ethereum address without logging its keys. Set the website to the same network and that address, then redeploy:
+
+```bash
+gh variable set VITE_XMTP_ENV --body dev
+gh variable set VITE_XMTP_BOT_ADDRESS --body 0xYOUR_CTHUWU_ADDRESS
+gh workflow run pages.yml
+```
+
+Normal state is kept below `UWUBOT_DATA_DIR`:
+
+```text
+contacts/<inbox-id>.md
+state/environment
+state/processed/<hashed-message-id>
+state/xmtp-identity.json
+state/xmtp/<environment>/
+```
+
+The identity file contains a private key protected by owner-only filesystem permissions. Back up the entire data directory securely. Do not delete only the XMTP database: doing so creates a new installation and can eventually exhaust the inbox installation limit.
+
+For an offline contact-flow harness:
 
 ```bash
 cargo run --manifest-path cthuwu/Cargo.toml --bin uwubot -- \
+  --data-dir /tmp/cthuwu-harness \
   --stdin-inbox 012345abcdef
 ```
 
-Each line on stdin is treated as the next message from that test inbox.
+Each input line is the next message from that test inbox.
 
-## Deployment
+## Model modes
 
-Pushes to `main` build and deploy `web/dist` to [cthuwu.app](https://cthuwu.app). The build uses:
+The default `deterministic` mode keeps all conversation content local and is useful for bring-up.
 
-- `VITE_XMTP_ENV`: `dev`, `production`, or `local`; defaults to `dev`.
-- `VITE_XMTP_BOT_ADDRESS`: the companion's Ethereum address or ENS name.
+For Ollama's OpenAI-compatible endpoint:
+
+```bash
+UWUBOT_MODEL=ollama \
+UWUBOT_MODEL_ENDPOINT=http://127.0.0.1:11434/v1 \
+UWUBOT_MODEL_NAME=qwen3:8b \
+./cthuwu/target/release/uwubot
+```
+
+For another OpenAI-compatible provider, select `UWUBOT_MODEL=openai` and set `UWUBOT_MODEL_API_KEY`, `UWUBOT_MODEL_ENDPOINT`, and `UWUBOT_MODEL_NAME`. The XMTP transport subprocess receives an allowlisted environment and cannot see the model credential.
+
+## Container
+
+The container packages Rust, Node, the Agent SDK, and its native binding while preserving the one-command runtime:
+
+```bash
+docker build -t cthuwu .
+docker volume create cthuwu-data
+docker run --rm -it --init -v cthuwu-data:/data cthuwu
+```
+
+Pass `-e UWUBOT_XMTP_ENV=production` only after the production website is configured for the same environment.
+
+## Browser deployment
+
+Pushes to `main` build and deploy `web/dist` to [cthuwu.app](https://cthuwu.app). The build reads:
+
+- `VITE_XMTP_ENV`: `dev`, `production`, or `local`;
+- `VITE_XMTP_BOT_ADDRESS`: Cthuwu's public Ethereum address or ENS name.
+
+The browser wallet is stored in local storage. Its XMTP Browser SDK message database is currently unencrypted. The settings dialog says this explicitly; an identity export recovers the wallet/inbox, not message history or necessarily the same installation.
 
 ## Privacy and security
 
-- Never commit wallet keys, database keys, model credentials, or generated databases.
-- `contacts/` is ignored because it contains personal statements.
-- Use a dedicated, minimally funded companion identity.
-- Visitors should eventually get an export/recovery and delete/reset control for their browser identity and contact memory.
+- Never commit wallet keys, XMTP database keys, model credentials, generated databases, or contact notes.
+- Use dedicated identities with no material funds.
+- Normal logs omit keys and message bodies.
+- Opting into matching permits other opted-in people to see the chosen display name and matching terms, but never the inbox ID; Cthuwu does not make automatic introductions.
+- `/forget confirm` deletes the caller's local contact note. It cannot erase copies already delivered over XMTP.
 
 ## License
 

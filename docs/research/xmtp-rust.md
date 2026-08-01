@@ -6,13 +6,12 @@ XMTP's shared core implementation is [libxmtp](https://github.com/xmtp/libxmtp).
 
 For Cthuwu, direct Rust integration is attractive because it avoids embedding Node beside the Rust CLI. It also carries integration risk: libxmtp is primarily the shared core and its platform SDK bindings are the polished integrator surfaces.
 
-## Implementation approach
+## Current decision
 
-1. Prototype against a pinned libxmtp commit, not an unbounded git branch.
-2. Put every concrete XMTP type inside `transport::xmtp`.
-3. Expose a narrow internal `Transport` trait using Cthuwu-owned message types.
-4. Store the pinned commit and build prerequisites here.
-5. Add an XMTP dev-network interoperability test before production use.
-6. Track upstream schema/database migrations and test upgrade/rollback behavior.
+The first release uses `@xmtp/agent-sdk@2.3.0` behind the Rust process boundary described in [decision 0002](../decisions/0002-agent-sdk-sidecar.md). This is XMTP's supported bot integration surface and already handles content decoding, self-message filtering, and stream recovery.
 
-Do not create a pretend crate dependency until the exact upstream revision and public API have been validated in a compiling prototype.
+A native implementation was source-validated against libxmtp revision `66944e28f1d19269be7af0e11e165492f61a2b19` on 2026-08-01. It is technically possible, but every `xmtp_*` crate would need to be pinned to the same Git revision along with libxmtp's Diesel and hpke-rs patches. The workspace requires Rust 1.94 or newer and does not publish those crates as a supported public SDK.
+
+An important interoperability pitfall: native `StoredGroupMessage.decrypted_message_bytes` contains protobuf `EncodedContent`, not raw UTF-8. Browser/Node text must be decoded and encoded through `xmtp_content_types::text::TextCodec`. The `xdbg` utility's raw-byte paths are not a suitable application transport.
+
+Reconsider direct Rust only when a stable upstream surface materially reduces this maintenance cost. Keep any future concrete XMTP types inside the transport module and rerun database upgrade, replay, and browser interoperability tests.

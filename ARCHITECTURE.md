@@ -16,15 +16,17 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 - renders text history and streams new messages;
 - sends text messages.
 
-The low-friction identity is a randomly generated EOA stored in browser local storage alongside a separate XMTP database key. The client connects automatically on load. It must be presented honestly: clearing site data loses that local key unless the identity has another recovery path.
+The low-friction identity is a randomly generated EOA stored in browser local storage. The client connects automatically on load and supports a passphrase-encrypted wallet export. It must be presented honestly: the current XMTP Browser SDK database is unencrypted, clearing site data loses the identity without an export, and an identity export is not a history backup.
 
-### Rust runtime
+### Rust runtime and XMTP transport
 
-The backend is one binary and one normal invocation: `uwubot`. It owns the XMTP client, contact store, onboarding policy, and model adapter. Operational diagnostics should be flags or startup checks rather than a family of subcommands.
+The backend has one operator-facing invocation: the Rust `uwubot` binary. Rust owns the contact store, onboarding and consent policy, message deduplication, matching, model adapter, and process lifecycle.
+
+For the first release, `uwubot` supervises a small Node subprocess built on the official `@xmtp/agent-sdk`. The subprocess owns only identity bootstrapping, the encrypted XMTP database, network streams, and text DM encoding. Rust and Node exchange bounded JSONL frames over private stdin/stdout pipes. Subprocess stdout is reserved for protocol frames; diagnostics go to stderr without message bodies.
 
 By default, contact notes live at `contacts/<inbox-id>.md`. `UWUBOT_DATA_DIR` can relocate the whole runtime data root. The exact XMTP inbox ID is validated before it becomes a filename.
 
-Direct libxmtp integration remains behind a transport boundary so protocol churn does not spread through contact and persona code.
+This preserves a single command while using XMTP's supported bot surface. A direct libxmtp implementation remains a possible later replacement behind the same boundary; its current Rust crates are unpublished internal workspace APIs.
 
 ### Contact memory
 
@@ -42,7 +44,7 @@ Answers are stored as quoted Markdown to prevent user text from altering the not
 The core owns message policy:
 
 1. accept supported text DMs;
-2. deduplicate by XMTP message ID;
+2. hash and durably deduplicate by XMTP message ID;
 3. apply consent, size, and concurrency limits;
 4. construct bounded conversation context;
 5. invoke the configured model adapter;
@@ -51,11 +53,11 @@ The core owns message policy:
 
 ### Model adapters
 
-A model adapter receives a structured request and returns text. Planned adapters:
+A model adapter receives a structured request and returns text. Implemented adapters:
 
 - OpenAI-compatible HTTP APIs;
 - Ollama/local HTTP;
-- deterministic echo adapter for end-to-end tests.
+- deterministic local adapter for tests and bring-up.
 
 The transport layer never knows which model is selected.
 
@@ -67,11 +69,12 @@ The transport layer never knows which model is selected.
 | XMTP → runtime | Message content and metadata | Decode validation, deduplication, rate limits |
 | Runtime → model | Conversation content | Explicit provider selection, bounded context |
 | Model → runtime | Generated text/tool requests | Output limit; no implicit tool execution |
-| Disk | Keys, databases, history | Encryption, restrictive permissions, backups |
+| Rust → XMTP subprocess | JSONL metadata and text | Allowlisted environment, bounded queue and frames |
+| Disk | Keys, databases, history | Encryption where supported, restrictive permissions, backups |
 
 ## Identity and persistence
 
-The runtime should use a dedicated XMTP identity. Identity material and database encryption keys live in the operator data directory, never environment files committed to git. Atomic creation is required: a crash during `init` must not strand half-written secrets.
+The runtime uses a dedicated XMTP identity. The sidecar atomically creates a wallet key and independent database-encryption key at `state/xmtp-identity.json`, then reuses the environment-specific encrypted database below `state/xmtp/`. Owner-only permissions are enforced on Unix. Operator-provided keys must match persisted state or startup fails closed.
 
 Each XMTP environment gets a separate data directory to prevent accidental dev/production identity mixing.
 
@@ -82,6 +85,6 @@ The first slice deliberately excludes groups, attachments, reactions, tools, lon
 ## Testing
 
 - Unit: config parsing, filtering, deduplication, prompt assembly, model adapters.
-- Integration: fake transport plus echo model.
+- Integration: JSONL transport contract plus deterministic model.
 - End-to-end: browser SDK and Rust runtime on XMTP dev, then production.
 - Recovery: restart, duplicate delivery, network loss, corrupt/missing configuration.

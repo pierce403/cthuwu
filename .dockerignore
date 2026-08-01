@@ -1,0 +1,14 @@
+.git
+.github
+**/node_modules
+**/dist
+**/target
+.env
+.env.*
+contacts
+state
+xmtp
+cthuwu-data
+*.db
+*.db-*
+*.sqlite*

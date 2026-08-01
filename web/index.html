@@ -20,19 +20,77 @@
         <p class="intro">Tiny cosmic horror. Excellent listener. Usually harmless.</p>
       </section>
 
-      <section class="chat" aria-label="Chat with Cthuwu">
-        <div id="messages" class="messages" role="log" aria-live="polite">
-          <article class="message theirs">hewwo. the stars said you might visit.</article>
+      <section id="chat" class="chat" aria-label="Chat with Cthuwu" aria-busy="true">
+        <div
+          id="messages"
+          class="messages"
+          role="log"
+          aria-label="Conversation with Cthuwu"
+          aria-live="polite"
+          tabindex="0"
+        >
+          <article class="message theirs">
+            <span class="sender">Cthuwu</span>
+            hewwo. the stars said you might visit.
+          </article>
         </div>
         <form id="composer" class="composer">
           <label class="sr-only" for="message">Message Cthuwu</label>
-          <input id="message" name="message" autocomplete="off" placeholder="whisper into the void…" disabled />
+          <input
+            id="message"
+            name="message"
+            autocomplete="off"
+            maxlength="16384"
+            placeholder="whisper into the void…"
+            disabled
+          />
           <button id="send" type="submit" disabled>send</button>
         </form>
-        <button id="connect" class="connect" type="button">open an XMTP portal</button>
-        <p id="status" class="status">portal closed</p>
+        <div class="actions">
+          <button id="connect" class="secondary" type="button" hidden>retry portal</button>
+          <button id="settings" class="secondary" type="button">identity settings</button>
+        </div>
+        <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
+          preparing a local identity…
+        </p>
+        <p id="composer-error" class="error" role="alert" hidden></p>
       </section>
     </main>
+
+    <dialog id="identity-dialog" aria-labelledby="identity-title">
+      <form method="dialog" class="settings">
+        <div class="dialog-heading">
+          <h2 id="identity-title">Browser identity</h2>
+          <button class="icon-button" value="close" aria-label="Close identity settings">×</button>
+        </div>
+        <p>
+          This device stores a randomly generated wallet used only for this chat identity.
+          The XMTP Browser SDK also keeps an <strong>unencrypted</strong> local message database.
+        </p>
+        <dl>
+          <dt>Address</dt>
+          <dd id="identity-address">unavailable</dd>
+          <dt>Network</dt>
+          <dd id="identity-environment">unknown</dd>
+        </dl>
+        <label for="backup-passphrase">Backup passphrase (at least 8 characters)</label>
+        <input id="backup-passphrase" type="password" autocomplete="new-password" minlength="8" />
+        <div class="settings-actions">
+          <button id="export-identity" type="button">download encrypted identity backup</button>
+          <label class="file-button">
+            import identity backup
+            <input id="import-identity" type="file" accept="application/json,.json" />
+          </label>
+        </div>
+        <p class="fine-print">
+          An identity backup can recover the wallet and inbox. It is not a message-history backup
+          and may not restore the same XMTP installation.
+        </p>
+        <button id="reset-identity" class="danger" type="button">reset this identity</button>
+        <p id="settings-status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </dialog>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -36,9 +36,14 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 
 ```bash
 cargo fmt --manifest-path cthuwu/Cargo.toml --check
-cargo test --manifest-path cthuwu/Cargo.toml
+cargo test --manifest-path cthuwu/Cargo.toml --locked
+npm --prefix agent ci
+npm --prefix agent run typecheck
+npm --prefix agent test
+npm --prefix agent run build
 npm --prefix web install
 npm --prefix web run typecheck
+npm --prefix web test
 npm --prefix web run build
 ```
 
@@ -75,6 +80,6 @@ Do not claim live XMTP interoperability until the end-to-end release gate in `FE
 ## Known state
 
 - `@xmtp/browser-sdk` is the browser-side SDK.
-- XMTP's core implementation is Rust (`libxmtp`), but its direct Rust surface is lower-level and less stable than the platform SDKs. Isolate it behind a transport trait.
+- XMTP's core implementation is Rust (`libxmtp`), but its direct Rust surface is unpublished and less stable than the platform SDKs. The first release uses `@xmtp/agent-sdk@2.3.0` behind a supervised JSONL subprocess boundary.
 - The browser uses a locally persisted random wallet for low-friction chat.
-- The contact engine works through the stdin harness; native libxmtp transport is not yet wired.
+- `uwubot` supervises the XMTP sidecar, creates persistent identity state, and processes direct text messages; live browser interoperability still must pass the release gate.
