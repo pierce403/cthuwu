@@ -43,6 +43,16 @@ npm --prefix web install
 npm --prefix web run build
 ```
 
+## Deployment
+
+Pushes to `main` build the static client in `web/` and deploy `web/dist` to
+GitHub Pages at [cthuwu.app](https://cthuwu.app). The workflow reads two
+non-secret repository variables when it builds:
+
+- `VITE_XMTP_ENV`: `dev`, `production`, or `local`; defaults to `dev`.
+- `VITE_XMTP_BOT_ADDRESS`: the companion's Ethereum address or ENS name. The
+  site still deploys when this is unset, but keeps chat disabled.
+
 ## Security
 
 Never commit wallet keys, XMTP database keys, model API keys, or generated local databases. The bot should use a dedicated identity with limited funds.

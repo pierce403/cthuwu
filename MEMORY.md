@@ -18,6 +18,13 @@ Last reviewed: 2026-08-01
 - Model access: adapter boundary; local models should be first-class.
 - Text-only DMs are the first vertical slice.
 
+## Deployment
+
+- The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
+- `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub Pages Actions.
+- The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
+- Public build configuration comes from the `VITE_XMTP_ENV` and `VITE_XMTP_BOT_ADDRESS` repository variables.
+
 See `ARCHITECTURE.md` and `docs/decisions/`.
 
 ## Reference projects

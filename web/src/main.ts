@@ -6,7 +6,7 @@ import {
   type DecodedMessage,
   type Signer,
 } from "@xmtp/browser-sdk";
-import { JsonRpcProvider, Wallet, getBytes } from "ethers";
+import { JsonRpcProvider, Wallet, getBytes, type HDNodeWallet } from "ethers";
 import "./style.css";
 
 const configuredAddress = (import.meta.env.VITE_XMTP_BOT_ADDRESS as string | undefined)?.trim();
@@ -48,7 +48,7 @@ function getOrCreateEncryptionKey(): Uint8Array {
   return key;
 }
 
-function getOrCreateWallet(): Wallet {
+function getOrCreateWallet(): Wallet | HDNodeWallet {
   const stored = localStorage.getItem(walletKeyName);
   if (stored) return new Wallet(stored);
 
@@ -57,7 +57,7 @@ function getOrCreateWallet(): Wallet {
   return wallet;
 }
 
-function createSigner(wallet: Wallet): Signer {
+function createSigner(wallet: Wallet | HDNodeWallet): Signer {
   return {
     type: "EOA",
     getIdentifier: () => ({
