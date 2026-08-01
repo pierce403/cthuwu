@@ -137,6 +137,9 @@ async function connect(): Promise<void> {
 
 connectElement.addEventListener("click", () => void connect());
 
+// First visit creates a dedicated local identity; returning visits reuse it.
+void connect();
+
 composerElement.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = inputElement.value.trim();
