@@ -16,7 +16,11 @@ Last reviewed: 2026-08-01
 - Runtime: Rust CLI with transport, companion, model, and state boundaries.
 - Persistence: encrypted XMTP database plus an application state store for processed-message idempotency.
 - Model access: adapter boundary; local models should be first-class.
-- Text-only DMs are the first vertical slice.
+- Text-only one-to-one DMs are the first vertical slice.
+- Browser identities are generated and connected automatically, then persisted in local storage.
+- The sole backend command is `uwubot`.
+- Contact notes default to `contacts/<inbox-id>.md` and are ignored by git because they contain personal statements.
+- Onboarding collects name, hopes, possible contributions, and needs as user-asserted information.
 
 ## Deployment
 
@@ -36,7 +40,7 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 ## Open questions
 
 - Which model backend should ship first: OpenAI-compatible HTTP, Ollama, or both?
-- Should visitors use an ephemeral identity, connect an existing wallet, or choose?
+- How should visitors export, recover, or reset the generated browser identity?
 - What address or ENS name will be Cthuwu's production XMTP identity?
 - Should one local process serve exactly one companion identity or support profiles?
 - Should conversation memory remain per-XMTP inbox, be user-editable, and/or expire?
