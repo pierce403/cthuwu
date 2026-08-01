@@ -20,3 +20,5 @@ wallet*.json
 mnemonic*.txt
 seed*.txt
 private*.txt
+contacts/
+.uwubot/
