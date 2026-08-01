@@ -14,3 +14,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "uwubot"
+path = "src/main.rs"
