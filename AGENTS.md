@@ -34,7 +34,7 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 ```bash
 cargo fmt --manifest-path cthuwu/Cargo.toml --check
 cargo test --manifest-path cthuwu/Cargo.toml
-npm --prefix web ci
+npm --prefix web install
 npm --prefix web run typecheck
 npm --prefix web run build
 ```
