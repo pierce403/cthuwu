@@ -15,6 +15,8 @@ The Rust contact engine creates `contacts/<inbox-id>.md` when it sees a new inbo
 
 The contact engine and stdin integration harness are working. Native libxmtp transport wiring remains the next backend step.
 
+The detailed roadmap and acceptance criteria live in [FEATURES.md](FEATURES.md).
+
 ## Repository layout
 
 ```text
