@@ -66,6 +66,18 @@ Operational notes from that run:
   CRLF/bare CR before blockquoting so CommonMark line endings cannot escape note structure.
 - Keep sidecar Vitest at `3.2.7` or newer within the pinned major line; earlier 3.2 releases have a
   critical development-server advisory.
+- Root `./uwu.sh` is the safe Unix/macOS/WSL launcher. It builds the locked sidecar and release
+  binary, defaults to environment-separated state at
+  `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/<environment>`, rejects repository-local or
+  symlinked state, and lets the sidecar atomically create or reuse identity material without
+  inspecting it.
+- `uwu.sh` removes `UWUBOT_MODEL_API_KEY`, `XMTP_WALLET_KEY`, and `XMTP_DB_ENCRYPTION_KEY` from
+  dependency/build subprocesses, rejects model credentials on argv, and preserves them only for the
+  final Rust process and its explicit transport allowlist.
+- Launcher setup is serialized by the PID-owned `cthuwu/target/.uwu-build.lock` directory; this is
+  necessary because concurrent `npm ci` operations can destructively race in shared `node_modules`.
+- The launcher refuses root, accepts only new/empty or environment-matching Cthuwu data roots, and
+  holds a PID-owned `.uwubot.lock` across `exec` so two runtimes cannot mutate one contact store.
 
 The next release task is to add a real browser/XMTP job to GitHub CI, then check the final release
 criterion without weakening the dedicated-identity or no-secret-log rules.

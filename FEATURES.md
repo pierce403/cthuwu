@@ -71,6 +71,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - `uwubot` supervises the pinned official `@xmtp/agent-sdk@2.3.0` transport as an implementation detail.
   - The transport atomically creates or loads a dedicated wallet key and encrypted XMTP database under `UWUBOT_DATA_DIR`.
   - Environment markers prevent silent development/production state reuse.
+  - `./uwu.sh` verifies the required runtimes, serializes concurrent setup, installs locked sidecar dependencies as needed, builds both runtime components, prepares dedicated environment-specific owner-only state outside the checkout, prevents concurrent runtimes for one data directory, and then replaces itself with `uwubot`.
   - A Docker image packages Rust, Node, and the XMTP native binding behind the same `uwubot` entrypoint.
   - A hidden stdin harness exercises contact behavior without a network.
 - **Test Criteria**:
@@ -79,6 +80,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] The Agent SDK, Node version, and package graph are locked.
   - [x] Identity creation is atomic, reusable, permission-restricted, and environment-locked in unit tests.
   - [x] Rust passes an allowlisted environment that excludes model credentials.
+  - [x] Launcher tests cover environment/data overrides, external owner-only storage, broad-path and symlink rejection before mutation, build and runtime locking, numeric tool versions, build-subprocess secret removal, production-mode dependency installation, pinned Cargo output, and two-start execution from another working directory.
   - [x] SIGINT/SIGTERM close protocol input, permit graceful Agent SDK shutdown, and force-kill only after a timeout.
   - [x] The container image builds in CI.
   - [x] Reconnect and graceful shutdown are verified against a live XMTP stream.

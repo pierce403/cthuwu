@@ -21,7 +21,7 @@ The detailed product contract and remaining release gates live in [FEATURES.md](
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
 - Deterministic, Ollama, and OpenAI-compatible model modes are available. No message reaches a model provider unless the operator explicitly selects it.
 
-The code paths and local tests are working. A live browser-to-bot XMTP exchange still has to pass the release gate before this project claims production interoperability.
+The code paths, local tests, and manual browser-to-bot XMTP `dev` release gate are working. A live end-to-end CI job remains before this project claims production interoperability.
 
 ## Build and verify
 
@@ -32,11 +32,13 @@ npm --prefix agent ci
 npm --prefix agent run typecheck
 npm --prefix agent test
 npm --prefix agent run build
+npm --prefix agent audit --audit-level=high
 
 npm --prefix web ci
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run build
+npm --prefix web audit --audit-level=high
 
 cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
 cargo test --manifest-path cthuwu/Cargo.toml --locked
@@ -46,13 +48,22 @@ cargo build --manifest-path cthuwu/Cargo.toml --release --locked
 
 ## Run `uwubot`
 
-Build once, then run from the repository root so the default sidecar path resolves:
+On Unix, macOS, or WSL, the root launcher handles the repeatable setup and then replaces itself with `uwubot`:
 
 ```bash
-UWUBOT_DATA_DIR="$PWD/cthuwu-data" \
-UWUBOT_XMTP_ENV=dev \
-./cthuwu/target/release/uwubot
+./uwu.sh
 ```
+
+It verifies Node 22+, installs Rust 1.97 through an existing `rustup` when needed, installs the locked sidecar packages when the lockfile, Node major version, or host platform changes, and builds both the sidecar and release binary. Concurrent invocations serialize that setup so they cannot corrupt the shared build tree, and only one bot may use a data directory at a time. On the first normal launch, the sidecar atomically creates the wallet and database key; later launches reuse them. The launcher never reads or prints either key.
+
+The default is XMTP `dev` with persistent owner-only state at `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/dev`. Each environment gets a different directory. Override either setting through the environment or the corresponding normal `uwubot` option:
+
+```bash
+UWUBOT_XMTP_ENV=production ./uwu.sh
+./uwu.sh --data-dir /secure/path/cthuwu-dev --xmtp-env dev
+```
+
+The launcher must run as a dedicated unprivileged account. It accepts a new or empty data directory, or an existing Cthuwu directory for the selected environment; it rejects broad unrelated directories, paths overlapping the repository, and symlink redirection before changing permissions. It also rejects model credentials on the command line. Set credentials only in the environment. It strips model and identity secrets from dependency and compiler subprocesses; the final Rust process still enforces the narrower XMTP-sidecar environment allowlist. `XMTP_DB_DIRECTORY` is intentionally unsupported by this safe launcher so the database cannot escape the validated data root; transport developers can invoke the built binary directly when testing that low-level override.
 
 The first successful connection logs the bot's public Ethereum address without logging its keys. Set the website to the same network and that address, then redeploy:
 
@@ -66,20 +77,19 @@ Normal state is kept below `UWUBOT_DATA_DIR`:
 
 ```text
 contacts/<inbox-id>.md
+.uwubot.lock/<running-pid>
 state/environment
 state/processed/<hashed-message-id>
 state/xmtp-identity.json
 state/xmtp/<environment>/
 ```
 
-The identity file contains a private key protected by owner-only filesystem permissions. Back up the entire data directory securely. Do not delete only the XMTP database: doing so creates a new installation and can eventually exhaust the inbox installation limit.
+The identity file contains a private key protected by owner-only filesystem permissions. Back up the entire data directory securely. The runtime lock contains only a process ID and process-start timestamp, and is recovered after a stopped process without confusing a reused PID for the old bot. Do not delete only the XMTP database: doing so creates a new installation and can eventually exhaust the inbox installation limit.
 
 For an offline contact-flow harness:
 
 ```bash
-cargo run --manifest-path cthuwu/Cargo.toml --bin uwubot -- \
-  --data-dir /tmp/cthuwu-harness \
-  --stdin-inbox 012345abcdef
+./uwu.sh --data-dir /tmp/cthuwu-harness --stdin-inbox 012345abcdef
 ```
 
 Each input line is the next message from that test inbox.
@@ -94,7 +104,7 @@ For Ollama's OpenAI-compatible endpoint:
 UWUBOT_MODEL=ollama \
 UWUBOT_MODEL_ENDPOINT=http://127.0.0.1:11434/v1 \
 UWUBOT_MODEL_NAME=qwen3:8b \
-./cthuwu/target/release/uwubot
+./uwu.sh
 ```
 
 For another OpenAI-compatible provider, select `UWUBOT_MODEL=openai` and set `UWUBOT_MODEL_API_KEY`, `UWUBOT_MODEL_ENDPOINT`, and `UWUBOT_MODEL_NAME`. The XMTP transport subprocess receives an allowlisted environment and cannot see the model credential.
