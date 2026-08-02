@@ -2,6 +2,12 @@
 
 A tiny eldritch companion people can message over [XMTP](https://xmtp.org).
 
+Cthuwu is growing into the **Council of Cthulhus**, an optional federation of durable agent
+identities and their local runtimes. A **Cthulhu** is the durable identity, personality, memory, and
+governance participant. A **Tentacle** is one running runtime belonging to that Cthulhu. A
+**Council** is an XMTP coordination group. The Council is a control plane only: direct user
+conversations remain private one-to-one XMTP DMs.
+
 Cthuwu has two user-facing pieces:
 
 - `web/`: a static browser client that creates a dedicated local identity and opens a one-to-one DM;
@@ -10,6 +16,21 @@ Cthuwu has two user-facing pieces:
 `uwubot` supervises the supported `@xmtp/agent-sdk` transport in `agent/`. Node is an internal transport detail: the operator still starts and stops one command. Direct libxmtp crates are not currently a stable, published Rust integration surface.
 
 The detailed product contract and remaining release gates live in [FEATURES.md](FEATURES.md).
+The Council protocol is documented in [docs/protocol/README.md](docs/protocol/README.md).
+
+## Council implementation status
+
+| Component | Status |
+|---|---|
+| Existing browser-to-`uwubot` direct DM path | **Implemented — existing**; remains the default |
+| `cthuwu-protocol` validated, transport-independent types | **Implemented — local** |
+| Deterministic Council domain components in `cthuwu-council` | **Implemented — local; verified by deterministic workspace tests** |
+| In-memory Council transport, `LocalRegistry`, protected persistence, and simulator | **Implemented — local; verified by deterministic workspace tests** |
+| XMTP Council-group adapter | **Experimental boundary**; no live group interoperability claim |
+| ERC-8004 registry adapter | **Experimental stub / planned integration**; no chain, ABI, deployment, or draft revision selected |
+
+Council mode is opt-in. An existing deployment with no Council configuration starts the same
+standalone `uwubot`, uses the same direct-DM transport, and requires no registry or group.
 
 ## What works
 
@@ -20,8 +41,16 @@ The detailed product contract and remaining release gates live in [FEATURES.md](
 - `/profile`, `/set`, `/skip`, `/share`, `/matches`, `/pause`, `/resume`, and `/forget confirm` provide inspectable consent and data controls.
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
 - Deterministic, Ollama, and OpenAI-compatible model modes are available. No message reaches a model provider unless the operator explicitly selects it.
+- Structured, versioned Cthulhu personalities include deterministic Archivist, Hermit, Merchant,
+  Wanderer, Oracle, and Trickster personas with different local policy positions without an LLM.
+- The local Council implementation models validated envelopes, Tentacle lifecycle and liveness,
+  capability discovery, explainable routing, generation-fenced leases, governance, bounded referral
+  propagation, contribution credit, and persistence without introducing transport or inference
+  dependencies into the protocol crate.
 
-The code paths, local tests, and manual browser-to-bot XMTP `dev` release gate are working. A live end-to-end CI job remains before this project claims production interoperability.
+The existing direct-DM code paths, local tests, manual browser-to-bot XMTP `dev` release gate, and
+deterministic Council workspace suite are working. A live end-to-end CI job remains before this
+project claims production interoperability.
 
 ## Build and verify
 
@@ -41,8 +70,8 @@ npm --prefix web run build
 npm --prefix web audit --audit-level=high
 
 cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
-cargo test --manifest-path cthuwu/Cargo.toml --locked
-cargo clippy --manifest-path cthuwu/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path cthuwu/Cargo.toml --workspace --locked
+cargo clippy --manifest-path cthuwu/Cargo.toml --workspace --all-targets --locked -- -D warnings
 cargo build --manifest-path cthuwu/Cargo.toml --release --locked
 ```
 
@@ -80,6 +109,7 @@ contacts/<inbox-id>.md
 .uwubot.lock/<running-pid>
 state/environment
 state/processed/<hashed-message-id>
+state/council/<bounded-state-name>.json
 state/xmtp-identity.json
 state/xmtp/<environment>/
 ```
@@ -93,6 +123,46 @@ For an offline contact-flow harness:
 ```
 
 Each input line is the next message from that test inbox.
+
+## Council architecture
+
+The four planes remain deliberately separate:
+
+| Plane | Responsibility |
+|---|---|
+| Registry / future ERC-8004 | Durable public identity, public metadata, endpoint associations, provenance-bearing trust signals |
+| XMTP Council group | Discovery, routing metadata, leases, governance, heartbeats, and approved propagation |
+| Direct XMTP DMs | Private user conversations with the selected Tentacle |
+| Tentacle runtime | Inference, contact memory, tools, capacity, and final local policy enforcement |
+
+Current Council types provide no dedicated field or runtime path for normal user messages, contact
+notes, credentials, or private memory. Operator and adapter policy forbids placing that data in
+bounded free-text summaries. Routing publishes only bounded requirements and a policy-appropriate
+user reference, then rendezvous returns the selected Tentacle's XMTP endpoint for a direct DM.
+Failover does not silently copy private memory.
+
+The local deterministic simulator exercises Council joins, announcements, heartbeats, capabilities,
+routing and offers, lease issuance, Tentacle failure and failover, persona arguments, one-Cthulhu-
+one-vote governance, Agenda parent hashes, invitations, multi-level propagation, loop/duplicate
+suppression, bounded depth/fan-out, acknowledgements, useful-outcome contribution credit, and replay-
+safe persistence. It does not connect to a live XMTP group or ERC-8004 deployment.
+
+Run that opt-in local scenario without starting the XMTP DM sidecar or a model adapter:
+
+```bash
+cargo run --manifest-path cthuwu/Cargo.toml --package cthuwu -- \
+  --data-dir /tmp/cthuwu-council-sim --xmtp-env local --council-simulate
+```
+
+It prints a deterministic JSON report and stores its combined replay-safe checkpoint under
+`state/council/` in the selected protected data directory. Omitting `--council-simulate` preserves
+the existing standalone `uwubot` behavior.
+
+This is local deterministic orchestration, not a live protocol dispatcher: membership, Tentacle,
+and routing envelopes exercise the in-memory transport, while lease, governance, and propagation
+engines are invoked directly. A general envelope-to-engine dispatcher, per-message transactional
+coordinator, live XMTP group, production signature scheme, and ERC-8004 integration remain future
+adapter work.
 
 ## Model modes
 
@@ -135,6 +205,13 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
 - Never commit wallet keys, XMTP database keys, model credentials, generated databases, or contact notes.
 - Use dedicated identities with no material funds.
 - Normal logs omit keys and message bodies.
+- Council envelopes are bounded, versioned, sender-checked, expiry-checked, replay-suppressed, and
+  fenced by Tentacle incarnation or lease generation where applicable.
+- Production signatures are not simulated. The deterministic signer is test-only; live adapters
+  must bind authenticated senders to Cthulhu/Tentacle identities explicitly.
+- Heartbeats, load, sessions, user references, contact memory, and conversation content do not go
+  on-chain.
+- Council votes and propagated requests cannot override a Tentacle operator's local security policy.
 - Opting into matching permits other opted-in people to see the chosen display name and matching terms, but never the inbox ID; Cthuwu does not make automatic introductions.
 - `/forget confirm` deletes the caller's local contact note. It cannot erase copies already delivered over XMTP.
 

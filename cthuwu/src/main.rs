@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use bot::UwUBot;
 use clap::{Parser, ValueEnum};
 use contact::ContactStore;
+use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
 use model::{DeterministicModel, Model, OpenAiCompatibleModel};
 use sidecar::run_xmtp_sidecar;
@@ -60,6 +61,10 @@ struct Cli {
     /// Development harness: receive newline-delimited messages for one inbox on stdin.
     #[arg(long, hide = true)]
     stdin_inbox: Option<String>,
+
+    /// Run the opt-in deterministic local Council simulator, persist its state, and exit.
+    #[arg(long, env = "UWUBOT_COUNCIL_SIMULATE", default_value_t = false)]
+    council_simulate: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -95,6 +100,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     enforce_environment(&cli.data_dir, cli.xmtp_env)?;
+    if cli.council_simulate {
+        let report = run_deterministic_simulation(&cli.data_dir)
+            .context("running deterministic local Council simulation")?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let model = build_model(&cli)?;
@@ -210,5 +221,16 @@ mod tests {
         enforce_environment(root.path(), Network::Dev).unwrap();
         enforce_environment(root.path(), Network::Dev).unwrap();
         assert!(enforce_environment(root.path(), Network::Production).is_err());
+    }
+
+    #[test]
+    fn council_mode_is_opt_in_and_preserves_standalone_defaults() {
+        let standalone = Cli::try_parse_from(["uwubot"]).unwrap();
+        assert!(!standalone.council_simulate);
+        assert!(standalone.stdin_inbox.is_none());
+        assert!(matches!(standalone.model, ModelKind::Deterministic));
+
+        let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
+        assert!(council.council_simulate);
     }
 }

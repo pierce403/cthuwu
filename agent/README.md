@@ -46,7 +46,7 @@ For each inbound one-to-one text DM, the sidecar writes:
 `uwubot` must answer within 90 seconds (configurable from 1–300 seconds with
 `UWUBOT_REPLY_TIMEOUT_MS`) using exactly one of:
 
-```json
+```jsonl
 {"type":"reply","id":"request-id","text":"hello back"}
 {"type":"ignore","id":"request-id"}
 ```

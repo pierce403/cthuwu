@@ -394,6 +394,7 @@ uwu_build_runtime() {
   uwu_without_runtime_secrets env RUSTC="$UWU_RUSTC_BIN" \
     "${UWU_CARGO_COMMAND[@]}" build \
     --manifest-path "$UWU_MANIFEST" \
+    --package cthuwu \
     --target-dir "$UWU_TARGET_DIR" \
     --target "$UWU_RUST_HOST" \
     --release \

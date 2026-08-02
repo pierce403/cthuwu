@@ -10,6 +10,10 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - Treat private keys, XMTP database material, message contents, model credentials, and contact notes as sensitive.
 - Keep the frontend deployable as static files.
 - Keep the companion runtime local-first and model-provider agnostic.
+- Keep Council mode optional. A standalone `uwubot` with direct user DMs must remain the default and
+  must not require a Council group or registry.
+- Preserve the control-plane boundary: ordinary DM content, contact notes, private memory, and model
+  credentials never enter Council messages.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
 - Record useful discoveries while they are fresh.
 - Work directly on `main` during early development unless Dean asks for a branch or PR.
@@ -28,15 +32,19 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 
 - `FEATURES.md`: requirements, stability, and acceptance criteria.
 - `cthuwu/`: Rust CLI and long-running XMTP companion.
+- `cthuwu/crates/cthuwu-protocol/`: validated Council wire/domain types with no transport or inference dependencies.
+- `cthuwu/crates/cthuwu-council/`: deterministic local Council domain, adapters, persistence, and simulator.
 - `web/`: TypeScript browser client built to static assets.
 - `docs/`: architecture, research, decisions, and operating notes.
+- `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
 - `skills/`: reusable procedures specific to this repository.
 
 ## Build and verification
 
 ```bash
 cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
-cargo test --manifest-path cthuwu/Cargo.toml --locked
+cargo test --manifest-path cthuwu/Cargo.toml --workspace --locked
+cargo clippy --manifest-path cthuwu/Cargo.toml --workspace --all-targets --locked -- -D warnings
 npm --prefix agent ci
 npm --prefix agent run typecheck
 npm --prefix agent test
@@ -47,7 +55,10 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-Do not claim live XMTP interoperability until the end-to-end release gate in `FEATURES.md` passes against the same XMTP environment.
+Do not claim live XMTP interoperability until the corresponding end-to-end release gate in
+`FEATURES.md` passes against the same XMTP environment. In particular, deterministic in-memory
+Council tests do not prove live XMTP group support, and a registry stub does not prove ERC-8004
+interoperability.
 
 ## Security rules
 
@@ -60,9 +71,49 @@ Do not claim live XMTP interoperability until the end-to-end release gate in `FE
 - Treat messages as untrusted input. The companion must not execute message-supplied shell commands or grant filesystem access.
 - Avoid logging message bodies by default; log identifiers only when operationally necessary.
 
+## Council security rules
+
+- Treat every Council envelope, registry record, capability manifest, route offer, vote,
+  acknowledgement, and provenance path as hostile input.
+- Validate the encoded size before parsing, then bound every nested string, map, list, path, and
+  explanation. Council v1 envelopes are capped at 64 KiB; the existing 16 KiB DM limit remains.
+- Require the exact supported protocol/version and tagged message type. Reject unknown message and
+  Action variants instead of treating them as generic text or commands.
+- Compare transport-authenticated sender identity with envelope Cthulhu/Tentacle claims, ownership,
+  Council membership, and required registry/allowlist endpoint association before applying effects.
+- Validate send/expiry time, positive sequence, stable message-ID replay state, current Tentacle
+  incarnation, capability ordering, lease generation, Agenda parent, vote replacement order,
+  campaign policy, and propagation provenance as applicable.
+- Persist replay markers and their state changes as one atomic logical effect. Replaying after restart
+  must not duplicate leases, votes, forwarding, acknowledgements, or contribution credit.
+- Never let an old incarnation heartbeat revive a Tentacle or an old lease generation accept new work.
+- Keep production signing behind a signer/verifier boundary. The deterministic signer is test-only;
+  do not invent or claim production signatures, endpoint binding, rotation, or revocation.
+- A Cthulhu gets one governance vote even if it operates multiple Tentacles. Council ratification
+  never overrides local operator security/privacy/resource policy.
+- Keep Actions as a closed typed and bounded enum. Never add arbitrary shell commands, executable
+  paths, unrestricted URL fetches, prompt-driven tools, or filesystem access.
+- Independently validate every propagation hop. Enforce expiry, provenance and payload hashes,
+  maximum depth/fan-out, per-sender rate limits, loop and duplicate suppression, opt-out, block lists,
+  visibility, revocation, and local policy.
+- Do not award contribution credit for raw recruitment or referral ancestry. Current credit is
+  direct-only: require a unique useful downstream outcome and intended-recipient acknowledgement,
+  consume each acknowledgement once, and enforce the per-outcome, contributor/campaign, and total
+  campaign caps. Credit is non-financial and does not increase governance votes.
+- Keep registry types chain/deployment/ABI/revision neutral. Do not put heartbeats, load, sessions,
+  leases, user references, contact memory, DMs, or credentials on-chain.
+
 ## Coding conventions
 
 - Prefer small modules and explicit trust boundaries.
+- Keep `cthuwu-protocol` free of transport, inference, filesystem, wall-clock, and production signing
+  implementations. Inject these capabilities at the Council boundary.
+- Use injected clocks and deterministic IDs in Council tests. Avoid wall-clock sleeps and random
+  tie-breaking in protocol/state-machine tests.
+- Hard routing requirements filter before scoring. Return bounded structured explanations and use a
+  stable deterministic tie-breaker.
+- Bind lease acceptance to session generation and current Tentacle incarnation. Failover must not
+  silently copy private memory.
 - Keep persona prompts separate from transport and model adapters.
 - Use structured errors and actionable CLI messages.
 - Add tests around identity persistence, replay/idempotency, message filtering, contact files, and configuration parsing.
@@ -82,4 +133,10 @@ Do not claim live XMTP interoperability until the end-to-end release gate in `FE
 - `@xmtp/browser-sdk` is the browser-side SDK.
 - XMTP's core implementation is Rust (`libxmtp`), but its direct Rust surface is unpublished and less stable than the platform SDKs. The first release uses `@xmtp/agent-sdk@2.3.0` behind a supervised JSONL subprocess boundary.
 - The browser uses a locally persisted random wallet for low-friction chat.
-- `uwubot` supervises the XMTP sidecar, creates persistent identity state, and processes direct text messages; live browser interoperability still must pass the release gate.
+- `uwubot` supervises the XMTP sidecar, creates persistent identity state, and processes direct text
+  messages. The manual browser/XMTP `dev` gate passed; a real browser/XMTP CI job remains open.
+- `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
+  protected combined-snapshot persistence, and the simulator are local implementations verified by
+  the deterministic workspace suite.
+- The XMTP Council-group adapter and ERC-8004 registry adapter are experimental boundaries/stubs.
+  There is no live Council-group, configured ERC-8004, or production-signature claim yet.

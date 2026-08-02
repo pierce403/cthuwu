@@ -231,6 +231,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "cthuwu-council",
  "reqwest",
  "serde",
  "serde_json",
@@ -239,6 +240,27 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "cthuwu-council"
+version = "0.1.0"
+dependencies = [
+ "cthuwu-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "cthuwu-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

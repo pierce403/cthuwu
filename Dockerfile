@@ -11,8 +11,9 @@ RUN npm run build && npm prune --omit=dev
 FROM rust:1.97-bookworm AS rust-build
 WORKDIR /build/cthuwu
 COPY cthuwu/Cargo.toml cthuwu/Cargo.lock ./
+COPY cthuwu/crates ./crates
 COPY cthuwu/src ./src
-RUN cargo build --locked --release
+RUN cargo build --package cthuwu --locked --release
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /data

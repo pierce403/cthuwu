@@ -8,6 +8,9 @@ Last reviewed: 2026-08-01
 - People chat with Cthuwu over XMTP.
 - The public-facing client is a static web deployment.
 - The operator runs the companion locally as a Rust CLI/daemon.
+- The Council of Cthulhus is the optional federation architecture: a Cthulhu is a durable agent
+  identity, a Tentacle is one running runtime it owns, and a Council is an XMTP coordination group.
+- Council participation is opt-in. Standalone `uwubot` and direct user DMs remain the default.
 - Early-development workflow is direct commits to `main`.
 
 ## Architecture
@@ -25,6 +28,64 @@ Last reviewed: 2026-08-01
 - Browser identity exports are passphrase-encrypted wallet backups. The Browser SDK database is unencrypted and is not included in that export.
 - Backend secrets are atomically persisted at `state/xmtp-identity.json`; XMTP databases are environment-specific below `state/xmtp/`.
 - `@xmtp/agent-sdk@2.3.0` is the supported first transport. Direct libxmtp remains a later option because its Rust crates are unpublished internal APIs.
+
+## Council architecture decisions
+
+- The architecture has four distinct planes: public durable identity/trust registry, XMTP Council
+  control group, direct XMTP DM data plane, and local Tentacle runtime.
+- Normal user messages, contact notes, private memory, and model credentials never belong in Council
+  traffic. Rendezvous shares bounded requirements and returns an endpoint; conversation stays in a
+  direct DM.
+- `cthuwu-protocol` contains only validated/versioned transport- and inference-independent types. It
+  must not depend on XMTP, model clients, filesystem persistence, a wall clock, or production signing.
+- Council protocol v1 uses `cthuwu-council` version `1.0`, typed bounded lowercase identifiers,
+  tagged payloads, an envelope cap of 64 KiB, injected time, sender consistency, expiry, sequence,
+  replay, and domain-generation checks.
+- A deterministic signer exists only for tests. Do not describe it as production authentication.
+  A live adapter must bind its actually authenticated transport sender to Cthulhu/Tentacle ownership
+  and endpoint association.
+- Cthulhu identity is durable across Tentacle restarts. A Tentacle retains its stable ID/owner but
+  gets a newer incarnation; stale incarnations cannot update lifecycle/liveness or accept new work.
+- Personality is structured versioned data (role, voice, values, motivations, priorities, risk,
+  privacy, tendencies, concerns), not only a prompt. Archivist, Hermit, Merchant, Wanderer, Oracle,
+  and Trickster are deterministic sample policies. Unconstrained autonomous goal generation is out
+  of scope.
+- Capability manifests are public-safe routing claims. They never include credentials, private
+  endpoints, message content, local paths, or unnecessary hardware details.
+- Routing is independent of transport and inference. Hard requirements filter before scoring, and
+  every result carries a structured explanation. Explicit user choice and affinity cannot bypass
+  privacy, capability, protocol, health, trust, capacity, load, block, or local-policy constraints.
+- A lease binds one session generation to one current Tentacle incarnation. A greater generation
+  fences the old holder after failover. Failover does not silently copy contact memory or DM history.
+- `AgentRegistry` is chain-neutral. `LocalRegistry` is the local implementation;
+  `Erc8004Registry` remains an unavailable adapter boundary until a chain, deployment, ABI, and
+  compatible revision are explicitly chosen. Reputation is one signal with provenance, not a global
+  truth score.
+- Do not put heartbeats, load, leases, sessions, user references, contact memory, or conversation
+  data on-chain.
+- Governance separates Constitution, Agenda, Strategy, and typed bounded Action. One Cthulhu gets
+  one vote regardless of Tentacle count. Agenda parent conflicts are explicit. Ratification never
+  overrides local operator security policy, and arbitrary shell Actions are impossible to represent.
+  Defaults are 50% quorum, 50.01% non-abstaining ordinary approval, 66.67% Constitution approval,
+  and `Expired` when quorum is not met.
+- Referral propagation is bounded multi-level topology, not a financial MLM. Every hop independently
+  validates provenance, payload hash, policy, expiry, depth/fan-out/rate, loops/duplicates, opt-out,
+  blocks, visibility, revocation, and local policy.
+- Hard propagation ceilings are depth 16, fan-out 64, 128 per-sender items per rate window, 30-day
+  campaign lifetime, 64 list entries, and 16 KiB per bounded item; policy may be stricter.
+- Contribution credit is non-financial, direct-only, and based on unique useful downstream outcomes,
+  not raw recruitment. Recipient acknowledgement is required and consumed once. Caps are 5 units
+  per outcome, 20 per direct contributor/campaign, and 512 per campaign; ancestors and descendants
+  earn no credit merely for being on the referral path.
+- The deterministic simulator stores durable Council state in one combined snapshot below the
+  protected data root at `state/council/`, with bounded names/state, symlink rejection, owner-only
+  permissions, atomic replacement, and sync. A live coordinator still needs per-message effect/replay
+  transactions. Runtime state never belongs in the repository.
+- The deterministic simulator is evidence only for local domain behavior. It does not establish live
+  XMTP Council-group, ERC-8004, or production-signature interoperability.
+
+See [Council protocol](docs/protocol/README.md), [Council security](docs/protocol/security.md), and
+[Council versioning](docs/protocol/versioning.md).
 
 ## Deployment
 
@@ -47,8 +108,22 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 - Should one local process serve exactly one companion identity or support profiles?
 - Should conversation memory remain per-XMTP inbox, be user-editable, and/or expire?
 - What retention period should apply to opaque processed-message tombstones and contact notes?
+- Which XMTP group SDK/identity-binding design should implement the live Council transport?
+- Which chain, deployment, ABI, and ERC-8004 revision should the first public registry adapter use?
+- What production Council signature/authentication, canonicalization, rotation, and revocation policy
+  should replace the test-only signer?
+- What Council admission and Sybil policy is appropriate before contribution credit affects access
+  to scarce operator resources?
 
 ## Current milestone
+
+The Council milestone adds the `cthuwu-protocol` and `cthuwu-council` local crates, protocol
+documentation, deterministic identities/personas, Tentacle lifecycle/liveness, capabilities,
+in-memory transport, routing/rendezvous, generation-fenced leases, `LocalRegistry`, governance,
+bounded propagation/credit, protected persistence, and a deterministic simulator. The local Council
+workspace suite now verifies the implemented deterministic scope; `FEATURES.md` retains unchecked
+criteria where live, cross-platform, or more specific evidence is still absent. Live XMTP Council
+groups and ERC-8004 remain adapter boundaries, not completion claims.
 
 The 2026-08-01 manual XMTP `dev` release-gate run passed browser identity, exactly-once reply,
 contact onboarding, bilateral matching, deletion, and restart/persistence checks. Sanitized evidence

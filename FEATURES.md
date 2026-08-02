@@ -184,6 +184,196 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [ ] Both parties separately approve before contact details or conversation context are shared.
   - [ ] Needs and offers support explicit freshness, fulfillment, and expiration.
 
+### Optional Council mode and standalone compatibility
+
+- **Stability**: in-progress
+- **Description**: Allow a standalone Cthuwu to opt into a distributed Council without changing the default one-to-one `uwubot` experience.
+- **Properties**:
+  - A Cthulhu is a durable identity; a Tentacle is one of its running runtimes; a Council is an XMTP coordination group.
+  - Direct user conversations remain one-to-one XMTP DMs.
+  - Council traffic is control-plane data only: discovery, routing, leases, governance, heartbeats, and approved propagation.
+  - A deployment with no Council configuration follows the existing startup, launcher, sidecar, contact-memory, model, and direct-DM paths.
+  - Council configuration cannot expose model credentials to the XMTP sidecar or weaken protected data-directory validation.
+- **Test Criteria**:
+  - [ ] `uwubot` without Council configuration passes all pre-Council tests and starts in standalone mode.
+  - [ ] The browser-to-`uwubot` live DM path still produces exactly one reply and persists identities/contact state.
+  - [ ] Council state is absent or idle when Council mode is disabled.
+  - [ ] Launcher, sidecar environment allowlist, secret isolation, deduplication, and data-directory tests remain unchanged or stronger.
+  - [ ] No Council message contains normal DM text, contact-note contents, model credentials, or private memory.
+
+### Shared Council protocol crate and envelopes
+
+- **Stability**: in-progress
+- **Description**: `cthuwu-protocol` provides small, versioned, validated domain and wire types without transport or inference dependencies.
+- **Properties**:
+  - Typed IDs cover Cthulhus, Tentacles, Councils, sessions, requests, leases, proposals, messages, incarnations, propagation, invitations, and acknowledgements.
+  - XMTP inbox and registry references are bounded and registry domain types are chain/deployment/ABI/revision neutral.
+  - `ProtocolVersion` serializes as a semantic string; the initial envelope accepts only `cthuwu-council` version `1.0`.
+  - A common envelope binds stable message ID, message type, Council, sender Cthulhu/Tentacle, send/expiry times, sequence, typed payload, and optional signature.
+  - The encoded envelope is capped at 64 KiB and nested strings/collections have explicit limits.
+  - Tagged payloads cover membership, Tentacles, routing, leases, governance, and propagation; unsupported types fail closed.
+  - Signer/verifier traits exist, but the deterministic signer is test-only and makes no production signature claim.
+- **Test Criteria**:
+  - [ ] Every typed identifier accepts valid prefix/slug forms and rejects malformed, overlong, mixed-case, traversal, empty, or repeated-separator forms.
+  - [ ] Protocol versions round-trip and unsupported versions are rejected.
+  - [ ] Capability, identity, Tentacle, and every Council payload variant serialize and deserialize without bypassing validation.
+  - [ ] Envelopes reject over-64-KiB input, mismatched message type/payload, invalid sender requirements, zero sequence, invalid time bounds, expiry, and unsupported types.
+  - [ ] Replay suppression prevents a second effect across state reload.
+  - [ ] `cthuwu-protocol` has no XMTP, HTTP/model, filesystem, or production-signing dependency.
+
+### Structured Cthulhu identity, personality, and Tentacles
+
+- **Stability**: in-progress
+- **Description**: Model durable Cthulhus separately from their restartable Tentacle runtimes and represent personality as structured policy data.
+- **Properties**:
+  - Cthulhu identity contains stable ID, display name, versioned role/voice/values/motivations/priorities, risk tolerance, privacy preference, decision tendencies, standing concerns, long-term goals, public-safe operator metadata, registry reference, and Tentacle IDs.
+  - Archivist, Hermit, Merchant, Wanderer, Oracle, and Trickster sample personas make deterministic policy decisions without an LLM.
+  - Structured personality influences bounded policy but cannot generate unconstrained autonomous goals.
+  - A Tentacle records stable ID/owner, explicit XMTP network and inbox endpoint, monotonic incarnation, lifecycle, capabilities, health, capacity/load, visibility, protocol version, and last heartbeat.
+  - Lifecycle states are `Starting`, `Ready`, `Draining`, `Unavailable`, and `Stopped`; invalid transitions fail closed.
+  - Restart changes the incarnation, not the owning Cthulhu or stable Tentacle ID.
+- **Test Criteria**:
+  - [ ] Structured identities and all six sample personas validate and round-trip.
+  - [ ] The same policy topic produces deterministic and meaningfully different persona positions without a model.
+  - [ ] Invalid lifecycle transitions and backward timestamps are rejected.
+  - [ ] A newer incarnation must start at `Starting` and permanently fences updates from older incarnations.
+  - [ ] Restarting a Tentacle preserves its Cthulhu and Tentacle IDs.
+
+### Capabilities and liveness
+
+- **Stability**: in-progress
+- **Description**: Advertise bounded, public-safe routing capabilities and derive liveness with deterministic clocks.
+- **Properties**:
+  - Manifests include protocol versions, model capability classes, context limits, tools, memory modes, privacy properties, inference locality, capacity, visibility, and supported trust mechanisms.
+  - Manifests have no representation for credentials, private endpoints, message content, filesystem paths, or unnecessary hardware inventory.
+  - Injected-clock heartbeat evaluation produces `Healthy`, `Suspect`, or `Unavailable` under configured windows.
+  - Only the current Tentacle incarnation can update lifecycle, health, capacity, or load.
+  - Announcements and heartbeats are bounded and subject to per-sender controls.
+- **Test Criteria**:
+  - [ ] Capability manifests round-trip and reject duplicates, empty required protocol support, overlong collections, and impossible capacity.
+  - [ ] Serialized capability fixtures contain no secret-, endpoint-, or hardware-shaped fields.
+  - [ ] Injected-clock tests cover healthy, suspect, unavailable, recovery, and boundary timestamps.
+  - [ ] A heartbeat from an older incarnation cannot revive or change a current Tentacle.
+  - [ ] Draining, unavailable, stopped, expired, and overloaded Tentacles are excluded from new awards.
+
+### Council transport and registry boundaries
+
+- **Stability**: in-progress
+- **Description**: Coordinate locally through an authenticated transport abstraction and operator-managed identity registry while isolating future network adapters.
+- **Properties**:
+  - `CouncilTransport` supports publish, subscribe, authenticated sender identity, stable transport message IDs, ordering metadata, and replay handling.
+  - The in-memory implementation is deterministic and suitable for complete local integration tests.
+  - Receivers compare transport-authenticated sender identity with envelope and Cthulhu/Tentacle ownership claims.
+  - `AgentRegistry` resolves identities, metadata, endpoints, capability references, provenance-bearing trust signals, endpoint associations, and active status.
+  - `LocalRegistry` is the working local implementation; reputation remains a selected signal with provenance rather than a global truth score.
+  - XMTP Council-group and ERC-8004 types remain isolated unavailable adapters until concretely configured and tested.
+- **Test Criteria**:
+  - [ ] In-memory publish/subscribe preserves stable IDs and deterministic ordering metadata.
+  - [ ] Duplicate delivery is replay-suppressed and sender mismatch fails before state mutation.
+  - [ ] `LocalRegistry` registers, updates, resolves, verifies endpoint association, rejects stale metadata, and persists/reloads.
+  - [ ] Trust signals retain provenance and bounds and cannot be treated as an unqualified global score.
+  - [ ] The XMTP-group adapter has no misleading live implementation claim.
+  - [ ] The ERC-8004 stub returns an explicit unavailable/configuration error without hardcoded chain, deployment, ABI, or draft revision.
+
+### Explainable routing, rendezvous, and leases
+
+- **Stability**: in-progress
+- **Description**: Select an eligible Tentacle without exposing conversation content and authorize it through a bounded generation-fenced lease.
+- **Properties**:
+  - Requests may specify capability/tool/protocol/privacy/local-inference requirements, preferred Cthulhu/Tentacle, session affinity, trust policy, maximum load, and expiry.
+  - Hard requirements filter before scoring; explicit user choice never bypasses security, privacy, health, capability, or protocol requirements.
+  - Ranking generally prefers explicit choice, valid affinity, healthy home and user-owned Tentacles, capacity, compatibility, selected trust/reputation provenance, lower load, and a deterministic tie-breaker.
+  - Decisions return per-candidate eligibility and structured reasons.
+  - Rendezvous turns a content-free Council route request into the selected Tentacle endpoint, after which the user opens a direct XMTP DM.
+  - A lease binds session, user reference, Cthulhu, Tentacle, incarnation, generation, issue/expiry/renewal times, routing request, issuer, and status.
+  - Grant, accept, renew, release, revoke, expire, and failover are explicit; old generation/incarnation work is rejected.
+  - Failover never silently copies private memory.
+- **Test Criteria**:
+  - [ ] Routing rejects expired requests and candidates missing any hard capability, privacy, protocol, trust, health, capacity, or load requirement.
+  - [ ] Explicit choice, affinity, home preference, ownership, capacity, reputation provenance, load, and deterministic tie-breaking appear correctly in explanations.
+  - [ ] Rendezvous returns only the selected endpoint and never requires a DM body or contact note.
+  - [ ] Lease tests cover grant, accept, renew, release, revoke, expiry, and invalid transitions with an injected clock.
+  - [ ] Failover produces a strictly greater session generation and rejects the old Tentacle/incarnation/generation.
+  - [ ] Affinity survives reload when valid and is ignored with an explanation when invalid.
+
+### Council governance
+
+- **Stability**: in-progress
+- **Description**: Let distinct Cthulhus debate and resolve bounded shared documents without overriding local operators.
+- **Properties**:
+  - Governance separates Constitution, versioned Agenda, competing Strategies, and typed Actions.
+  - Constitution changes require stricter policy than ordinary Agenda, Strategy, or Action decisions.
+  - Agenda proposals reference a canonical parent hash and competing parents are detected explicitly.
+  - Proposals support bounded supporting/opposing arguments, amendment suggestions, votes, abstentions, replacement before deadline, quorum, thresholds, ratification, rejection, and expiry.
+  - Default governance requires 50% quorum, 50.01% approval among non-abstaining votes for ordinary documents, and 66.67% approval for Constitution changes; no quorum expires the proposal.
+  - One Cthulhu receives one vote even when several of its Tentacles submit traffic.
+  - Initial Action types are capability refresh, protocol self-test, local resource summary, and routing scenario evaluation; arbitrary shell commands are impossible to represent.
+  - A ratified result is recomputed locally and remains subordinate to operator security policy.
+- **Test Criteria**:
+  - [ ] Canonical document hashes and Agenda parent hashes are stable across serialization/reload.
+  - [ ] Competing or stale Agenda parents cannot silently replace the current Agenda.
+  - [ ] Multiple Tentacles cannot create more than one vote for the same Cthulhu.
+  - [ ] A newer valid vote replaces rather than adds to the old vote before deadline; duplicate/stale votes have no effect.
+  - [ ] Abstention, quorum, threshold, stricter Constitution policy, ratification, rejection, and expiry are deterministic.
+  - [ ] Sample personas produce distinct supporting/opposing/abstaining positions for the same proposal without an LLM.
+  - [ ] Typed Actions reject arbitrary commands and every execution path rechecks local policy.
+
+### Bounded referral propagation and contribution credit
+
+- **Stability**: in-progress
+- **Description**: Grow Councils and spread approved information through a validated multi-level referral tree or DAG without financial recruitment incentives.
+- **Properties**:
+  - Propagation supports invitations, Agenda summaries, approved Strategies, capability requests, approved resource needs/offers, protocol-upgrade notices, and bounded campaigns.
+  - Every item records origin, inviter/invitee, root propagation, parent, depth, path/provenance, payload hash, policy version, creation/expiry, acceptance, acknowledgements, visibility, and revocation.
+  - Hard policy ceilings are depth 16, fan-out 64, 128 per-sender items per rate window, 30-day campaign lifetime, 64 list entries, and 16 KiB per bounded item; deployments may configure stricter limits.
+  - Each hop independently validates provenance, policy, expiry, depth, fan-out, rate, duplicates, loops, opt-out, blocks, visibility, revocation, and local policy before forwarding.
+  - Deterministic strategies include breadth-first, depth-limited, trusted-branch-only, capability-targeted, coarse geography/latency-aware, and reputation-thresholded routing.
+  - There is no dedicated field or runtime path for normal DMs, contact notes, private memory, credentials, private capabilities, or precise user location; operator policy forbids placing such data in bounded summary text.
+  - Contribution credit is non-financial and direct-only, based on unique useful outcomes such as accepted introductions, selected capability referrals, acknowledged downstream delivery, or completed consented matches.
+  - Credit requires the intended recipient's acknowledgement, consumes that acknowledgement once, and is capped at 5 units per outcome, 20 per contributor/campaign, and 512 per campaign.
+  - Self-referrals, cycles, duplicate outcomes, ancestors, descendants, and raw recruitment count receive no credit; hard caps limit simple Sybil amplification but do not prove identity uniqueness.
+- **Test Criteria**:
+  - [ ] Invitation acceptance/rejection is explicit, bounded, expiring, and replay-safe.
+  - [ ] Maximum depth, fan-out, sender rate, opt-out, block list, visibility, and campaign expiry are enforced at every hop.
+  - [ ] Self-referral, path loops, repeated edges, duplicate forwarding, payload-hash mismatch, and forged/truncated provenance are rejected.
+  - [x] Campaign revocation stops future forwards and new credit without erasing audit facts.
+  - [ ] Acknowledgements bind the authenticated sender to an exact campaign, payload, edge/outcome, and unique ID.
+  - [ ] Useful downstream outcomes produce a structured credit explanation while recruitment alone produces none.
+  - [ ] Direct-only attribution, acknowledgement consumption, and per-outcome, contributor/campaign, and total-campaign caps prevent duplicate/descendant credit and bound simple Sybil amplification without claiming personhood.
+
+### Deterministic Council simulator and persistence
+
+- **Stability**: in-progress
+- **Description**: Exercise one deterministic local orchestration scenario across the current Council engines and reload its combined snapshot without duplicate effects.
+- **Properties**:
+  - The scenario covers joins, Tentacle announcements, heartbeats, capabilities, route request/offers/award, lease, failure, failover, proposal, persona arguments, voting, Agenda resolution, invitation, multi-level propagation, limits, suppression, acknowledgements, and outcome credit.
+  - Council identity, membership, capabilities, affinity, leases/generations, processed IDs, governance, propagation, acknowledgements, and credit persist below `state/council/`.
+  - State files use fixed bounded names, size limits, symlink rejection, owner-only permissions, atomic replacement, file sync, and directory sync where supported.
+  - Simulator traffic uses the in-memory transport and clearly marked test authentication; it does not claim live XMTP Council or ERC-8004 behavior.
+- **Test Criteria**:
+  - [x] One deterministic integration test completes routing, lease failover, governance, and multi-level propagation in one scenario.
+  - [x] The report demonstrates all required milestones and gives structured routing, governance, propagation, and credit explanations.
+  - [x] Saving and reloading the combined snapshot produces equivalent state; transport replay and engine-specific tests produce no duplicate votes, forwards, acknowledgements, or credit.
+  - [x] Persistence rejects traversal names, symlinks, oversized/corrupt state, unsafe permissions, and partial identity mismatch.
+  - [ ] Council state remains outside the repository and does not weaken the existing data-directory lock/environment checks.
+
+### Live XMTP Council and ERC-8004 adapters
+
+- **Stability**: planned
+- **Description**: Connect the locally tested Council domain to a real XMTP coordination group and an explicitly selected ERC-8004 deployment.
+- **Properties**:
+  - The XMTP group remains a control plane; ordinary DM content never becomes group content.
+  - Production sender authentication/signing must bind endpoints to Cthulhu/Tentacle identity and support rotation/revocation without using the deterministic test signer.
+  - The ERC-8004 adapter will select its chain, deployment, ABI, and compatible specification revision through configuration rather than domain types.
+  - Only durable public identity, metadata, endpoint/capability references, and provenance-bearing trust signals belong in the registry.
+  - Heartbeats, load, leases, sessions, user references, contact memory, and conversation content never go on-chain.
+- **Test Criteria**:
+  - [ ] A live XMTP group exchanges every supported Council message with authenticated sender identity, replay handling, ordering metadata, and reconnect/reload coverage.
+  - [ ] A real browser rendezvous receives an awarded endpoint and continues through a direct user-to-Tentacle DM without Council message content leakage.
+  - [ ] A configured ERC-8004 adapter resolves identity, endpoints, capabilities, trust provenance, association, and active status against the selected deployment.
+  - [ ] Production canonicalization, signatures/authentication, key rotation, revocation, and downgrade behavior have interoperable test vectors.
+  - [ ] Threat-model review confirms no dynamic runtime or private user data is published on-chain or to the Council.
+
 ### Round-robin introductions
 
 - **Stability**: planned
@@ -233,3 +423,19 @@ The initial end-to-end release is ready when all of these are checked:
 - [x] Duplicate delivery produces no second reply in tests.
 - [x] Normal application diagnostics contain no keys, credentials, or message bodies.
 - [ ] The web build, Rust suite, sidecar suite, container build, and a real XMTP end-to-end test all pass in CI.
+
+## Release gate for the deterministic local Council
+
+The local Council milestone is complete only when all of these are checked with direct evidence:
+
+- [x] `cthuwu-protocol` validation, serialization, identifier, envelope, signature-boundary, capability, identity, and Tentacle tests pass.
+- [x] In-memory transport proves authenticated sender checks, stable IDs, deterministic ordering, replay suppression, and a hard per-sender publish-rate bound.
+- [x] Liveness rejects stale heartbeats/incarnations and routing filters hard requirements before producing a deterministic explanation.
+- [x] Lease grant/accept/renew/release/revoke/expiry/failover tests prove generation and incarnation fencing.
+- [x] `LocalRegistry` resolves and updates bounded records, verifies endpoint association, preserves trust provenance, and survives reload.
+- [x] Governance proves canonical parent hashes, competing-parent detection, vote replacement, one-Cthulhu-one-vote, quorum, thresholds, expiry, and persona disagreement.
+- [x] Propagation proves invitation choice, provenance, depth/fan-out/rate limits, loops/duplicates, blocking/opt-out, campaign revocation, acknowledgements, and bounded outcome-based credit.
+- [x] One deterministic simulator test covers routing, failure/failover, governance, multi-level propagation, combined-snapshot persistence, and replay without duplicate effects.
+- [x] Protected Council persistence passes atomic-write, permissions, symlink/path, size, corruption, and reload tests under the existing data-directory model.
+- [ ] The complete pre-Council Rust, sidecar, web, launcher, Docker, audit, formatting, clippy, and direct-XMTP suites still pass.
+- [x] Documentation and diagnostics make no live XMTP Council, ERC-8004 deployment, or production-signature claim.

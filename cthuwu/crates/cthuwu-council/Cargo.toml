@@ -1,0 +1,17 @@
+[package]
+name = "cthuwu-council"
+version = "0.1.0"
+edition = "2024"
+description = "Local Council of Cthulhus coordination engine"
+license = "Apache-2.0"
+
+[dependencies]
+cthuwu-protocol = { path = "../cthuwu-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+cthuwu-protocol = { path = "../cthuwu-protocol", features = ["test-signer"] }
+tempfile = "3"
