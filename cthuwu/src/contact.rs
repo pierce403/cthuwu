@@ -401,6 +401,8 @@ fn markdown_value(value: Option<&str>) -> String {
     match value {
         Some(SKIPPED) => SKIPPED.to_owned(),
         Some(value) if !value.is_empty() => value
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
             .lines()
             .map(|line| format!("> {line}"))
             .collect::<Vec<_>>()
@@ -486,6 +488,23 @@ mod tests {
         assert!(!created);
         assert_eq!(loaded.name.as_deref(), Some("Nyx\n## not a real heading"));
         assert_eq!(loaded.stage, OnboardingStage::Hopes);
+    }
+
+    #[test]
+    fn bare_carriage_returns_cannot_escape_markdown_quotes() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ContactStore::new(root.path()).unwrap();
+        let (mut contact, _) = store.load_or_create("aabbcc001122").unwrap();
+
+        assert!(contact.record_answer("Nyx\r## not a real heading"));
+        store.save(&contact).unwrap();
+
+        let note = fs::read_to_string(root.path().join("contacts/aabbcc001122.md")).unwrap();
+        assert!(note.contains("> Nyx\n> ## not a real heading"));
+        assert!(!note.contains('\r'));
+
+        let loaded = store.load("aabbcc001122").unwrap().unwrap();
+        assert_eq!(loaded.name.as_deref(), Some("Nyx\n## not a real heading"));
     }
 
     #[test]

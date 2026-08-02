@@ -3,11 +3,15 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{env, path::Path, process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     time::timeout,
 };
 use tracing::{error, info};
+
+// This matches the sidecar's limit for JSONL received from Rust. It also leaves ample room for a
+// 16 KiB text message after worst-case JSON string escaping plus bounded protocol metadata.
+const MAX_SIDECAR_FRAME_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct InboundText {
@@ -69,14 +73,14 @@ pub async fn run_xmtp_sidecar(
         .stdin
         .take()
         .context("XMTP transport stdin was not piped")?;
-    let mut lines = BufReader::new(stdout).lines();
+    let mut stdout = BufReader::new(stdout);
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     info!(sidecar = %sidecar.display(), "XMTP transport started");
 
     loop {
         let line = tokio::select! {
-            result = lines.next_line() => result.context("reading XMTP transport output")?,
+            result = read_sidecar_frame(&mut stdout) => result?,
             signal = &mut shutdown => {
                 signal?;
                 info!("stopping XMTP transport");
@@ -135,6 +139,49 @@ pub async fn run_xmtp_sidecar(
             .context("writing reply to XMTP transport")?;
         stdin.flush().await.context("flushing XMTP reply")?;
     }
+}
+
+async fn read_sidecar_frame<R>(reader: &mut R) -> Result<Option<String>>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut frame = Vec::new();
+
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .await
+            .context("reading XMTP transport output")?;
+        if buffer.is_empty() {
+            if frame.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let content_length = newline.unwrap_or(buffer.len());
+        if frame
+            .len()
+            .checked_add(content_length)
+            .is_none_or(|length| length > MAX_SIDECAR_FRAME_BYTES)
+        {
+            bail!("XMTP transport frame exceeds the {MAX_SIDECAR_FRAME_BYTES}-byte JSONL limit");
+        }
+
+        frame.extend_from_slice(&buffer[..content_length]);
+        reader.consume(content_length + usize::from(newline.is_some()));
+        if newline.is_some() {
+            if frame.last() == Some(&b'\r') {
+                frame.pop();
+            }
+            break;
+        }
+    }
+
+    String::from_utf8(frame)
+        .context("XMTP transport emitted non-UTF-8 JSONL on stdout")
+        .map(Some)
 }
 
 async fn stop_transport(child: &mut Child) -> Result<()> {
@@ -250,5 +297,40 @@ mod tests {
             text: "hello".to_owned(),
         };
         assert!(validate_request(&request).is_err());
+    }
+
+    #[tokio::test]
+    async fn accepts_a_bounded_frame_with_maximum_json_escaped_text() {
+        let text = "\0".repeat(16 * 1024);
+        let mut encoded = serde_json::to_vec(&serde_json::json!({
+            "type": "inbound_text",
+            "id": "request-1",
+            "messageId": "message-1",
+            "senderInboxId": "aabbcc",
+            "conversationId": "dm-1",
+            "text": text,
+        }))
+        .unwrap();
+        assert!(encoded.len() < MAX_SIDECAR_FRAME_BYTES);
+        encoded.resize(MAX_SIDECAR_FRAME_BYTES, b' ');
+        encoded.push(b'\n');
+
+        let mut reader = BufReader::new(encoded.as_slice());
+        let frame = read_sidecar_frame(&mut reader).await.unwrap().unwrap();
+        assert_eq!(frame.len(), MAX_SIDECAR_FRAME_BYTES);
+        let request: InboundText = serde_json::from_str(&frame).unwrap();
+        validate_request(&request).unwrap();
+        assert_eq!(request.text.len(), 16 * 1024);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_sidecar_frame_over_the_hard_limit() {
+        let mut encoded = vec![b' '; MAX_SIDECAR_FRAME_BYTES + 1];
+        encoded.push(b'\n');
+        let mut reader = BufReader::new(encoded.as_slice());
+
+        let error = read_sidecar_frame(&mut reader).await.unwrap_err();
+
+        assert!(error.to_string().contains("frame exceeds"));
     }
 }

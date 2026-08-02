@@ -35,13 +35,13 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 ## Build and verification
 
 ```bash
-cargo fmt --manifest-path cthuwu/Cargo.toml --check
+cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
 cargo test --manifest-path cthuwu/Cargo.toml --locked
 npm --prefix agent ci
 npm --prefix agent run typecheck
 npm --prefix agent test
 npm --prefix agent run build
-npm --prefix web install
+npm --prefix web ci
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run build

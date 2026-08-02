@@ -24,7 +24,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 
 ### Automatic local browser identity
 
-- **Stability**: in-progress
+- **Stability**: stable
 - **Description**: A first-time visitor receives a randomly generated local identity without connecting an existing wallet.
 - **Properties**:
   - The browser creates an EOA private key with `crypto.getRandomValues` before configuration or network access.
@@ -40,11 +40,11 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Legacy complete records migrate; partial or corrupt records fail closed.
   - [x] Encrypted export/import round-trips and rejects a wrong passphrase or environment.
   - [x] Reset leaves unrelated and other-environment storage untouched.
-  - [ ] A full browser automation test verifies persistence across an actual page reload.
+  - [x] A full browser automation test verifies persistence across an actual page reload.
 
 ### Browser-to-Cthuwu XMTP direct message
 
-- **Stability**: in-progress
+- **Stability**: stable
 - **Description**: The browser creates a one-to-one XMTP conversation with the configured Cthuwu identity.
 - **Properties**:
   - `VITE_XMTP_ENV` selects `dev`, `production`, or `local`.
@@ -58,12 +58,12 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] ENS names resolve before DM creation.
   - [x] Existing and streamed text messages share one deduplicated render path.
   - [x] Browser and backend enforce the same 16 KiB text limit.
-  - [ ] A real browser message reaches `uwubot` and receives exactly one response.
-  - [ ] History and both identities survive a complete live restart test.
+  - [x] A real browser message reaches `uwubot` and receives exactly one response.
+  - [x] History and both identities survive a complete live restart test.
 
 ### Single Rust backend command
 
-- **Stability**: in-progress
+- **Stability**: stable
 - **Description**: The operator runs one Rust binary, `uwubot`, for the Cthuwu agent.
 - **Properties**:
   - Cargo exposes one application binary named `uwubot`.
@@ -81,7 +81,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Rust passes an allowlisted environment that excludes model credentials.
   - [x] SIGINT/SIGTERM close protocol input, permit graceful Agent SDK shutdown, and force-kill only after a timeout.
   - [x] The container image builds in CI.
-  - [ ] Reconnect and graceful shutdown are verified against a live XMTP stream.
+  - [x] Reconnect and graceful shutdown are verified against a live XMTP stream.
 
 ### One-to-one conversation processing
 
@@ -225,8 +225,8 @@ The initial end-to-end release is ready when all of these are checked:
 - [x] A fresh browser creates and persists a local identity automatically in unit/build verification.
 - [x] `uwubot` creates or loads persistent XMTP identity material in unit verification.
 - [x] Both sides require the same explicit XMTP environment and fail closed on stored mismatch.
-- [ ] A real browser sends a unique text message and receives exactly one reply.
-- [ ] That live message creates the corresponding `contacts/<inbox-id>.md` file.
+- [x] A real browser sends a unique text message and receives exactly one reply.
+- [x] That live message creates the corresponding `contacts/<inbox-id>.md` file.
 - [x] Contact onboarding answers and dedupe state survive store reconstruction in tests.
 - [x] Duplicate delivery produces no second reply in tests.
 - [x] Normal application diagnostics contain no keys, credentials, or message bodies.

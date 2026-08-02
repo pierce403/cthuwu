@@ -50,7 +50,27 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 
 ## Current milestone
 
-Pass one real end-to-end test:
+The 2026-08-01 manual XMTP `dev` release-gate run passed browser identity, exactly-once reply,
+contact onboarding, bilateral matching, deletion, and restart/persistence checks. Sanitized evidence
+is in `docs/test-runs/2026-08-01-xmtp-dev.md`. The release criterion that explicitly requires a
+real XMTP/browser job in GitHub CI remains open because CI does not run that job yet.
+
+Operational notes from that run:
+
+- The persistent dev identity is the public address
+  `0x52a93ca2cf0629bcfe7bf7824df7c18268c360f7`; its secret state remains outside the repository.
+- The SQLCipher 4.6.1 `sqlcipherCodecAttach: no codec attached to db` warning is emitted when XMTP
+  reapplies a key to an already-keyed pooled connection. With the persisted 32-byte key supplied,
+  it does not indicate an unencrypted database; do not suppress all native stderr.
+- Sidecar-to-Rust JSONL frames are independently capped at 256 KiB, and contact answers normalize
+  CRLF/bare CR before blockquoting so CommonMark line endings cannot escape note structure.
+- Keep sidecar Vitest at `3.2.7` or newer within the pinned major line; earlier 3.2 releases have a
+  critical development-server advisory.
+
+The next release task is to add a real browser/XMTP job to GitHub CI, then check the final release
+criterion without weakening the dedicated-identity or no-secret-log rules.
+
+The original manual milestone was:
 
 1. Build the Agent SDK sidecar and start `uwubot` locally.
 2. Connect from the static web client on the same XMTP environment.
