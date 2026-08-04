@@ -4,7 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0714" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Cthuwu" />
     <meta name="description" content="Talk to Cthuwu, your tiny eldritch buddy, over XMTP." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <link rel="canonical" href="https://cthuwu.app/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="cthuwu" />
@@ -184,6 +191,32 @@
         </div>
       </section>
     </main>
+
+    <aside
+      id="install-prompt"
+      class="install-prompt"
+      aria-labelledby="install-title"
+      aria-describedby="install-copy"
+      hidden
+    >
+      <img src="/icons/cthuwu-192.png" width="64" height="64" alt="" />
+      <div class="install-content">
+        <p class="install-eyebrow">a portal in your pocket</p>
+        <p id="install-title" class="install-title">keep Cthuwu close</p>
+        <p id="install-copy" class="install-copy">
+          Install a cozy, full-screen portal that is always one tap away.
+        </p>
+        <button id="install-action" class="install-action" type="button">install Cthuwu</button>
+      </div>
+      <button
+        id="install-dismiss"
+        class="install-dismiss"
+        type="button"
+        aria-label="Dismiss install suggestion"
+      >
+        ×
+      </button>
+    </aside>
 
     <dialog id="identity-dialog" aria-labelledby="identity-title">
       <form class="settings">

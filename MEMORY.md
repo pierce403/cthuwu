@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-04
 
 ## Product
 
@@ -31,6 +31,17 @@ Last reviewed: 2026-08-01
   with the environment-independent `cthuwu.ui.motion.v1` browser preference.
 - The social preview is the generated 1200×630 `web/public/cthuwu-og.jpg`; the page references it
   through absolute Open Graph and Twitter Card URLs.
+- The web client is an installable PWA with dedicated any-purpose, maskable, Apple touch, and
+  favicon assets under `web/public/icons/`. Its install nudge appears only when a real Chromium
+  install event is available, or as backup-first manual guidance in Safari, and a dismissal cools
+  it down for 30 days.
+- Apple's installed Home Screen/Dock web app does not inherit local storage from Safari. Because
+  the browser wallet lives there, the UI must continue to recommend encrypted identity backup
+  before Apple installation; never bridge that private key through cookies, query strings, or URLs.
+  See [WebKit Features in Safari 17.2 — Web Apps](https://webkit.org/blog/14787/webkit-features-in-safari-17-2/#web-apps).
+- `web/public/sw.js` caches only the branded offline page and its public icon, intercepts only
+  same-origin navigation plus those explicit assets, and must not cache XMTP/WASM, DMs, identities,
+  exports, or arbitrary future same-origin API responses.
 - The sole backend command is `uwubot`.
 - Contact notes default to `contacts/<inbox-id>.md` and are ignored by git because they contain personal statements.
 - Onboarding collects name, hopes, possible contributions, and needs as user-asserted information.
@@ -104,6 +115,8 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
 - The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
 - The public build has no XMTP repository-variable configuration. Both XMTP `production` and the
   current intro Tentacle address are compiled into the browser.
+- The Pages build also publishes `manifest.webmanifest`, `sw.js`, `offline.html`, and PWA icons from
+  `web/public/`; installability remains static-host compatible.
 
 See `ARCHITECTURE.md` and `docs/decisions/`.
 

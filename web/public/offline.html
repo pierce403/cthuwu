@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0714" />
+    <title>Cthuwu is dreaming</title>
+    <style>
+      :root {
+        color: #fff9ff;
+        background: #0b0714;
+        font-family: ui-rounded, "Avenir Next Rounded", system-ui, sans-serif;
+        color-scheme: dark;
+      }
+      * { box-sizing: border-box; }
+      body {
+        display: grid;
+        min-height: 100vh;
+        min-height: 100dvh;
+        margin: 0;
+        padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+          max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+        background:
+          radial-gradient(circle at 50% 35%, #542a745c, transparent 22rem),
+          linear-gradient(145deg, #100a1d, #090610 58%, #0b1018);
+        place-items: center;
+      }
+      main {
+        width: min(100%, 28rem);
+        padding: clamp(1.4rem, 6vw, 2.2rem);
+        border: 1px solid #c8a7eb8f;
+        border-radius: 2rem;
+        background: #171022ee;
+        text-align: center;
+        box-shadow: 0 2rem 6rem #000a, inset 0 1px #fff1;
+      }
+      img {
+        width: 7rem;
+        height: 7rem;
+        border-radius: 1.8rem;
+        box-shadow: 0 0 2rem #9f60d55c;
+      }
+      .eyebrow {
+        margin: 1.2rem 0 0;
+        color: #9cf3d6;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+      h1 { margin: 0.35rem 0 0; font-size: clamp(2rem, 10vw, 3rem); letter-spacing: -0.05em; }
+      p { margin: 0.8rem auto 0; color: #cfc1da; line-height: 1.55; }
+      button {
+        min-height: 44px;
+        margin-top: 1.3rem;
+        padding: 0.72rem 1.1rem;
+        border: 0;
+        border-radius: 999px;
+        color: #11251f;
+        background: #9cf3d6;
+        font: inherit;
+        font-weight: 850;
+        cursor: pointer;
+      }
+      button:focus-visible { outline: 3px solid #ffe8a3; outline-offset: 3px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/cthuwu-192.png" width="192" height="192" alt="" />
+      <p class="eyebrow">the veil is quiet</p>
+      <h1>Cthuwu is dreaming</h1>
+      <p>XMTP needs a network connection. Your local identity is still tucked safely on this device.</p>
+      <button type="button" onclick="location.reload()">try the portal again</button>
+    </main>
+  </body>
+</html>

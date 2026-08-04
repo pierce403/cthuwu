@@ -38,6 +38,9 @@ describe("chat interface", () => {
     const mascot = document.querySelector<HTMLImageElement>(".mascot");
     const close = document.querySelector<HTMLButtonElement>("#identity-close");
     const dialogForm = document.querySelector<HTMLFormElement>("#identity-dialog form");
+    const installPrompt = document.querySelector<HTMLElement>("#install-prompt");
+    const installAction = document.querySelector<HTMLButtonElement>("#install-action");
+    const installDismiss = document.querySelector<HTMLButtonElement>("#install-dismiss");
 
     expect(document.querySelector("main")).not.toBeNull();
     expect(log?.getAttribute("role")).toBe("log");
@@ -55,6 +58,17 @@ describe("chat interface", () => {
     expect(dialogForm?.hasAttribute("method")).toBe(false);
     expect(document.querySelector("#identity-dialog")?.textContent).toContain("unencrypted");
     expect(document.querySelector("#motion-toggle")?.getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe(
+      "/manifest.webmanifest",
+    );
+    expect(document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute("href")).toBe(
+      "/icons/apple-touch-icon.png",
+    );
+    expect(installPrompt?.hidden).toBe(true);
+    expect(installPrompt?.getAttribute("aria-labelledby")).toBe("install-title");
+    expect(installAction?.type).toBe("button");
+    expect(installDismiss?.type).toBe("button");
+    expect(installDismiss?.getAttribute("aria-label")).toContain("Dismiss");
     expect(document.querySelector('meta[property="og:image"]')?.getAttribute("content")).toBe(
       "https://cthuwu.app/cthuwu-og.jpg",
     );

@@ -21,6 +21,13 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     is disabled by the system reduced-motion preference.
   - Absolute Open Graph and Twitter Card metadata use a purpose-built 1200×630 preview at
     `web/public/cthuwu-og.jpg`.
+  - A standalone web-app manifest, opaque any-purpose and maskable icons, Apple touch metadata,
+    viewport-safe layout, and a branded offline fallback make the static site installable as a PWA.
+  - Chromium's native install event drives a compact dismissible prompt with a 30-day cooldown.
+    Safari explains its manual Add to Home Screen/Dock flow and routes people through encrypted
+    identity backup first because Apple does not copy local storage into the installed web app.
+  - The service worker handles same-origin navigations and two explicit offline assets only. It does
+    not cache XMTP traffic, the large Browser SDK/WASM bundle, messages, identity data, or exports.
   - The composer grows to five lines, Enter sends, Shift+Enter inserts a line, incoming messages do
     not pull a reader away from older history, and disconnected states disable message submission.
 - **Test Criteria**:
@@ -29,6 +36,11 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] The custom domain serves the application.
   - [x] DOM tests cover accessible control names, the empty-conversation welcome, hostile text
     rendering, send behavior, and safe stream-loss state.
+  - [x] Tests cover manifest identity, icon dimensions/purposes, install-event one-shot behavior,
+    dismissal cooldown, standalone suppression, Apple backup guidance, and service-worker scope.
+  - [x] A production build emits the manifest, icons, worker, and offline page beside the static app.
+  - [ ] Manual install and standalone-layout checks pass on Android Chrome, desktop Chromium,
+    iPhone/iPad Safari, and macOS Safari.
   - [ ] Automated accessibility checks cover the primary chat and identity flows.
 
 ### Automatic local browser identity

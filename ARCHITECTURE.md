@@ -39,7 +39,10 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 - connects to XMTP `production` with no frontend environment override;
 - creates a DM with the hard-coded intro Tentacle address;
 - renders text history and streams new messages;
-- sends text messages.
+- sends text messages;
+- publishes a standalone manifest and platform-specific install icons;
+- registers a narrow service worker that falls back to a static offline page without caching XMTP
+  transport, Browser SDK/WASM, messages, identity records, or arbitrary same-origin responses.
 
 The low-friction identity is a randomly generated EOA stored in browser local storage. The client connects automatically on load and supports a passphrase-encrypted wallet export. It must be presented honestly: the current XMTP Browser SDK database is unencrypted, clearing site data loses the identity without an export, and an identity export is not a history backup.
 
@@ -48,7 +51,9 @@ card, and CSS-only ambient animation. The
 desktop interface places the companion beside a full-height conversation panel; narrow screens use a
 compact companion header and viewport-aware chat. Motion has an explicit persisted pause control and
 also honors `prefers-reduced-motion`; connection and privacy state remain available as text rather
-than depending on animation or color.
+than depending on animation or color. A dismissible install card uses Chromium's native
+`beforeinstallprompt` event. Safari receives manual, backup-first instructions because Apple's
+installed web-app storage is separate from the browser's local identity storage.
 
 ### Rust runtime and XMTP transport
 

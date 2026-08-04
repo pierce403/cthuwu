@@ -7,6 +7,7 @@ import {
   type StoredIdentity,
 } from "./identity";
 import { decryptIdentityBackup, encryptIdentityBackup } from "./identity-backup";
+import { initializePwaInstallPrompt } from "./pwa";
 import type { ChatMessage, ChatSession } from "./transport";
 import { createXmtpSession } from "./xmtp-transport";
 import "./style.css";
@@ -47,6 +48,11 @@ const exportElement = requireElement<HTMLButtonElement>("export-identity");
 const importElement = requireElement<HTMLInputElement>("import-identity");
 const resetElement = requireElement<HTMLButtonElement>("reset-identity");
 const settingsStatusElement = requireElement<HTMLParagraphElement>("settings-status");
+const installPromptElement = requireElement<HTMLElement>("install-prompt");
+const installTitleElement = requireElement<HTMLElement>("install-title");
+const installCopyElement = requireElement<HTMLElement>("install-copy");
+const installActionElement = requireElement<HTMLButtonElement>("install-action");
+const installDismissElement = requireElement<HTMLButtonElement>("install-dismiss");
 
 let identity: StoredIdentity | undefined;
 let session: ChatSession | undefined;
@@ -75,6 +81,19 @@ function bootstrap(): void {
     fatalIdentity(error);
     return;
   }
+  initializePwaInstallPrompt(
+    {
+      card: installPromptElement,
+      title: installTitleElement,
+      copy: installCopyElement,
+      action: installActionElement,
+      dismiss: installDismissElement,
+    },
+    {
+      enabled: import.meta.env.PROD,
+      onBackupRequested: () => dialogElement.showModal(),
+    },
+  );
   void connect(false);
 }
 

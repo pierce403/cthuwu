@@ -36,6 +36,8 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   margin: 0;
+  padding-right: env(safe-area-inset-right);
+  padding-left: env(safe-area-inset-left);
   overflow-x: hidden;
   background:
     radial-gradient(circle at 16% 12%, #4d2a7252 0, transparent 28rem),
@@ -828,6 +830,105 @@ textarea::placeholder,
   line-height: 1.4;
 }
 
+.install-prompt {
+  position: fixed;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  left: max(1rem, env(safe-area-inset-left));
+  z-index: 20;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: min(29rem, calc(100% - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  gap: 0.8rem;
+  padding: 0.8rem;
+  border: 1px solid #c8a7eba8;
+  border-radius: 1.35rem;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 10% 0%, #6b3d8a38, transparent 42%),
+    #171022f7;
+  box-shadow:
+    0 1.2rem 3.5rem #000c,
+    inset 0 1px #fff1;
+  backdrop-filter: blur(16px);
+  align-items: start;
+}
+
+.install-prompt[hidden] {
+  display: none;
+}
+
+.install-prompt > img {
+  width: 3.8rem;
+  height: 3.8rem;
+  border: 1px solid #c8a7eb70;
+  border-radius: 1rem;
+  box-shadow: 0 0.45rem 1.4rem #0007;
+}
+
+.install-content {
+  min-width: 0;
+}
+
+.install-eyebrow {
+  margin: 0.05rem 0 0;
+  color: var(--mint);
+  font-size: 0.58rem;
+  font-weight: 850;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.install-title {
+  margin: 0.18rem 0 0;
+  font-size: 0.94rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+.install-copy {
+  margin: 0.28rem 0 0;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.42;
+}
+
+.install-action {
+  min-height: 2.35rem;
+  margin-top: 0.62rem;
+  padding: 0.48rem 0.78rem;
+  border: 1px solid #c9ffed8c;
+  border-radius: 999px;
+  color: #11251f;
+  background: linear-gradient(145deg, #b7f8e3, #7ce0c5);
+  font-size: 0.72rem;
+  font-weight: 900;
+  box-shadow: inset 0 1px #ffffff70;
+}
+
+.install-action:not(:disabled):hover {
+  background: linear-gradient(145deg, #c9ffed, #8fefd3);
+  transform: translateY(-1px);
+}
+
+.install-dismiss {
+  display: grid;
+  width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  background: #0f0a18;
+  font-size: 1.45rem;
+  line-height: 1;
+  place-items: center;
+}
+
+.install-dismiss:hover {
+  border-color: var(--lavender);
+  color: var(--text);
+}
+
 dialog {
   width: min(42rem, calc(100% - 2rem));
   max-height: calc(100dvh - 2rem);
@@ -1074,7 +1175,8 @@ html[data-motion="paused"] .presence-dot::after {
 }
 
 html[data-motion="paused"] .message,
-html[data-motion="paused"] .mascot-scene.is-delighted .mascot {
+html[data-motion="paused"] .mascot-scene.is-delighted .mascot,
+html[data-motion="paused"] .install-prompt {
   animation: none !important;
 }
 
@@ -1144,6 +1246,10 @@ html[data-motion="paused"] .message {
 
   .message {
     animation: message-arrive 240ms ease-out both;
+  }
+
+  .install-prompt {
+    animation: install-arrive 280ms ease-out both;
   }
 }
 
@@ -1249,7 +1355,37 @@ html[data-motion="paused"] .message {
   }
 }
 
+@keyframes install-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.55rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  .install-prompt {
+    display: none !important;
+  }
+}
+
 @media (max-width: 56rem) {
+  .install-prompt {
+    top: max(0.75rem, env(safe-area-inset-top));
+    right: max(0.75rem, env(safe-area-inset-right));
+    bottom: auto;
+    left: max(0.75rem, env(safe-area-inset-left));
+    width: auto;
+    margin: 0 auto;
+  }
+
   .shell {
     grid-template-columns: 1fr;
     gap: 0.7rem;
@@ -1341,6 +1477,27 @@ html[data-motion="paused"] .message {
 }
 
 @media (max-width: 36rem) {
+  .install-prompt {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.65rem;
+    padding: 0.7rem;
+    border-radius: 1.15rem;
+  }
+
+  .install-prompt > img {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 0.8rem;
+  }
+
+  .install-copy {
+    font-size: 0.69rem;
+  }
+
+  .install-action {
+    margin-top: 0.48rem;
+  }
+
   .shell {
     width: calc(100% - 1rem);
   }
