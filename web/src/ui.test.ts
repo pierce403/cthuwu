@@ -25,7 +25,6 @@ describe("chat interface", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    vi.stubEnv("VITE_XMTP_ENV", "dev");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     localStorage.clear();
     transport.onMessage = undefined;
@@ -94,7 +93,7 @@ describe("chat interface", () => {
     await vi.waitFor(() => expect(document.querySelector("#chat")?.getAttribute("data-state")).toBe("connected"));
     expect(transport.createSession).toHaveBeenCalledWith(
       {
-        environment: "dev",
+        environment: "production",
         botAddress: "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db",
       },
       expect.any(Object),

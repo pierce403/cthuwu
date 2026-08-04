@@ -39,7 +39,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The browser creates an EOA private key with `crypto.getRandomValues` before configuration or network access.
   - A separate 32-byte compatibility key is persisted, but the UI does not claim it encrypts the current Browser SDK database.
   - A versioned record is namespaced by XMTP environment in local storage and reused on reload.
-  - The client connects automatically to the canonical intro Tentacle.
+  - The deployed browser always uses XMTP `production` and connects automatically to the canonical
+    intro Tentacle; no build variable can redirect either value.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -56,7 +57,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Stability**: stable
 - **Description**: The browser creates a one-to-one XMTP conversation with the canonical intro Tentacle.
 - **Properties**:
-  - `VITE_XMTP_ENV` selects `dev`, `production`, or `local`.
+  - The browser is hard-coded to XMTP `production`; development and local XMTP environments are not
+    valid frontend deployment modes.
   - The intro Tentacle is temporarily hard-coded as
     `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`, so repository variables cannot silently redirect
     first-contact conversations.
@@ -66,7 +68,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Failed sends preserve the draft; inbound rendering uses text nodes rather than HTML.
   - Groups, attachments, reactions, and read receipts are outside the first slice.
 - **Test Criteria**:
-  - [x] Configuration rejects unknown environments and always returns the canonical intro Tentacle.
+  - [x] Configuration always returns XMTP `production` and the canonical intro Tentacle.
   - [x] The Browser SDK client creates or loads an XMTP client and opens a DM with that Tentacle.
   - [x] Existing and streamed text messages share one deduplicated render path.
   - [x] Browser and backend enforce the same 16 KiB text limit.

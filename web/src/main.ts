@@ -1,4 +1,4 @@
-import { parseConfig, parseEnvironment } from "./config";
+import { XMTP_ENVIRONMENT, parseConfig } from "./config";
 import {
   IdentityStorageError,
   loadOrCreateIdentity,
@@ -14,7 +14,7 @@ import "./style.css";
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const MAX_RENDERED_MESSAGES = 200;
 const MOTION_STORAGE_KEY = "cthuwu.ui.motion.v1";
-const environment = parseEnvironment(import.meta.env.VITE_XMTP_ENV as string | undefined);
+const environment = XMTP_ENVIRONMENT;
 
 type UiState =
   | "preparing"
@@ -86,7 +86,7 @@ async function connect(userInitiated: boolean): Promise<void> {
     let nextSession: ChatSession | undefined;
     try {
       if (!identity) throw new Error("browser identity unavailable");
-      const config = parseConfig(environment);
+      const config = parseConfig();
       await closeSession();
       nextSession = await createXmtpSession(config, identity);
       if (generation !== connectionGeneration) {

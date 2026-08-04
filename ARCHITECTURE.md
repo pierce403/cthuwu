@@ -36,7 +36,7 @@ direct DM. Failover never silently copies private conversation or contact memory
 The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable for any static host. It:
 
 - creates or loads a browser-side identity;
-- connects to a configured XMTP environment;
+- connects to XMTP `production` with no frontend environment override;
 - creates a DM with the hard-coded intro Tentacle address;
 - renders text history and streams new messages;
 - sends text messages.

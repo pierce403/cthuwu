@@ -21,6 +21,8 @@ Last reviewed: 2026-08-01
 - Model access: adapter boundary; local models should be first-class.
 - Text-only one-to-one DMs are the first vertical slice.
 - Browser identities are generated and connected automatically, then persisted in local storage.
+- The deployed browser always uses XMTP `production`; it has no environment override. Development
+  and local XMTP modes remain backend/test concerns only.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
   `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
   discover intro Tentacles.
@@ -100,8 +102,8 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
 - The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
 - `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub Pages Actions.
 - The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
-- Public build configuration uses only the `VITE_XMTP_ENV` repository variable; the intro Tentacle
-  address is currently compiled into the browser.
+- The public build has no XMTP repository-variable configuration. Both XMTP `production` and the
+  current intro Tentacle address are compiled into the browser.
 
 See `ARCHITECTURE.md` and `docs/decisions/`.
 
