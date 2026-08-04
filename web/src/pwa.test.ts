@@ -139,6 +139,25 @@ describe("PWA install prompt", () => {
     expect(onBackupRequested).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mistake desktop Chromium's Safari compatibility token for Safari", () => {
+    vi.useFakeTimers();
+    const elements = mountElements();
+    const chromium = {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36",
+      maxTouchPoints: 0,
+    } as Navigator;
+    controller = initializePwaInstallPrompt(elements, {
+      navigator: chromium,
+      applePromptDelayMs: 100,
+    });
+
+    vi.advanceTimersByTime(100);
+
+    expect(elements.card.hidden).toBe(true);
+    expect(elements.card.dataset.mode).toBeUndefined();
+  });
+
   it("contains service-worker registration failures", async () => {
     const elements = mountElements();
     const register = vi.fn().mockRejectedValue(new Error("registration blocked"));

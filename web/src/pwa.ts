@@ -180,7 +180,10 @@ function isStandalone(activeWindow: Window, activeNavigator: Navigator): boolean
 function detectAppleInstallMode(activeNavigator: Navigator): "ios" | "macos" | undefined {
   const userAgent = activeNavigator.userAgent;
   const isSafari =
-    /Safari/i.test(userAgent) && !/(CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo)/i.test(userAgent);
+    /Version\/[\d.]+.*Safari\//i.test(userAgent) &&
+    !/(Chrome|Chromium|CriOS|FxiOS|Firefox|Edg|OPR|OPiOS|SamsungBrowser|DuckDuckGo)/i.test(
+      userAgent,
+    );
   if (!isSafari) return undefined;
   if (/iPhone|iPad|iPod/i.test(userAgent)) return "ios";
   if (/Macintosh/i.test(userAgent) && activeNavigator.maxTouchPoints > 1) return "ios";
