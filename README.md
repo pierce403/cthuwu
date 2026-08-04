@@ -35,7 +35,8 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
 ## What works
 
 - The browser generates an environment-scoped wallet before connecting, reuses it on reload, and supports passphrase-encrypted identity export/import and confirmed reset.
-- The web client loads text history, streams new text, and preserves a draft after a failed send.
+- The responsive web client uses a locally hosted animated Cthuwu mascot, loads and streams text
+  history, preserves drafts after failed sends, and offers an explicit motion pause control.
 - `uwubot` creates a persistent XMTP wallet and encrypted database on first start, then reuses both.
 - A new sender gets exactly `contacts/<inbox-id>.md` and a deterministic conversation about their name, hopes, possible contributions, and needs.
 - `/profile`, `/set`, `/skip`, `/share`, `/matches`, `/pause`, `/resume`, and `/forget confirm` provide inspectable consent and data controls.

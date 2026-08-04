@@ -13,18 +13,33 @@ import "./style.css";
 
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const MAX_RENDERED_MESSAGES = 200;
+const MOTION_STORAGE_KEY = "cthuwu.ui.motion.v1";
 const environment = parseEnvironment(import.meta.env.VITE_XMTP_ENV as string | undefined);
 
+type UiState =
+  | "preparing"
+  | "connecting"
+  | "connected"
+  | "sending"
+  | "retryable-error"
+  | "fatal-error";
+
 const chatElement = requireElement<HTMLElement>("chat");
+const mascotElement = requireElement<HTMLElement>("mascot-stage");
 const messagesElement = requireElement<HTMLDivElement>("messages");
+const newMessagesElement = requireElement<HTMLButtonElement>("new-messages");
 const composerElement = requireElement<HTMLFormElement>("composer");
-const inputElement = requireElement<HTMLInputElement>("message");
+const inputElement = requireElement<HTMLTextAreaElement>("message");
 const sendElement = requireElement<HTMLButtonElement>("send");
+const sendLabelElement = sendElement.querySelector("span");
 const connectElement = requireElement<HTMLButtonElement>("connect");
 const settingsElement = requireElement<HTMLButtonElement>("settings");
 const statusElement = requireElement<HTMLParagraphElement>("status");
 const composerErrorElement = requireElement<HTMLParagraphElement>("composer-error");
+const motionElement = requireElement<HTMLButtonElement>("motion-toggle");
+const motionLabelElement = motionElement.querySelector("span");
 const dialogElement = requireElement<HTMLDialogElement>("identity-dialog");
+const dialogCloseElement = requireElement<HTMLButtonElement>("identity-close");
 const addressElement = requireElement<HTMLElement>("identity-address");
 const environmentElement = requireElement<HTMLElement>("identity-environment");
 const passphraseElement = requireElement<HTMLInputElement>("backup-passphrase");
@@ -38,7 +53,10 @@ let session: ChatSession | undefined;
 let stopStream: (() => Promise<void>) | undefined;
 let connectionPromise: Promise<void> | undefined;
 let connectionGeneration = 0;
+let uiState: UiState = "preparing";
+let connectedStatus = "XMTP connection ready";
 let sending = false;
+let delightTimer: ReturnType<typeof setTimeout> | undefined;
 const seenMessageIds = new Set<string>();
 
 bootstrap();
@@ -46,6 +64,9 @@ bootstrap();
 function bootstrap(): void {
   environmentElement.textContent = environment;
   wireIdentityControls();
+  wireComposerControls();
+  initializeMotionControl();
+  setUiState("preparing", "preparing a local identity…");
   try {
     // Identity creation happens before bot configuration or network access.
     identity = loadOrCreateIdentity(environment);
@@ -61,8 +82,8 @@ async function connect(userInitiated: boolean): Promise<void> {
   if (connectionPromise) return connectionPromise;
   const generation = ++connectionGeneration;
   connectionPromise = (async () => {
-    setConnectionStatus("opening the XMTP portal…", true);
-    connectElement.hidden = true;
+    setUiState("connecting", "parting the veil through XMTP…");
+    let nextSession: ChatSession | undefined;
     try {
       if (!identity) throw new Error("browser identity unavailable");
       const config = parseConfig(
@@ -70,30 +91,38 @@ async function connect(userInitiated: boolean): Promise<void> {
         import.meta.env.VITE_XMTP_BOT_ADDRESS as string | undefined,
       );
       await closeSession();
-      const nextSession = await createXmtpSession(config, identity);
+      nextSession = await createXmtpSession(config, identity);
       if (generation !== connectionGeneration) {
         await nextSession.close();
         return;
       }
+
       session = nextSession;
       seenMessageIds.clear();
       messagesElement.replaceChildren();
-      stopStream = await session.stream(renderMessage, streamFailed);
-      for (const message of await session.history()) renderMessage(message, false);
-      inputElement.disabled = false;
-      sendElement.disabled = false;
-      chatElement.setAttribute("aria-busy", "false");
-      setConnectionStatus(
-        `portal open · inbox ${shortId(session.inboxId)} · identity stored on this device`,
-        false,
+      messagesElement.classList.remove("is-empty");
+      newMessagesElement.hidden = true;
+      stopStream = await session.stream(
+        (message) => renderMessage(message),
+        (error) => streamFailed(error, generation),
       );
+      for (const message of await session.history()) renderMessage(message, false);
+      if (messagesElement.childElementCount === 0) renderWelcome();
+
+      connectedStatus = `veil open · inbox ${shortId(session.inboxId)} · local browser identity`;
+      setUiState("connected", connectedStatus);
       if (userInitiated) inputElement.focus();
     } catch (error) {
       console.error(error);
-      setConnectionStatus("the XMTP portal could not open; your local identity was preserved", false);
-      connectElement.hidden = false;
-      connectElement.disabled = false;
-      chatElement.setAttribute("aria-busy", "false");
+      if (nextSession && session !== nextSession) await nextSession.close().catch(() => undefined);
+      if (generation === connectionGeneration) {
+        connectionGeneration += 1;
+        setUiState(
+          "retryable-error",
+          "the XMTP veil got tangled; your local identity is still here",
+        );
+        await closeSession();
+      }
     } finally {
       connectionPromise = undefined;
     }
@@ -104,6 +133,11 @@ async function connect(userInitiated: boolean): Promise<void> {
 function renderMessage(message: ChatMessage, announce = true): void {
   if (seenMessageIds.has(message.id)) return;
   seenMessageIds.add(message.id);
+
+  const shouldFollow = message.mine || isNearMessageBottom();
+  messagesElement.querySelector("[data-welcome]")?.remove();
+  messagesElement.classList.remove("is-empty");
+
   const bubble = document.createElement("article");
   bubble.className = `message ${message.mine ? "mine" : "theirs"}`;
   const sender = document.createElement("span");
@@ -112,49 +146,115 @@ function renderMessage(message: ChatMessage, announce = true): void {
   bubble.append(sender, document.createTextNode(message.text));
   if (!announce) bubble.setAttribute("aria-live", "off");
   messagesElement.append(bubble);
+
   while (messagesElement.childElementCount > MAX_RENDERED_MESSAGES) {
     messagesElement.firstElementChild?.remove();
   }
-  messagesElement.scrollTop = messagesElement.scrollHeight;
+
+  if (shouldFollow) {
+    scrollToLatest();
+  } else if (announce) {
+    newMessagesElement.hidden = false;
+  }
+  if (announce && !message.mine) delightMascot();
 }
 
-function streamFailed(error: unknown): void {
+function renderWelcome(): void {
+  const welcome = document.createElement("div");
+  welcome.className = "welcome";
+  welcome.dataset.welcome = "";
+  welcome.setAttribute("role", "note");
+
+  const spark = document.createElement("span");
+  spark.className = "welcome-spark";
+  spark.setAttribute("aria-hidden", "true");
+  spark.textContent = "✦";
+
+  const kicker = document.createElement("p");
+  kicker.className = "welcome-kicker";
+  kicker.textContent = "a warm corner of the void";
+
+  const greeting = document.createElement("p");
+  greeting.textContent = "oh! you made it. i was hoping the stars would send someone interesting.";
+
+  const question = document.createElement("p");
+  question.className = "welcome-question";
+  question.textContent = "what’s on your mind?";
+
+  welcome.append(spark, kicker, greeting, question);
+  messagesElement.classList.add("is-empty");
+  messagesElement.append(welcome);
+}
+
+function streamFailed(error: unknown, generation: number): void {
+  if (generation !== connectionGeneration) return;
   console.error(error);
-  setConnectionStatus("the message stream closed; retry the portal to catch up", false);
-  connectElement.hidden = false;
+  connectionGeneration += 1;
+  void disconnectAfterStreamFailure();
 }
 
-composerElement.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void sendCurrentDraft();
-});
+async function disconnectAfterStreamFailure(): Promise<void> {
+  setUiState("retryable-error", "the message stream closed; reconnect to catch up safely");
+  await closeSession();
+}
+
+function wireComposerControls(): void {
+  composerElement.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void sendCurrentDraft();
+  });
+  inputElement.addEventListener("input", () => {
+    resizeComposer();
+    setComposerError();
+    updateSendAvailability();
+  });
+  inputElement.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    composerElement.requestSubmit();
+  });
+  messagesElement.addEventListener("scroll", () => {
+    if (isNearMessageBottom()) newMessagesElement.hidden = true;
+  });
+  newMessagesElement.addEventListener("click", scrollToLatest);
+  connectElement.addEventListener("click", () => void connect(true));
+  settingsElement.addEventListener("click", () => dialogElement.showModal());
+}
 
 async function sendCurrentDraft(): Promise<void> {
   const draft = inputElement.value.trim();
-  if (!session || !draft || sending) return;
+  if (!session || uiState !== "connected" || !draft || sending) return;
   if (new TextEncoder().encode(draft).length > MAX_MESSAGE_BYTES) {
     setComposerError("Messages must be 16 KiB or smaller.");
     return;
   }
+
+  const activeSession = session;
   sending = true;
-  sendElement.disabled = true;
   setComposerError();
+  setUiState("sending", "carrying your whisper through XMTP…");
   try {
-    await session.send(draft);
-    if (inputElement.value.trim() === draft) inputElement.value = "";
+    await activeSession.send(draft);
+    if (inputElement.value.trim() === draft) {
+      inputElement.value = "";
+      resizeComposer();
+    }
   } catch (error) {
     console.error(error);
     setComposerError("The send was not confirmed. Your draft is still here; check before retrying.");
   } finally {
     sending = false;
-    sendElement.disabled = false;
+    if (session === activeSession) {
+      setUiState("connected", connectedStatus);
+    } else {
+      updateSendAvailability();
+    }
   }
 }
 
-connectElement.addEventListener("click", () => void connect(true));
-settingsElement.addEventListener("click", () => dialogElement.showModal());
-
 function wireIdentityControls(): void {
+  dialogElement.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+  dialogCloseElement.addEventListener("click", () => dialogElement.close());
   exportElement.addEventListener("click", () => void exportIdentity());
   importElement.addEventListener("change", () => void importIdentity());
   resetElement.addEventListener("click", () => void confirmReset());
@@ -206,14 +306,12 @@ async function confirmReset(): Promise<void> {
 }
 
 async function closeSession(): Promise<void> {
-  if (stopStream) {
-    await stopStream().catch(() => undefined);
-    stopStream = undefined;
-  }
-  if (session) {
-    await session.close().catch(() => undefined);
-    session = undefined;
-  }
+  const activeStop = stopStream;
+  const activeSession = session;
+  stopStream = undefined;
+  session = undefined;
+  if (activeStop) await activeStop().catch(() => undefined);
+  if (activeSession) await activeSession.close().catch(() => undefined);
 }
 
 window.addEventListener("pagehide", () => void closeSession());
@@ -224,23 +322,109 @@ function fatalIdentity(error: unknown): void {
     error instanceof IdentityStorageError
       ? error.message
       : "The browser identity could not be created or loaded";
-  setConnectionStatus(message, false);
-  chatElement.setAttribute("aria-busy", "false");
+  setUiState("fatal-error", message);
   dialogElement.showModal();
 }
 
-function setConnectionStatus(message: string, busy: boolean): void {
+function setUiState(state: UiState, message: string): void {
+  uiState = state;
+  chatElement.dataset.state = state;
+  mascotElement.dataset.mood = mascotMood(state);
+  messagesElement.setAttribute(
+    "aria-busy",
+    String(state === "preparing" || state === "connecting"),
+  );
   statusElement.textContent = message;
-  chatElement.setAttribute("aria-busy", String(busy));
+
+  const composerReady = state === "connected" || state === "sending";
+  inputElement.disabled = !composerReady;
+  connectElement.hidden = state !== "retryable-error";
+  connectElement.disabled = state === "connecting";
+  if (sendLabelElement) sendLabelElement.textContent = state === "sending" ? "sending…" : "whisper";
+  updateSendAvailability();
+}
+
+function mascotMood(state: UiState): string {
+  switch (state) {
+    case "preparing":
+    case "connecting":
+      return "summoning";
+    case "connected":
+      return "happy";
+    case "sending":
+      return "listening";
+    case "retryable-error":
+    case "fatal-error":
+      return "worried";
+  }
+}
+
+function updateSendAvailability(): void {
+  sendElement.disabled = uiState !== "connected" || sending || inputElement.value.trim().length === 0;
 }
 
 function setComposerError(message?: string): void {
   composerErrorElement.hidden = !message;
   composerErrorElement.textContent = message ?? "";
+  inputElement.setAttribute("aria-invalid", String(Boolean(message)));
 }
 
 function setSettingsStatus(message: string): void {
   settingsStatusElement.textContent = message;
+}
+
+function resizeComposer(): void {
+  inputElement.style.height = "auto";
+  inputElement.style.height = `${Math.min(inputElement.scrollHeight, 136)}px`;
+  inputElement.style.overflowY = inputElement.scrollHeight > 136 ? "auto" : "hidden";
+}
+
+function isNearMessageBottom(): boolean {
+  return messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 80;
+}
+
+function scrollToLatest(): void {
+  messagesElement.scrollTop = messagesElement.scrollHeight;
+  newMessagesElement.hidden = true;
+}
+
+function delightMascot(): void {
+  if (delightTimer) clearTimeout(delightTimer);
+  mascotElement.classList.remove("is-delighted");
+  void mascotElement.offsetWidth;
+  mascotElement.classList.add("is-delighted");
+  delightTimer = setTimeout(() => mascotElement.classList.remove("is-delighted"), 700);
+}
+
+function initializeMotionControl(): void {
+  let paused = false;
+  try {
+    const saved = localStorage.getItem(MOTION_STORAGE_KEY);
+    paused =
+      saved === "paused" ||
+      (saved === null &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch {
+    paused = false;
+  }
+  setMotionPaused(paused);
+  motionElement.addEventListener("click", () => {
+    const nextPaused = document.documentElement.dataset.motion !== "paused";
+    setMotionPaused(nextPaused);
+    try {
+      localStorage.setItem(MOTION_STORAGE_KEY, nextPaused ? "paused" : "playing");
+    } catch {
+      // Motion preference persistence is optional when storage is unavailable.
+    }
+  });
+}
+
+function setMotionPaused(paused: boolean): void {
+  document.documentElement.dataset.motion = paused ? "paused" : "playing";
+  motionElement.setAttribute("aria-pressed", String(paused));
+  motionElement.setAttribute("aria-label", paused ? "Resume ambient motion" : "Pause ambient motion");
+  if (motionLabelElement) motionLabelElement.textContent = paused ? "resume motion" : "pause motion";
 }
 
 function publicError(error: unknown): string {

@@ -21,6 +21,9 @@ Last reviewed: 2026-08-01
 - Model access: adapter boundary; local models should be first-class.
 - Text-only one-to-one DMs are the first vertical slice.
 - Browser identities are generated and connected automatically, then persisted in local storage.
+- The web presentation is a responsive "pocket séance" layout. Its generated Cthuwu cutout lives at
+  `web/public/cthuwu-mascot.webp`; motion is CSS-only, system-reduced-motion aware, and can be paused
+  with the environment-independent `cthuwu.ui.motion.v1` browser preference.
 - The sole backend command is `uwubot`.
 - Contact notes default to `contacts/<inbox-id>.md` and are ignored by git because they contain personal statements.
 - Onboarding collects name, hopes, possible contributions, and needs as user-asserted information.

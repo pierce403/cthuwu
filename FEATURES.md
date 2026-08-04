@@ -16,10 +16,17 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Source lives in `web/`; Vite produces `web/dist/`.
   - Pushes to `main` deploy through GitHub Pages.
   - The interface supports keyboard use, narrow screens, visible focus, status announcements, and reduced-motion preferences.
+  - A locally hosted generated mascot anchors a responsive two-column desktop layout and compact
+    mobile chat layout; all animation is CSS-based, pauses through a visible persisted control, and
+    is disabled by the system reduced-motion preference.
+  - The composer grows to five lines, Enter sends, Shift+Enter inserts a line, incoming messages do
+    not pull a reader away from older history, and disconnected states disable message submission.
 - **Test Criteria**:
   - [x] `npm --prefix web run build` produces static deployable assets.
   - [x] The deployment workflow publishes `web/dist/`.
   - [x] The custom domain serves the application.
+  - [x] DOM tests cover accessible control names, the empty-conversation welcome, hostile text
+    rendering, send behavior, and safe stream-loss state.
   - [ ] Automated accessibility checks cover the primary chat and identity flows.
 
 ### Automatic local browser identity

@@ -1,93 +1,223 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-motion="playing">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#17102a" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0714" />
     <meta name="description" content="Talk to Cthuwu, your tiny eldritch buddy, over XMTP." />
-    <title>cthuwu</title>
+    <title>cthuwu · a tiny friend from beyond</title>
   </head>
   <body>
+    <a class="skip-link" href="#message">Skip to the whisper box</a>
+
+    <div class="cosmos" aria-hidden="true">
+      <span class="cosmic-orb orb-one"></span>
+      <span class="cosmic-orb orb-two"></span>
+      <span class="cosmic-star star-one">✦</span>
+      <span class="cosmic-star star-two">·</span>
+      <span class="cosmic-star star-three">✧</span>
+      <span class="cosmic-star star-four">·</span>
+      <span class="cosmic-star star-five">✦</span>
+    </div>
+
     <main class="shell">
       <section class="buddy" aria-labelledby="title">
-        <div class="sigil" aria-hidden="true">
-          <span class="eye">●</span>
-          <span class="tentacle t1"></span><span class="tentacle t2"></span>
-          <span class="tentacle t3"></span><span class="tentacle t4"></span>
+        <div class="brand-lockup">
+          <p class="eyebrow">the little void is listening</p>
+          <h1 id="title" aria-label="Cthuwu"><span>cth</span><span class="uwu">uwu</span></h1>
+          <p class="intro">Your pocket-sized confidant from the soft side of the abyss.</p>
         </div>
-        <p class="eyebrow">a friend from just beyond</p>
-        <h1 id="title">cthuwu</h1>
-        <p class="intro">Tiny cosmic horror. Excellent listener. Usually harmless.</p>
+
+        <div id="mascot-stage" class="mascot-scene" data-mood="summoning" aria-hidden="true">
+          <span class="portal-glow"></span>
+          <span class="portal-ring ring-outer"></span>
+          <span class="portal-ring ring-inner"></span>
+          <span class="portal-rune rune-one">✦</span>
+          <span class="portal-rune rune-two">☾</span>
+          <span class="portal-rune rune-three">·</span>
+          <span class="portal-rune rune-four">✧</span>
+          <span class="mascot-shadow"></span>
+          <span class="mascot-float">
+            <img
+              class="mascot"
+              src="/cthuwu-mascot.webp"
+              width="1254"
+              height="1254"
+              alt=""
+              fetchpriority="high"
+              draggable="false"
+            />
+          </span>
+        </div>
+
+        <div class="buddy-footer">
+          <div class="trust-row" aria-label="Connection privacy">
+            <span class="trust-chip">
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" />
+              </svg>
+              direct XMTP DM
+            </span>
+            <span class="trust-chip">
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M12 3 4.5 6.5v5c0 4.4 3.1 8.1 7.5 9.5 4.4-1.4 7.5-5.1 7.5-9.5v-5L12 3Z" />
+              </svg>
+              identity stored locally
+            </span>
+          </div>
+          <button id="motion-toggle" class="motion-toggle" type="button" aria-pressed="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M8 6v12M16 6v12" />
+            </svg>
+            <span>pause motion</span>
+          </button>
+        </div>
       </section>
 
-      <section id="chat" class="chat" aria-label="Chat with Cthuwu" aria-busy="true">
-        <div
-          id="messages"
-          class="messages"
-          role="log"
-          aria-label="Conversation with Cthuwu"
-          aria-live="polite"
-          tabindex="0"
-        >
-          <article class="message theirs">
-            <span class="sender">Cthuwu</span>
-            hewwo. the stars said you might visit.
-          </article>
+      <section id="chat" class="chat" data-state="preparing" aria-label="Chat with Cthuwu">
+        <header class="chat-header">
+          <div class="presence">
+            <span class="presence-dot" aria-hidden="true"><span></span></span>
+            <div class="presence-copy">
+              <p class="chat-name">Cthuwu <span>· tiny eldritch confidant</span></p>
+              <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
+                preparing a local identity…
+              </p>
+            </div>
+          </div>
+          <button
+            id="settings"
+            class="settings-button"
+            type="button"
+            aria-label="Open identity and backup settings"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z" />
+              <path d="m19.4 15 .1.1-1.8 3.1-.2-.1a2.8 2.8 0 0 0-3.5 2v.2h-4v-.2a2.8 2.8 0 0 0-3.5-2l-.2.1-1.8-3.1.1-.1a2.8 2.8 0 0 0 0-4l-.1-.1 1.8-3.1.2.1a2.8 2.8 0 0 0 3.5-2v-.2h4v.2a2.8 2.8 0 0 0 3.5 2l.2-.1 1.8 3.1-.1.1a2.8 2.8 0 0 0 0 4Z" />
+            </svg>
+            <span>identity</span>
+          </button>
+        </header>
+
+        <div class="message-pane">
+          <div
+            id="messages"
+            class="messages is-empty"
+            role="log"
+            aria-label="Conversation with Cthuwu"
+            aria-live="polite"
+            aria-busy="true"
+            tabindex="0"
+          >
+            <div class="welcome" data-welcome role="note">
+              <span class="welcome-spark" aria-hidden="true">✦</span>
+              <p class="welcome-kicker">a warm corner of the void</p>
+              <p>oh! you made it. i was hoping the stars would send someone interesting.</p>
+              <p class="welcome-question">what’s on your mind?</p>
+            </div>
+          </div>
+          <button id="new-messages" class="new-messages" type="button" hidden>
+            new whispers ↓
+          </button>
         </div>
-        <form id="composer" class="composer">
-          <label class="sr-only" for="message">Message Cthuwu</label>
-          <input
-            id="message"
-            name="message"
-            autocomplete="off"
-            maxlength="16384"
-            placeholder="whisper into the void…"
-            disabled
-          />
-          <button id="send" type="submit" disabled>send</button>
-        </form>
-        <div class="actions">
-          <button id="connect" class="secondary" type="button" hidden>retry portal</button>
-          <button id="settings" class="secondary" type="button">identity settings</button>
+
+        <div class="composer-area">
+          <form id="composer" class="composer">
+            <label class="sr-only" for="message">Message Cthuwu</label>
+            <div class="composer-field">
+              <textarea
+                id="message"
+                name="message"
+                rows="1"
+                autocomplete="off"
+                enterkeyhint="send"
+                maxlength="16384"
+                aria-describedby="composer-hint composer-error"
+                placeholder="whisper to cthuwu…"
+                disabled
+              ></textarea>
+              <button id="send" type="submit" disabled>
+                <span>whisper</span>
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="m5 12 14-7-4.5 14-3-5.5L5 12Z" />
+                  <path d="m11.5 13.5 3-3" />
+                </svg>
+              </button>
+            </div>
+            <div class="composer-meta">
+              <span id="composer-hint">Enter to whisper · Shift + Enter for a new line</span>
+              <button id="connect" class="retry-button" type="button" hidden>
+                part the veil again
+              </button>
+            </div>
+          </form>
+          <p id="composer-error" class="error" role="alert" hidden></p>
         </div>
-        <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
-          preparing a local identity…
-        </p>
-        <p id="composer-error" class="error" role="alert" hidden></p>
       </section>
     </main>
 
     <dialog id="identity-dialog" aria-labelledby="identity-title">
-      <form method="dialog" class="settings">
+      <form class="settings">
         <div class="dialog-heading">
-          <h2 id="identity-title">Browser identity</h2>
-          <button class="icon-button" value="close" aria-label="Close identity settings">×</button>
+          <div>
+            <p class="dialog-eyebrow">portable, but private</p>
+            <h2 id="identity-title">Your XMTP identity</h2>
+          </div>
+          <button
+            id="identity-close"
+            class="icon-button"
+            type="button"
+            aria-label="Close identity settings"
+          >
+            ×
+          </button>
         </div>
-        <p>
-          This device stores a randomly generated wallet used only for this chat identity.
-          The XMTP Browser SDK also keeps an <strong>unencrypted</strong> local message database.
-        </p>
+        <div class="security-note">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 3 4.5 6.5v5c0 4.4 3.1 8.1 7.5 9.5 4.4-1.4 7.5-5.1 7.5-9.5v-5L12 3Z" />
+          </svg>
+          <p>
+            This device stores a random wallet used only for this chat identity. The XMTP Browser
+            SDK also keeps an <strong>unencrypted</strong> local message database.
+          </p>
+        </div>
         <dl>
-          <dt>Address</dt>
-          <dd id="identity-address">unavailable</dd>
-          <dt>Network</dt>
-          <dd id="identity-environment">unknown</dd>
+          <div>
+            <dt>Address</dt>
+            <dd id="identity-address">unavailable</dd>
+          </div>
+          <div>
+            <dt>Network</dt>
+            <dd id="identity-environment">unknown</dd>
+          </div>
         </dl>
-        <label for="backup-passphrase">Backup passphrase (at least 8 characters)</label>
-        <input id="backup-passphrase" type="password" autocomplete="new-password" minlength="8" />
+        <label for="backup-passphrase">Backup passphrase</label>
+        <input
+          id="backup-passphrase"
+          type="password"
+          autocomplete="new-password"
+          minlength="8"
+          placeholder="at least 8 characters"
+        />
         <div class="settings-actions">
-          <button id="export-identity" type="button">download encrypted identity backup</button>
+          <button id="export-identity" type="button">download encrypted backup</button>
           <label class="file-button">
             import identity backup
             <input id="import-identity" type="file" accept="application/json,.json" />
           </label>
         </div>
         <p class="fine-print">
-          An identity backup can recover the wallet and inbox. It is not a message-history backup
-          and may not restore the same XMTP installation.
+          A backup can recover this wallet and inbox. It is not a message-history backup and may not
+          restore the same XMTP installation.
         </p>
-        <button id="reset-identity" class="danger" type="button">reset this identity</button>
-        <p id="settings-status" class="status" role="status" aria-live="polite"></p>
+        <div class="danger-zone">
+          <div>
+            <strong>Leave this corner of the void</strong>
+            <span>Reset the local wallet identity on this device.</span>
+          </div>
+          <button id="reset-identity" class="danger" type="button">reset identity</button>
+        </div>
+        <p id="settings-status" class="status settings-status" role="status" aria-live="polite"></p>
       </form>
     </dialog>
 

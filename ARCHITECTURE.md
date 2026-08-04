@@ -43,6 +43,12 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 
 The low-friction identity is a randomly generated EOA stored in browser local storage. The client connects automatically on load and supports a passphrase-encrypted wallet export. It must be presented honestly: the current XMTP Browser SDK database is unencrypted, clearing site data loses the identity without an export, and an identity export is not a history backup.
 
+The presentation layer uses one optimized local mascot asset and CSS-only ambient animation. The
+desktop interface places the companion beside a full-height conversation panel; narrow screens use a
+compact companion header and viewport-aware chat. Motion has an explicit persisted pause control and
+also honors `prefers-reduced-motion`; connection and privacy state remain available as text rather
+than depending on animation or color.
+
 ### Rust runtime and XMTP transport
 
 The backend has one operator-facing invocation: the Rust `uwubot` binary. Rust owns the contact store, onboarding and consent policy, message deduplication, matching, model adapter, and process lifecycle.
