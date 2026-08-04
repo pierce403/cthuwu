@@ -26,7 +26,6 @@ describe("chat interface", () => {
     vi.resetModules();
     vi.clearAllMocks();
     vi.stubEnv("VITE_XMTP_ENV", "dev");
-    vi.stubEnv("VITE_XMTP_BOT_ADDRESS", "0x1111111111111111111111111111111111111111");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     localStorage.clear();
     transport.onMessage = undefined;
@@ -57,6 +56,15 @@ describe("chat interface", () => {
     expect(dialogForm?.hasAttribute("method")).toBe(false);
     expect(document.querySelector("#identity-dialog")?.textContent).toContain("unencrypted");
     expect(document.querySelector("#motion-toggle")?.getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector('meta[property="og:image"]')?.getAttribute("content")).toBe(
+      "https://cthuwu.app/cthuwu-og.jpg",
+    );
+    expect(document.querySelector('meta[property="og:image:width"]')?.getAttribute("content")).toBe(
+      "1200",
+    );
+    expect(document.querySelector('meta[name="twitter:card"]')?.getAttribute("content")).toBe(
+      "summary_large_image",
+    );
   });
 
   it("connects with an empty welcome, safely renders text, sends once, and disables on stream loss", async () => {
@@ -84,6 +92,13 @@ describe("chat interface", () => {
 
     await import("./main");
     await vi.waitFor(() => expect(document.querySelector("#chat")?.getAttribute("data-state")).toBe("connected"));
+    expect(transport.createSession).toHaveBeenCalledWith(
+      {
+        environment: "dev",
+        botAddress: "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db",
+      },
+      expect.any(Object),
+    );
 
     const input = document.querySelector<HTMLTextAreaElement>("#message");
     const sendButton = document.querySelector<HTMLButtonElement>("#send");

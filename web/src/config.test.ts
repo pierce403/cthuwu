@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, parseEnvironment } from "./config";
+import { INTRO_TENTACLE_ADDRESS, parseConfig, parseEnvironment } from "./config";
 
 describe("configuration", () => {
   it("defaults only an absent environment to dev", () => {
@@ -7,14 +7,12 @@ describe("configuration", () => {
     expect(() => parseEnvironment("staging")).toThrow("must be dev");
   });
 
-  it("accepts an address or normalized ENS name", () => {
-    expect(parseConfig("dev", "CTHULHUBOT.ETH").botAddress).toBe("cthulhubot.eth");
-    expect(
-      parseConfig("production", "0x0000000000000000000000000000000000000001").botAddress,
-    ).toBe("0x0000000000000000000000000000000000000001");
-    expect(() =>
-      parseConfig("dev", "0x0000000000000000000000000000000000000000"),
-    ).toThrow("Ethereum address");
-    expect(() => parseConfig("dev", "not a destination")).toThrow("Ethereum address");
+  it("always selects the hard-coded intro Tentacle", () => {
+    expect(INTRO_TENTACLE_ADDRESS).toBe("0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db");
+    expect(parseConfig("dev")).toEqual({
+      environment: "dev",
+      botAddress: INTRO_TENTACLE_ADDRESS,
+    });
+    expect(parseConfig("production").botAddress).toBe(INTRO_TENTACLE_ADDRESS);
   });
 });

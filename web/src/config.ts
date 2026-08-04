@@ -1,6 +1,8 @@
-import { ZeroAddress, getAddress } from "ethers";
-
 export type XmtpEnvironment = "dev" | "production" | "local";
+
+// Temporary bootstrap discovery until intro Tentacles can register through the planned Base
+// registry. This is public routing metadata, never an identity secret.
+export const INTRO_TENTACLE_ADDRESS = "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db";
 
 export interface AppConfig {
   environment: XmtpEnvironment;
@@ -13,18 +15,6 @@ export function parseEnvironment(value: string | undefined): XmtpEnvironment {
   throw new Error("VITE_XMTP_ENV must be dev, production, or local");
 }
 
-export function parseConfig(environment: XmtpEnvironment, botAddress: string | undefined): AppConfig {
-  const candidate = botAddress?.trim();
-  if (!candidate) throw new Error("Cthuwu's XMTP address is not configured");
-  try {
-    const address = getAddress(candidate).toLowerCase();
-    if (address === ZeroAddress) throw new Error("zero address");
-    return { environment, botAddress: address };
-  } catch {
-    // It may be an ENS name instead of a hexadecimal address.
-  }
-  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.eth$/i.test(candidate)) {
-    return { environment, botAddress: candidate.toLowerCase() };
-  }
-  throw new Error("Cthuwu's XMTP address must be an Ethereum address or ENS name");
+export function parseConfig(environment: XmtpEnvironment): AppConfig {
+  return { environment, botAddress: INTRO_TENTACLE_ADDRESS };
 }

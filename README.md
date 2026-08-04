@@ -95,11 +95,13 @@ UWUBOT_XMTP_ENV=production ./uwu.sh
 
 The launcher must run as a dedicated unprivileged account. It accepts a new or empty data directory, or an existing Cthuwu directory for the selected environment; it rejects broad unrelated directories, paths overlapping the repository, and symlink redirection before changing permissions. It also rejects model credentials on the command line. Set credentials only in the environment. It strips model and identity secrets from dependency and compiler subprocesses; the final Rust process still enforces the narrower XMTP-sidecar environment allowlist. `XMTP_DB_DIRECTORY` is intentionally unsupported by this safe launcher so the database cannot escape the validated data root; transport developers can invoke the built binary directly when testing that low-level override.
 
-The first successful connection logs the bot's public Ethereum address without logging its keys. Set the website to the same network and that address, then redeploy:
+The first successful connection logs the Tentacle's public Ethereum address without logging its
+keys. The website currently uses
+`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db` as its hard-coded intro Tentacle. Run that identity on
+the same XMTP network selected for the site, then redeploy if the network changes:
 
 ```bash
 gh variable set VITE_XMTP_ENV --body dev
-gh variable set VITE_XMTP_BOT_ADDRESS --body 0xYOUR_CTHUWU_ADDRESS
 gh workflow run pages.yml
 ```
 
@@ -196,8 +198,14 @@ Pass `-e UWUBOT_XMTP_ENV=production` only after the production website is config
 
 Pushes to `main` build and deploy `web/dist` to [cthuwu.app](https://cthuwu.app). The build reads:
 
-- `VITE_XMTP_ENV`: `dev`, `production`, or `local`;
-- `VITE_XMTP_BOT_ADDRESS`: Cthuwu's public Ethereum address or ENS name.
+- `VITE_XMTP_ENV`: `dev`, `production`, or `local`.
+
+The browser always opens its initial DM with the hard-coded intro Tentacle at
+`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. A planned Base registry contract will replace this
+bootstrap constant with discovery of registered intro Tentacles.
+
+The root page publishes an absolute Open Graph/Twitter large-image card at
+`https://cthuwu.app/cthuwu-og.jpg`.
 
 The browser wallet is stored in local storage. Its XMTP Browser SDK message database is currently unencrypted. The settings dialog says this explicitly; an identity export recovers the wallet/inbox, not message history or necessarily the same installation.
 

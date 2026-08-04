@@ -86,10 +86,7 @@ async function connect(userInitiated: boolean): Promise<void> {
     let nextSession: ChatSession | undefined;
     try {
       if (!identity) throw new Error("browser identity unavailable");
-      const config = parseConfig(
-        environment,
-        import.meta.env.VITE_XMTP_BOT_ADDRESS as string | undefined,
-      );
+      const config = parseConfig(environment);
       await closeSession();
       nextSession = await createXmtpSession(config, identity);
       if (generation !== connectionGeneration) {

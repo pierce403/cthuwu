@@ -19,6 +19,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - A locally hosted generated mascot anchors a responsive two-column desktop layout and compact
     mobile chat layout; all animation is CSS-based, pauses through a visible persisted control, and
     is disabled by the system reduced-motion preference.
+  - Absolute Open Graph and Twitter Card metadata use a purpose-built 1200×630 preview at
+    `web/public/cthuwu-og.jpg`.
   - The composer grows to five lines, Enter sends, Shift+Enter inserts a line, incoming messages do
     not pull a reader away from older history, and disconnected states disable message submission.
 - **Test Criteria**:
@@ -37,7 +39,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The browser creates an EOA private key with `crypto.getRandomValues` before configuration or network access.
   - A separate 32-byte compatibility key is persisted, but the UI does not claim it encrypts the current Browser SDK database.
   - A versioned record is namespaced by XMTP environment in local storage and reused on reload.
-  - The client attempts to connect automatically when a bot address is configured.
+  - The client connects automatically to the canonical intro Tentacle.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -52,17 +54,20 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 ### Browser-to-Cthuwu XMTP direct message
 
 - **Stability**: stable
-- **Description**: The browser creates a one-to-one XMTP conversation with the configured Cthuwu identity.
+- **Description**: The browser creates a one-to-one XMTP conversation with the canonical intro Tentacle.
 - **Properties**:
   - `VITE_XMTP_ENV` selects `dev`, `production`, or `local`.
-  - `VITE_XMTP_BOT_ADDRESS` accepts a validated Ethereum address or ENS name.
+  - The intro Tentacle is temporarily hard-coded as
+    `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`, so repository variables cannot silently redirect
+    first-contact conversations.
+  - A planned Base registry contract will replace the hard-coded bootstrap address with registered
+    intro-Tentacle discovery.
   - The client loads existing text history, streams new messages, deduplicates overlapping history/stream delivery, and sends text.
   - Failed sends preserve the draft; inbound rendering uses text nodes rather than HTML.
   - Groups, attachments, reactions, and read receipts are outside the first slice.
 - **Test Criteria**:
-  - [x] Configuration rejects unknown environments and malformed destinations.
-  - [x] The Browser SDK client creates or loads an XMTP client and DM.
-  - [x] ENS names resolve before DM creation.
+  - [x] Configuration rejects unknown environments and always returns the canonical intro Tentacle.
+  - [x] The Browser SDK client creates or loads an XMTP client and opens a DM with that Tentacle.
   - [x] Existing and streamed text messages share one deduplicated render path.
   - [x] Browser and backend enforce the same 16 KiB text limit.
   - [x] A real browser message reaches `uwubot` and receives exactly one response.

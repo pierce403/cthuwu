@@ -87,6 +87,8 @@ conversations, contact records, sessions, current load, or heartbeats.
 Working today:
 
 - the animated browser client at [cthuwu.app](https://cthuwu.app);
+- a hard-coded first-contact intro Tentacle at
+  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`;
 - persistent browser identities and private XMTP DMs;
 - the Rust `uwubot` command, contact notes, abilities/needs onboarding, and model adapters;
 - validated Council types and local simulations of routing, leases, governance, propagation,
@@ -97,6 +99,7 @@ Not yet live end to end:
 - every normal `uwubot` Tentacle joining a live XMTP Council;
 - distributed debate, work routing, and follower handoff among independently operated nodes;
 - production Council authentication and ERC-8004 integration;
+- a Base contract where nodes can register and be selected as intro Tentacles;
 - the point economy and any underlying token incentives.
 
 The intended result is a decentralized work and resource network that feels, at its lowest level,

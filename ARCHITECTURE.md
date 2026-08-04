@@ -37,13 +37,14 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 
 - creates or loads a browser-side identity;
 - connects to a configured XMTP environment;
-- creates a DM with the configured Cthuwu address;
+- creates a DM with the hard-coded intro Tentacle address;
 - renders text history and streams new messages;
 - sends text messages.
 
 The low-friction identity is a randomly generated EOA stored in browser local storage. The client connects automatically on load and supports a passphrase-encrypted wallet export. It must be presented honestly: the current XMTP Browser SDK database is unencrypted, clearing site data loses the identity without an export, and an identity export is not a history backup.
 
-The presentation layer uses one optimized local mascot asset and CSS-only ambient animation. The
+The presentation layer uses one optimized local mascot asset, a purpose-built 1200×630 Open Graph
+card, and CSS-only ambient animation. The
 desktop interface places the companion beside a full-height conversation panel; narrow screens use a
 compact companion header and viewport-aware chat. Motion has an explicit persisted pause control and
 also honors `prefers-reduced-motion`; connection and privacy state remain available as text rather
