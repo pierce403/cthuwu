@@ -379,7 +379,7 @@ fn validate_common_records(records: &[OperatorRecord]) -> Result<()> {
         bail!("operator configuration exceeds the {MAX_OPERATORS}-operator limit");
     }
     let mut seen = std::collections::BTreeSet::new();
-    for operator in &records {
+    for operator in records {
         let normalized = normalize_operator_inbox_id(&operator.inbox_id)?;
         if normalized != operator.inbox_id || !seen.insert(normalized) {
             bail!("operator configuration contains a non-canonical or duplicate inbox ID");
