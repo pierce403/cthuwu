@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -11,6 +11,7 @@ use crate::storage::{ensure_private_directory, restrict_file, sync_directory};
 
 const NOT_SHARED: &str = "_Not shared yet._";
 const SKIPPED: &str = "_Skipped._";
+const MAX_CONTACT_NOTE_BYTES: usize = 128 * 1024;
 pub const CURRENT_SHARING_CONSENT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,7 +25,7 @@ pub enum OnboardingStage {
 }
 
 impl OnboardingStage {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Name => "name",
             Self::Hopes => "hopes",
@@ -363,6 +364,11 @@ pub struct ContactStore {
     directory: PathBuf,
 }
 
+pub struct BoundedContactList {
+    pub contacts: Vec<Contact>,
+    pub scan_truncated: bool,
+}
+
 impl ContactStore {
     pub fn new(data_dir: &Path) -> Result<Self> {
         let directory = data_dir.join("contacts");
@@ -384,7 +390,7 @@ impl ContactStore {
         let inbox_id = normalize_inbox_id(inbox_id)?;
         let path = self.path(&inbox_id);
         reject_symlink(&path)?;
-        match fs::read_to_string(&path) {
+        match read_contact_markdown(&path) {
             Ok(markdown) => {
                 let contact = Contact::parse(&markdown)?;
                 if contact.inbox_id != inbox_id {
@@ -392,7 +398,13 @@ impl ContactStore {
                 }
                 Ok(Some(contact))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(None)
+            }
             Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
         }
     }
@@ -408,8 +420,7 @@ impl ContactStore {
             if entry.file_type()?.is_symlink() {
                 bail!("contact note {} must not be a symlink", path.display());
             }
-            let markdown =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let markdown = read_contact_markdown(&path)?;
             let contact = Contact::parse(&markdown)?;
             let file_inbox_id = path
                 .file_stem()
@@ -422,6 +433,43 @@ impl ContactStore {
         }
         contacts.sort_by(|left, right| left.inbox_id.cmp(&right.inbox_id));
         Ok(contacts)
+    }
+
+    pub fn list_bounded(&self, maximum_entries: usize) -> Result<BoundedContactList> {
+        if maximum_entries == 0 {
+            bail!("bounded contact scan limit must be positive");
+        }
+        let mut contacts = Vec::new();
+        let mut entries = fs::read_dir(&self.directory)?
+            .take(maximum_entries.saturating_add(1))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let scan_truncated = entries.len() > maximum_entries;
+        entries.truncate(maximum_entries);
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("md") {
+                continue;
+            }
+            if entry.file_type()?.is_symlink() {
+                bail!("contact note {} must not be a symlink", path.display());
+            }
+            let markdown = read_contact_markdown(&path)?;
+            let contact = Contact::parse(&markdown)?;
+            let file_inbox_id = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .context("contact note has a non-Unicode filename")?;
+            if contact.inbox_id != normalize_inbox_id(file_inbox_id)? {
+                bail!("contact note inbox ID does not match {}", path.display());
+            }
+            contacts.push(contact);
+        }
+        contacts.sort_by(|left, right| left.inbox_id.cmp(&right.inbox_id));
+        Ok(BoundedContactList {
+            contacts,
+            scan_truncated,
+        })
     }
 
     pub fn save(&self, contact: &Contact) -> Result<()> {
@@ -454,6 +502,35 @@ impl ContactStore {
     fn path(&self, inbox_id: &str) -> PathBuf {
         self.directory.join(format!("{inbox_id}.md"))
     }
+}
+
+fn read_contact_markdown(path: &Path) -> Result<String> {
+    let file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading metadata for {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("contact note {} must be a regular file", path.display());
+    }
+    if metadata.len() > MAX_CONTACT_NOTE_BYTES as u64 {
+        bail!(
+            "contact note {} exceeds the {} byte limit",
+            path.display(),
+            MAX_CONTACT_NOTE_BYTES
+        );
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_CONTACT_NOTE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_CONTACT_NOTE_BYTES {
+        bail!(
+            "contact note {} exceeds the {} byte limit",
+            path.display(),
+            MAX_CONTACT_NOTE_BYTES
+        );
+    }
+    String::from_utf8(bytes)
+        .with_context(|| format!("contact note {} must be UTF-8", path.display()))
 }
 
 pub fn normalize_inbox_id(value: &str) -> Result<String> {
@@ -635,6 +712,27 @@ mod tests {
         assert!(store.delete("aabb").unwrap());
         assert!(!store.delete("aabb").unwrap());
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bounded_list_stops_scanning_and_contact_reads_have_a_size_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ContactStore::new(root.path()).unwrap();
+        store.load_or_create("aabb").unwrap();
+        store.load_or_create("ccdd").unwrap();
+        store.load_or_create("eeff").unwrap();
+
+        let bounded = store.list_bounded(2).unwrap();
+        assert_eq!(bounded.contacts.len(), 2);
+        assert!(bounded.scan_truncated);
+
+        let oversized_id = "ff00";
+        fs::write(
+            root.path().join(format!("contacts/{oversized_id}.md")),
+            vec![b'x'; MAX_CONTACT_NOTE_BYTES + 1],
+        )
+        .unwrap();
+        assert!(store.load(oversized_id).is_err());
     }
 
     #[test]

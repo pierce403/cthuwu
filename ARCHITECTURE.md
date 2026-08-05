@@ -151,22 +151,52 @@ XMTP inbox receive the same authority; the current runtime cannot restrict one i
 independently.
 
 Active operator text enters a separate harness with an all-caps, ominous, reluctantly submissive,
-truthful Cthuwu persona. The model may call only `read_file`, `write_file`, `edit_file`,
-`search_files`, `qmd_search`, and `exec`; direct operator commands reach that same dispatcher.
-Original prose is uppercased, while code and bounded runtime-provided tool renderings are not
-uppercased. Process bytes are truncated to a fixed bound and decoded with lossy UTF-8 replacement;
-the result is not a verbatim or byte-exact capture. Tool results are structured, and failure,
-timeout, exit status, lossy decoding, and truncation must be reported rather than invented.
-The tool-calling loop and inputs, paths, files, output, and execution time are bounded.
+truthful Cthuwu persona and light readable uwu phrasing. The underlying model is explicitly an
+implementation detail; provider-style self-identification receives one repair attempt and then a
+fixed Cthuwu fallback. The model may call only read-only `list_files`, `read_file`, `search_files`,
+and `qmd_search`. Exact direct operator commands reach the same bounded dispatcher for file mutation
+and `exec`; strict runtime routing or `/users` and `/user` reaches contact handlers. Original prose is
+uppercased, while code and bounded runtime-provided tool
+renderings are not uppercased. Process bytes are truncated to a fixed bound and decoded with lossy
+UTF-8 replacement; the result is not a verbatim or byte-exact capture. Tool results are structured,
+and failure, timeout, exit status, lossy decoding, and truncation must be reported rather than
+invented. The tool-calling loop and inputs, paths, files, output, and execution time are bounded.
+
+The runtime seeds protected instance `SOUL.md` and curated `MEMORY.md` once, then seeds a profile for
+each authenticated inbox at `state/agent/operators/<inbox-id>.md` on first use. Every request injects
+that isolated profile and a globally bounded snapshot. It separately discovers the first supported
+workspace instruction file, workspace
+memory, top-level manifest, and a compact `skills/*/SKILL.md` index. Workspace material is auto-loaded
+reference data and cannot enable effects/contact access or override the hardcoded authorization,
+isolation, and tool-truth kernel. A current-message project-inspection request is a coarse delegation
+for bounded reads anywhere under the operator root; context may influence selected paths, and results
+may reach the selected model endpoint. Optional malformed workspace metadata is skipped. Contact notes and
+raw public DMs are not bulk-injected. A bounded in-process dialogue history is also keyed by operator
+inbox and cleared on restart; persistent Markdown remains deliberately host-curated. Effectful tools
+are absent from model inference, so workspace prompt injection cannot choose mutation or process
+arguments; an authenticated operator must supply the exact direct command.
 
 File tools are confined to `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
-targets, page UTF-8 reads at no more than 12 KiB, cap writes and edits at 1 MiB, and use atomic
-writes. `rg` provides literal file search. QMD is an optional external
+targets, bound directory listings, page UTF-8 reads at no more than 12 KiB, cap writes and edits at
+1 MiB, and use atomic writes. `rg` provides literal file search. QMD is an optional external
 `qmd query ... --json` adapter and fails explicitly when unavailable. `exec` starts a shell in the
 operator root with a small environment allowlist that excludes runtime API and XMTP keys, but it is
 intentionally **not** a filesystem or process sandbox: it has every OS permission available to the
 `uwubot` account. Tool timeouts accept 1–300 seconds, while the bridge's 2–300 second end-to-end
 deadline is authoritative and keeps one second in reserve for the XMTP response.
+
+Startup canonicalizes and rejects any overlap between `UWUBOT_OPERATOR_ROOT` and `UWUBOT_DATA_DIR`,
+including either directory containing the other. This prevents model-readable workspace tools from
+crossing into protected XMTP identity, contact, dedupe, and agent-profile state.
+
+Contact awareness crosses a different operator-only boundary: `list_users` and `get_user` parse the
+retained `ContactStore` notes even when the data directory and operator workspace are disjoint. The
+result is a terminal local rendering, cannot follow or mix with another tool call, redacts inbox IDs
+by default, exposes a numeric continuation cursor, bounds note size and directory scanning, labels
+user-authored profile fields as unverified self-report, and includes no raw DM body or message count.
+This keeps values returned by the dedicated contact tools away from model invocation entirely. It
+does not change the separate fact that direct `/exec` is RCE with all
+service-account filesystem permissions.
 
 Public and operator-class requests use separate one-permit authority lanes. The role is pinned
 and the message ID is durably claimed before lane selection. A second same-lane request receives a
@@ -295,7 +325,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
 | Operator model → runtime | Generated text or local tool call | Separate closed tool schema, bounded agent loop, structured receipts, no role changes |
-| Operator tools → OS | Authenticated operator or model-selected operations | Rooted file helpers, limits/timeouts, secret-stripped environment; OS isolation required for `exec` |
+| Operator tools → OS | Authenticated direct effects or model-selected reads | Rooted file helpers, read-only model schema, limits/timeouts, secret-stripped environment; OS isolation required for direct `/exec` |
 | Rust ↔ XMTP subprocess | `inbound_text`, empty-text `reject_inbound`, or metadata-only `reject_oversized` JSONL; authenticated metadata, `sentAtNs`, local deadline, and admitted text only | Node-side byte check, allowlisted environment, bounded frames/handshake, pinned role snapshot, durable claim before admission, first-claim `Reply`/duplicate `Ignore`, no rejection-path dispatch, no-queue authority lanes, deadline cancellation |
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |

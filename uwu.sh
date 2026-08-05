@@ -609,6 +609,7 @@ uwu_main() {
   export UWUBOT_XMTP_ENV="$UWU_XMTP_ENV"
   export UWUBOT_NODE="$UWU_NODE_BIN"
   export UWUBOT_SIDECAR="$UWU_AGENT_DIR/dist/index.js"
+  export UWUBOT_OPERATOR_ROOT="${UWUBOT_OPERATOR_ROOT:-$UWU_REPO_ROOT}"
 
   UWU_RUNTIME_LOCK_PATH="$UWU_DATA_DIR/.uwubot.lock"
   uwu_acquire_runtime_lock

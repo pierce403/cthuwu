@@ -88,7 +88,8 @@ interoperability.
   revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
   not hot-reloaded: stop the node, update locally, and restart it.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
-  web search; operator gets only the reviewed local file/search/QMD/exec set. The hidden stdin
+  web search; operator model inference gets only the reviewed read-only file/search/QMD subset,
+  while exact direct operator commands retain mutation and `exec`. The hidden stdin
   harness stays public-only. Council traffic and Actions never reach either dispatcher.
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
@@ -147,9 +148,10 @@ interoperability.
 - Bind lease acceptance to session generation and current Tentacle incarnation. Failover must not
   silently copy private memory.
 - Keep persona prompts separate from transport and model adapters.
-- Keep public and operator personas separate. Public model self-identification needs an application
-  guard; operator prose is all caps while code and bounded runtime-provided renderings are excluded
-  from uppercasing. Process bytes may be truncated and decoded lossily, so never promise exact output.
+- Keep public and operator personas separate. Both model lanes need application identity guards;
+  operator prose is all caps with light readable uwu voice while code and bounded runtime-provided
+  renderings are excluded from uppercasing. Process bytes may be truncated and decoded lossily, so
+  never promise exact output.
 - Use structured errors and actionable CLI messages.
 - Add tests around identity persistence, replay/idempotency, message filtering, contact files, and configuration parsing.
 - Keep browser accessibility and keyboard use working.
@@ -175,9 +177,12 @@ interoperability.
   advertising slash commands. Ambiguous consent is re-cadenced. Public chat can expose only an
   explicitly configured Brave web-search function.
 - `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Local add
-  authorizes immediately without an XMTP proof; active
-  operator DMs use an isolated privileged local harness; live XMTP operator release testing and an
-  external security review remain open.
+  authorizes immediately without an XMTP proof; active operator DMs use an isolated privileged
+  local harness. That harness loads bounded protected SOUL/shared memory plus per-inbox operator
+  profiles and history, treats workspace context as untrusted reference data, discovers files with
+  `list_files`, and uses scan-bounded terminal parsed contact tools for affirmative retained-user
+  questions without making the runtime data root a file-tool root. Live XMTP operator release testing
+  and an external security review remain open.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
   protected combined-snapshot persistence, and the simulator are local implementations verified by
   the deterministic workspace suite.

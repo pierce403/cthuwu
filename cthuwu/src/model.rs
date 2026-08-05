@@ -434,11 +434,14 @@ fn advertises_slash_command(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     [
         "/exec",
+        "/files",
         "/read",
         "/write",
         "/edit",
         "/search",
         "/qmd",
+        "/users",
+        "/user",
         "/operator",
         "/help",
         "/profile",
@@ -536,6 +539,9 @@ mod tests {
         assert!(violates_public_response(
             "hewwo fwiend, use /matches or /export uwu"
         ));
+        assert!(violates_public_response(
+            "hewwo fwiend, use /files, /users, or /user uwu"
+        ));
         assert!(!violates_public_response(
             "hewwo fwiend, read https://example.com/readme uwu"
         ));
@@ -566,7 +572,16 @@ mod tests {
     fn public_tool_schema_contains_no_operator_capabilities() {
         let schema = public_web_search_tool().to_string();
         assert!(schema.contains("web_search"));
-        for forbidden in ["exec", "read_file", "write_file", "edit_file", "qmd_search"] {
+        for forbidden in [
+            "exec",
+            "list_files",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "qmd_search",
+            "list_users",
+            "get_user",
+        ] {
             assert!(!schema.contains(forbidden));
         }
     }

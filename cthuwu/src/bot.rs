@@ -165,7 +165,7 @@ impl UwUBot {
         let response = match role {
             PrincipalRole::Operator => self
                 .operator_harness
-                .respond(text)
+                .respond(inbox_id, text)
                 .await
                 .unwrap_or_else(|_| {
                     "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
@@ -484,7 +484,16 @@ fn is_operator_only_command(command: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         name.as_str(),
-        "exec" | "read" | "write" | "edit" | "search" | "qmd" | "operator"
+        "exec"
+            | "files"
+            | "read"
+            | "write"
+            | "edit"
+            | "search"
+            | "qmd"
+            | "users"
+            | "user"
+            | "operator"
     )
 }
 
@@ -628,6 +637,7 @@ fn natural_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_context::AgentContext;
     use crate::{
         model::DeterministicModel,
         operator::{DeterministicOperatorModel, OperatorToolRuntime, ToolReceipt},
@@ -686,8 +696,11 @@ mod tests {
         operators: OperatorStore,
         tools: Arc<RecordingTools>,
     ) -> UwUBot {
-        let harness =
-            OperatorHarness::new(Arc::new(DeterministicOperatorModel), tools, root.to_owned());
+        let harness = OperatorHarness::new(
+            Arc::new(DeterministicOperatorModel),
+            tools,
+            AgentContext::new(root, root).unwrap(),
+        );
         UwUBot::new(
             ContactStore::new(root).unwrap(),
             ProcessedMessages::new(root).unwrap(),
@@ -849,8 +862,11 @@ mod tests {
         let id = "aabbcc";
         let welcome = send(&bot, 0, id, "hello").await;
         let denied = send(&bot, 1, id, "/exec touch owned").await;
-        let help = send(&bot, 2, id, "/help").await;
-        for response in [welcome, denied, help] {
+        let files = send(&bot, 2, id, "/files").await;
+        let users = send(&bot, 3, id, "/users").await;
+        let user = send(&bot, 4, id, "/user aabbcc").await;
+        let help = send(&bot, 5, id, "/help").await;
+        for response in [welcome, denied, files, users, user, help] {
             assert!(!response.contains("/profile"));
             assert!(!response.contains("/exec"));
             assert!(!response.contains("/help"));

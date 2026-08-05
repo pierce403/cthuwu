@@ -121,6 +121,9 @@ Normal state is kept below `UWUBOT_DATA_DIR`:
 contacts/<inbox-id>.md
 .uwubot.lock/<running-pid>
 state/environment
+state/agent/SOUL.md
+state/agent/memories/MEMORY.md
+state/agent/operators/<operator-inbox-id>.md
 state/operators.json
 state/processed/<hashed-message-id>
 state/council/<bounded-state-name>.json
@@ -162,6 +165,19 @@ the Tentacle and newly authored messages from that inbox enter the operator harn
 is not hot-reloaded: stop the Tentacle before adding, listing, or revoking, then restart after a
 change.
 
+On first start, Cthuwu seeds protected instance Markdown for its identity and curated shared memory;
+it seeds a separate profile for each authenticated operator inbox on first use and never overwrites
+later edits. Each operator request also loads a globally bounded project snapshot from the operator
+workspace: the first supported instruction file, `MEMORY.md`, the top-level manifest, and a compact
+`skills/*/SKILL.md` index. Workspace context is untrusted reference data and cannot enable effectful
+or contact tools or alter Rust authorization. An operator request to inspect or work on the project
+delegates bounded reads within the entire configured workspace; context may influence the paths chosen,
+and file/QMD results may be sent to the selected model endpoint. Keep credentials and unrelated secrets
+outside `UWUBOT_OPERATOR_ROOT`. Authentication, isolation, and tool-truth rules remain an immutable
+security kernel rather than editable Markdown.
+Natural-language dialogue history is bounded in memory and isolated per operator inbox; it does not
+silently become a persistent transcript.
+
 ```bash
 ./uwu.sh --xmtp-env production operator list
 ./uwu.sh --xmtp-env production operator revoke <full-inbox-id>
@@ -176,10 +192,26 @@ can have multiple installations, every installation authorized for that inbox re
 authority. Revoke the Cthuwu role and the compromised XMTP installation immediately if any device or
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
-Once active, the operator may use direct `/exec`, `/read`, `/write`, `/edit`, `/search`, and `/qmd`
-commands or ask an Ollama/OpenAI-compatible tool-calling model to use the same closed tool set. QMD
-is an optional external adapter; set `UWUBOT_QMD` to a compatible executable that supports
-`qmd query <query> --json`. Public users are not shown this syntax and cannot invoke these tools.
+Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
+`/qmd`, `/users`, and `/user` commands. An Ollama/OpenAI-compatible tool-calling model receives only
+the bounded read/discovery/search subset; file mutation, process execution, and contact access require
+the exact authenticated direct command or strict runtime contact route. The safe launcher defaults
+`UWUBOT_OPERATOR_ROOT` to the repository root;
+set it explicitly for a narrower production workspace. QMD is an optional external adapter; set
+`UWUBOT_QMD` to a compatible executable that supports `qmd query <query> --json`. Public users are
+not shown this syntax and cannot invoke these tools.
+
+`list_users` and `get_user` read parsed, retained `ContactStore` notes through a dedicated operator-only
+boundary. They do not widen generic file-tool access to the data directory. User reports are terminal
+renderings with redacted inbox fingerprints by default, cursor pagination, bounded scans, and honest
+truncation markers. They mark profile claims as unverified self-report and disclose neither raw DMs
+nor message counts. The reported set is retained contacts, not everyone who may ever have sent the
+Tentacle a message. This terminal-data guarantee applies to the dedicated contact tools; `/exec`
+remains deliberate RCE and can read anything the service account itself can access.
+
+Startup rejects canonical overlap between `UWUBOT_OPERATOR_ROOT` and `UWUBOT_DATA_DIR`, including
+either directory containing the other. The safe launcher and container defaults keep them separate.
+
 Public and privileged work use separate single-request authority lanes. Rust pins the role and
 durably claims the XMTP message ID before admission. If a lane or the Node bridge is full, the first
 claim receives a busy reply without content/model/tool dispatch; duplicate delivery receives no
@@ -269,10 +301,19 @@ The container packages Rust, Node, the Agent SDK, and its native binding while p
 ```bash
 docker build -t cthuwu .
 docker volume create cthuwu-data
-docker run --rm -it --init -v cthuwu-data:/data cthuwu
+docker volume create cthuwu-workspace
+docker run --rm -it --init \
+  -v cthuwu-data:/data \
+  -v cthuwu-workspace:/workspace \
+  cthuwu
 ```
 
-Pass `-e UWUBOT_XMTP_ENV=production` when operating the website's intro Tentacle.
+The container keeps private identity/contact state under `/data` and operator-visible files under
+`/workspace`; the image seeds the workspace volume with project context and skill metadata on first
+creation. Bind-mount a real working tree there when the operator should inspect or change source.
+File tools never receive the data directory as their root, and startup rejects an overlapping custom
+root. Pass
+`-e UWUBOT_XMTP_ENV=production` when operating the website's intro Tentacle.
 
 ## Browser deployment
 

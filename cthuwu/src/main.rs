@@ -1,3 +1,4 @@
+mod agent_context;
 mod bot;
 mod contact;
 mod dedupe;
@@ -9,6 +10,7 @@ mod sidecar;
 mod storage;
 mod web_search;
 
+use agent_context::AgentContext;
 use anyhow::{Context, Result, bail};
 use bot::UwUBot;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -169,6 +171,8 @@ async fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
     enforce_environment(&cli.data_dir, cli.xmtp_env)?;
+    cli.data_dir = fs::canonicalize(&cli.data_dir)
+        .with_context(|| format!("resolving data directory {}", cli.data_dir.display()))?;
     let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     if let Some(command) = cli.command.take() {
         return run_management_command(operators, command);
@@ -179,25 +183,24 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    let operator_root = resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?;
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
     let (model, operator_model) = build_models(&cli, search)?;
-    let operator_tools = Arc::new(LocalOperatorTools::new(
-        &cli.operator_root,
-        cli.qmd.clone(),
-        cli.operator_tool_timeout_seconds,
-    )?);
-    let operator_root = fs::canonicalize(&cli.operator_root).with_context(|| {
-        format!(
-            "resolving operator workspace root {}",
-            cli.operator_root.display()
-        )
-    })?;
+    let operator_context = AgentContext::new(&cli.data_dir, &operator_root)?;
+    let operator_tools = Arc::new(
+        LocalOperatorTools::new(
+            &operator_root,
+            cli.qmd.clone(),
+            cli.operator_tool_timeout_seconds,
+        )?
+        .with_contacts(contacts.clone()),
+    );
     let operator_harness = Arc::new(OperatorHarness::new(
         operator_model,
         operator_tools,
-        operator_root,
+        operator_context,
     ));
     let bot = UwUBot::new(
         contacts,
@@ -226,6 +229,25 @@ async fn main() -> Result<()> {
         cli.xmtp_env.as_str(),
     )
     .await
+}
+
+fn resolve_isolated_operator_root(data_dir: &Path, operator_root: &Path) -> Result<PathBuf> {
+    let data_dir = fs::canonicalize(data_dir)
+        .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
+    let operator_root = fs::canonicalize(operator_root).with_context(|| {
+        format!(
+            "resolving operator workspace root {}",
+            operator_root.display()
+        )
+    })?;
+    if data_dir.starts_with(&operator_root) || operator_root.starts_with(&data_dir) {
+        bail!(
+            "UWUBOT_OPERATOR_ROOT ({}) and UWUBOT_DATA_DIR ({}) must be separate, non-overlapping directories; the operator workspace must never expose private XMTP or contact state",
+            operator_root.display(),
+            data_dir.display()
+        );
+    }
+    Ok(operator_root)
 }
 
 fn build_web_search(cli: &Cli) -> Result<Option<Arc<dyn WebSearch>>> {
@@ -420,5 +442,25 @@ mod tests {
                 command: OperatorCommand::Add { .. }
             })
         ));
+    }
+
+    #[test]
+    fn operator_workspace_must_not_overlap_private_data() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&data).unwrap();
+        fs::create_dir(&workspace).unwrap();
+
+        assert_eq!(
+            resolve_isolated_operator_root(&data, &workspace).unwrap(),
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert!(resolve_isolated_operator_root(&data, &data).is_err());
+        assert!(resolve_isolated_operator_root(&data, root.path()).is_err());
+
+        let nested_workspace = data.join("workspace");
+        fs::create_dir(&nested_workspace).unwrap();
+        assert!(resolve_isolated_operator_root(&data, &nested_workspace).is_err());
     }
 }
