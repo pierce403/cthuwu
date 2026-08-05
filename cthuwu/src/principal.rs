@@ -450,7 +450,6 @@ fn unix_nanoseconds() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
-        .as_nanos()
 }
 
 fn reject_symlink(path: &Path) -> Result<()> {

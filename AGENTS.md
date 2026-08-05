@@ -75,8 +75,8 @@ interoperability.
 - Do not send inbound message text to a model provider unless the operator selected that provider.
 - Bound message size, concurrency, response size, and model/tool execution time.
 - Treat all messages as untrusted input. A normal, stale, or revoked sender must never execute a
-  message-supplied shell command or gain filesystem access. Only a locally configured, fully
-  activated, transport-authenticated operator inbox may enter the separate privileged dispatcher.
+  message-supplied shell command or gain filesystem access. Only a locally configured,
+  transport-authenticated operator inbox may enter the separate privileged dispatcher.
 - The operator role is remote code execution as the `uwubot` OS account. Require a dedicated
   unprivileged account/container, a narrow tool root, bounded tools, truthful receipts, and explicit
   revocation guidance. Do not describe rooted file helpers or environment filtering as an `exec`
