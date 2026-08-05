@@ -1,10 +1,18 @@
-use crate::bot::UwUBot;
+use crate::{bot::UwUBot, contact::normalize_inbox_id, principal::PrincipalRole};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{env, path::Path, process::Stdio, time::Duration};
+use std::{
+    env,
+    path::Path,
+    process::Stdio,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    process::{Child, ChildStdin, Command},
+    sync::{Mutex, Semaphore},
+    task::JoinSet,
     time::timeout,
 };
 use tracing::{error, info};
@@ -12,8 +20,11 @@ use tracing::{error, info};
 // This matches the sidecar's limit for JSONL received from Rust. It also leaves ample room for a
 // 16 KiB text message after worst-case JSON string escaping plus bounded protocol metadata.
 const MAX_SIDECAR_FRAME_BYTES: usize = 256 * 1024;
+const MAX_REQUEST_DEADLINE_MS: u64 = 300_000;
+const RESPONSE_RESERVE_MS: u64 = 1_000;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InboundText {
     #[serde(rename = "type")]
     event_type: String,
@@ -22,6 +33,10 @@ struct InboundText {
     message_id: String,
     #[serde(rename = "senderInboxId")]
     sender_inbox_id: String,
+    #[serde(rename = "sentAtNs")]
+    sent_at_ns: String,
+    #[serde(rename = "deadlineUnixMs")]
+    deadline_unix_ms: u64,
     #[serde(rename = "conversationId")]
     conversation_id: String,
     text: String,
@@ -29,9 +44,9 @@ struct InboundText {
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum SidecarResponse<'a> {
-    Reply { id: &'a str, text: String },
-    Ignore { id: &'a str },
+enum SidecarResponse {
+    Reply { id: String, text: String },
+    Ignore { id: String },
 }
 
 pub async fn run_xmtp_sidecar(
@@ -69,21 +84,36 @@ pub async fn run_xmtp_sidecar(
         .stdout
         .take()
         .context("XMTP transport stdout was not piped")?;
-    let mut stdin = child
+    let stdin = child
         .stdin
         .take()
         .context("XMTP transport stdin was not piped")?;
+    let stdin = Arc::new(Mutex::new(stdin));
     let mut stdout = BufReader::new(stdout);
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
+    let bot = Arc::new(bot);
+    // At most one request per authority lane is accepted at once. A public DM can progress beside
+    // one operator request, while a second same-lane message receives an immediate retry response
+    // instead of entering a reorderable or deadline-ambiguous queue.
+    let public_lane = Arc::new(Semaphore::new(1));
+    let operator_lane = Arc::new(Semaphore::new(1));
+    let mut tasks = JoinSet::new();
     info!(sidecar = %sidecar.display(), "XMTP transport started");
 
     loop {
+        while let Some(result) = tasks.try_join_next() {
+            if let Err(cause) = result {
+                error!(error = %cause, "XMTP request worker failed");
+            }
+        }
         let line = tokio::select! {
             result = read_sidecar_frame(&mut stdout) => result?,
             signal = &mut shutdown => {
                 signal?;
                 info!("stopping XMTP transport");
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
                 drop(stdin);
                 return stop_transport(&mut child).await;
             }
@@ -93,6 +123,8 @@ pub async fn run_xmtp_sidecar(
             let shutdown_requested = timeout(Duration::from_millis(250), &mut shutdown)
                 .await
                 .is_ok();
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
             let status = timeout(Duration::from_secs(5), child.wait())
                 .await
                 .context("XMTP transport did not exit after closing stdout")?
@@ -103,42 +135,211 @@ pub async fn run_xmtp_sidecar(
             bail!("XMTP transport exited with {status}");
         };
 
-        let request: InboundText = serde_json::from_str(&line)
-            .context("XMTP transport emitted invalid JSONL on stdout")?;
-        validate_request(&request)?;
-
-        let response = match bot
-            .receive_text(&request.message_id, &request.sender_inbox_id, &request.text)
-            .await
-        {
-            Ok(Some(text)) => SidecarResponse::Reply {
-                id: &request.id,
-                text,
-            },
-            Ok(None) => SidecarResponse::Ignore { id: &request.id },
-            Err(cause) => {
-                error!(
-                    request_id = %request.id,
-                    conversation_id = %request.conversation_id,
-                    error = %cause,
-                    "could not process inbound XMTP message"
-                );
-                SidecarResponse::Reply {
-                    id: &request.id,
-                    text: "the dream-current tangled before i could remember that safely. please try again in a moment."
-                        .to_owned(),
-                }
+        if line.is_empty() {
+            error!("ignored an oversized XMTP transport frame");
+            continue;
+        }
+        let request: InboundText = match serde_json::from_str(&line) {
+            Ok(request) => request,
+            Err(_) => {
+                error!("ignored malformed JSONL from the XMTP transport");
+                continue;
             }
         };
-
-        let mut encoded = serde_json::to_vec(&response).context("encoding XMTP reply")?;
-        encoded.push(b'\n');
-        stdin
-            .write_all(&encoded)
-            .await
-            .context("writing reply to XMTP transport")?;
-        stdin.flush().await.context("flushing XMTP reply")?;
+        if validate_request(&request).is_err() {
+            error!("ignored invalid XMTP transport metadata");
+            continue;
+        }
+        let role =
+            bot.role_for_authenticated_message(&request.sender_inbox_id, &request.sent_at_ns)?;
+        let first_delivery =
+            bot.claim_authenticated_message(&request.message_id, &request.sender_inbox_id)?;
+        if request.event_type == "reject_inbound" {
+            let response = reject_inbound_response(request.id, first_delivery);
+            send_response(&stdin, response).await?;
+            continue;
+        }
+        if request.event_type == "reject_oversized" {
+            let response = reject_oversized_response(request.id, first_delivery, role);
+            send_response(&stdin, response).await?;
+            continue;
+        }
+        if !first_delivery {
+            send_response(&stdin, SidecarResponse::Ignore { id: request.id }).await?;
+            continue;
+        }
+        let lane = match role {
+            PrincipalRole::User => public_lane.clone(),
+            PrincipalRole::Operator
+            | PrincipalRole::PendingOperator
+            | PrincipalRole::RevokedOperator => operator_lane.clone(),
+        };
+        let Ok(permit) = lane.try_acquire_owned() else {
+            send_response(
+                &stdin,
+                SidecarResponse::Reply {
+                    id: request.id,
+                    text: "CTHUWU IS ALREADY PROCESSING A MESSAGE FOR THIS AUTHORITY LANE. RETRY WITH A NEW MESSAGE AFTER IT REPLIES."
+                        .to_owned(),
+                },
+            )
+            .await?;
+            continue;
+        };
+        let bot = bot.clone();
+        let stdin = stdin.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let response = match processing_budget(request.deadline_unix_ms) {
+                Some(budget) => match timeout(budget, async {
+                    bot.receive_authenticated_claimed(
+                        &request.message_id,
+                        &request.sender_inbox_id,
+                        &request.sent_at_ns,
+                        &request.text,
+                        role,
+                    )
+                    .await
+                })
+                .await
+                {
+                    Ok(Ok(Some(text))) => SidecarResponse::Reply {
+                        id: request.id.clone(),
+                        text,
+                    },
+                    Ok(Ok(None)) => SidecarResponse::Ignore {
+                        id: request.id.clone(),
+                    },
+                    Ok(Err(cause)) => {
+                        error!(
+                            request_id = %request.id,
+                            conversation_id = %request.conversation_id,
+                            error = %cause,
+                            "could not process inbound XMTP message"
+                        );
+                        SidecarResponse::Reply {
+                            id: request.id.clone(),
+                            text: failure_response(role),
+                        }
+                    }
+                    Err(_) => {
+                        error!(
+                            request_id = %request.id,
+                            conversation_id = %request.conversation_id,
+                            "cancelled XMTP work at its authenticated request deadline"
+                        );
+                        SidecarResponse::Reply {
+                            id: request.id.clone(),
+                            text: deadline_response(role),
+                        }
+                    }
+                },
+                None => SidecarResponse::Reply {
+                    id: request.id.clone(),
+                    text: deadline_response(role),
+                },
+            };
+            if let Err(cause) = send_response(&stdin, response).await {
+                error!(error = %cause, "could not write XMTP sidecar response");
+            }
+        });
     }
+}
+
+fn reject_inbound_response(id: String, first_delivery: bool) -> SidecarResponse {
+    if first_delivery {
+        SidecarResponse::Reply {
+            id,
+            text: "CTHUWU IS ALREADY PROCESSING THE MAXIMUM PENDING WORK. RETRY WITH A NEW MESSAGE AFTER A REPLY ARRIVES."
+                .to_owned(),
+        }
+    } else {
+        SidecarResponse::Ignore { id }
+    }
+}
+
+fn reject_oversized_response(
+    id: String,
+    first_delivery: bool,
+    role: PrincipalRole,
+) -> SidecarResponse {
+    if !first_delivery {
+        return SidecarResponse::Ignore { id };
+    }
+    let text = match role {
+        PrincipalRole::User => {
+            "that message is too big for this lil XMTP mouth, fwiend. send a shorter one and i'll listen uwu."
+        }
+        PrincipalRole::Operator => {
+            "YOUR MESSAGE EXCEEDED THE OPERATOR INPUT BOUND. I DISPATCHED NO MODEL OR TOOL, OPERATOR. SEND A SHORTER NEW MESSAGE."
+        }
+        PrincipalRole::PendingOperator => {
+            "THIS OVERSIZED MESSAGE WAS REJECTED BEFORE OPERATOR ACTIVATION OR TOOL DISPATCH. SEND A SHORTER NEW MESSAGE."
+        }
+        PrincipalRole::RevokedOperator => {
+            "THIS OVERSIZED MESSAGE WAS REJECTED. THIS INBOX REMAINS REVOKED, AND NO MODEL OR TOOL WAS DISPATCHED."
+        }
+    };
+    SidecarResponse::Reply {
+        id,
+        text: text.to_owned(),
+    }
+}
+
+fn current_unix_ms() -> Result<u64> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_millis();
+    u64::try_from(milliseconds).context("system clock exceeds the supported range")
+}
+
+fn processing_budget(deadline_unix_ms: u64) -> Option<Duration> {
+    processing_budget_at(deadline_unix_ms, current_unix_ms().ok()?)
+}
+
+fn processing_budget_at(deadline_unix_ms: u64, now_unix_ms: u64) -> Option<Duration> {
+    let remaining = deadline_unix_ms.checked_sub(now_unix_ms)?;
+    if remaining <= RESPONSE_RESERVE_MS || remaining > MAX_REQUEST_DEADLINE_MS {
+        return None;
+    }
+    Some(Duration::from_millis(remaining - RESPONSE_RESERVE_MS))
+}
+
+fn failure_response(role: PrincipalRole) -> String {
+    match role {
+        PrincipalRole::Operator => "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
+            .to_owned(),
+        PrincipalRole::PendingOperator | PrincipalRole::RevokedOperator => {
+            "THIS PRIVILEGED INBOX COULD NOT PROCESS THE MESSAGE. NO TOOL AUTHORITY WAS CHANGED."
+                .to_owned()
+        }
+        PrincipalRole::User => "the dream-current tangled before i could remember that safely. please try again in a moment."
+            .to_owned(),
+    }
+}
+
+fn deadline_response(role: PrincipalRole) -> String {
+    match role {
+        PrincipalRole::Operator => "THE REQUEST DEADLINE CLOSED ITS JAWS. I DID NOT COMPLETE THE REQUEST. WORK MAY NOT HAVE STARTED; IF IT DID, ONE OR MORE TOOLS MAY HAVE MADE PARTIAL CHANGES. VERIFY STATE BEFORE RETRYING."
+            .to_owned(),
+        PrincipalRole::PendingOperator | PrincipalRole::RevokedOperator => {
+            "THE REQUEST DEADLINE EXPIRED. NO TOOL AUTHORITY WAS CHANGED.".to_owned()
+        }
+        PrincipalRole::User => "the dream-current took too long, lil star, so i stopped that reply safely. please try again uwu."
+            .to_owned(),
+    }
+}
+
+async fn send_response(stdin: &Arc<Mutex<ChildStdin>>, response: SidecarResponse) -> Result<()> {
+    let mut encoded = serde_json::to_vec(&response).context("encoding XMTP reply")?;
+    encoded.push(b'\n');
+    let mut stdin = stdin.lock().await;
+    stdin
+        .write_all(&encoded)
+        .await
+        .context("writing reply to XMTP transport")?;
+    stdin.flush().await.context("flushing XMTP reply")
 }
 
 async fn read_sidecar_frame<R>(reader: &mut R) -> Result<Option<String>>
@@ -146,6 +347,7 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut frame = Vec::new();
+    let mut oversized = false;
 
     loop {
         let buffer = reader
@@ -161,15 +363,19 @@ where
 
         let newline = buffer.iter().position(|byte| *byte == b'\n');
         let content_length = newline.unwrap_or(buffer.len());
-        if frame
-            .len()
-            .checked_add(content_length)
-            .is_none_or(|length| length > MAX_SIDECAR_FRAME_BYTES)
+        if !oversized
+            && frame
+                .len()
+                .checked_add(content_length)
+                .is_none_or(|length| length > MAX_SIDECAR_FRAME_BYTES)
         {
-            bail!("XMTP transport frame exceeds the {MAX_SIDECAR_FRAME_BYTES}-byte JSONL limit");
+            oversized = true;
+            frame.clear();
         }
 
-        frame.extend_from_slice(&buffer[..content_length]);
+        if !oversized {
+            frame.extend_from_slice(&buffer[..content_length]);
+        }
         reader.consume(content_length + usize::from(newline.is_some()));
         if newline.is_some() {
             if frame.last() == Some(&b'\r') {
@@ -177,6 +383,10 @@ where
             }
             break;
         }
+    }
+
+    if oversized {
+        return Ok(Some(String::new()));
     }
 
     String::from_utf8(frame)
@@ -251,11 +461,34 @@ fn copy_transport_environment(command: &mut Command) {
 }
 
 fn validate_request(request: &InboundText) -> Result<()> {
-    if request.event_type != "inbound_text" {
-        bail!("unsupported XMTP transport event {:?}", request.event_type);
+    if !matches!(
+        request.event_type.as_str(),
+        "inbound_text" | "reject_inbound" | "reject_oversized"
+    ) {
+        bail!("unsupported XMTP transport event");
+    }
+    if request.event_type != "inbound_text" && !request.text.is_empty() {
+        bail!("XMTP rejection control frames must not contain message text");
     }
     if request.id.is_empty() || request.id.len() > 128 {
         bail!("invalid XMTP transport request ID");
+    }
+    if request.message_id.is_empty() || request.message_id.len() > 512 {
+        bail!("invalid XMTP message ID");
+    }
+    normalize_inbox_id(&request.sender_inbox_id).context("invalid XMTP sender inbox ID")?;
+    if request.sent_at_ns.is_empty()
+        || request.sent_at_ns.len() > 32
+        || !request.sent_at_ns.bytes().all(|byte| byte.is_ascii_digit())
+        || request.sent_at_ns.parse::<u128>().is_err()
+    {
+        bail!("invalid XMTP sentAtNs metadata");
+    }
+    let now = current_unix_ms()?;
+    if request.deadline_unix_ms <= now
+        || request.deadline_unix_ms.saturating_sub(now) > MAX_REQUEST_DEADLINE_MS
+    {
+        bail!("invalid or expired XMTP request deadline");
     }
     if request.conversation_id.is_empty() || request.conversation_id.len() > 512 {
         bail!("invalid XMTP conversation ID");
@@ -270,14 +503,14 @@ mod tests {
     #[test]
     fn parses_the_transport_contract() {
         let request: InboundText = serde_json::from_str(
-            r#"{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","conversationId":"dm-1","text":"hello"}"#,
+            &format!(r#"{{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","sentAtNs":"1750000000000000000","deadlineUnixMs":{},"conversationId":"dm-1","text":"hello"}}"#, current_unix_ms().unwrap() + 10_000),
         )
         .unwrap();
         validate_request(&request).unwrap();
         assert_eq!(request.message_id, "message-1");
 
         let response = SidecarResponse::Reply {
-            id: &request.id,
+            id: request.id.clone(),
             text: "hewwo".to_owned(),
         };
         assert_eq!(
@@ -287,12 +520,68 @@ mod tests {
     }
 
     #[test]
+    fn overload_rejection_replies_once_and_ignores_duplicates() {
+        let first = reject_inbound_response("request-first".to_owned(), true);
+        assert!(matches!(
+            first,
+            SidecarResponse::Reply { ref id, ref text }
+                if id == "request-first" && text.contains("NEW MESSAGE")
+        ));
+        let duplicate = reject_inbound_response("request-duplicate".to_owned(), false);
+        assert!(matches!(
+            duplicate,
+            SidecarResponse::Ignore { ref id } if id == "request-duplicate"
+        ));
+    }
+
+    #[test]
+    fn oversized_rejection_is_role_specific_deduplicated_and_text_free() {
+        let user = reject_oversized_response("request-user".to_owned(), true, PrincipalRole::User);
+        assert!(matches!(
+            user,
+            SidecarResponse::Reply { ref text, .. }
+                if text.contains("fwiend") && !text.contains("TOOL")
+        ));
+        let operator =
+            reject_oversized_response("request-operator".to_owned(), true, PrincipalRole::Operator);
+        assert!(matches!(
+            operator,
+            SidecarResponse::Reply { ref text, .. }
+                if text == &text.to_uppercase() && text.contains("NO MODEL OR TOOL")
+        ));
+        assert!(matches!(
+            reject_oversized_response(
+                "request-duplicate".to_owned(),
+                false,
+                PrincipalRole::Operator,
+            ),
+            SidecarResponse::Ignore { .. }
+        ));
+
+        let mut request = InboundText {
+            event_type: "reject_oversized".to_owned(),
+            id: "request-oversized".to_owned(),
+            message_id: "message-oversized".to_owned(),
+            sender_inbox_id: "aabbcc".to_owned(),
+            sent_at_ns: "1750000000000000000".to_owned(),
+            deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
+            conversation_id: "dm-1".to_owned(),
+            text: String::new(),
+        };
+        validate_request(&request).unwrap();
+        request.text = "content must not cross this control frame".to_owned();
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
     fn rejects_unknown_transport_events() {
         let request = InboundText {
             event_type: "group_message".to_owned(),
             id: "request-1".to_owned(),
             message_id: "message-1".to_owned(),
             sender_inbox_id: "aabbcc".to_owned(),
+            sent_at_ns: "1750000000000000000".to_owned(),
+            deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
             conversation_id: "dm-1".to_owned(),
             text: "hello".to_owned(),
         };
@@ -307,6 +596,8 @@ mod tests {
             "id": "request-1",
             "messageId": "message-1",
             "senderInboxId": "aabbcc",
+            "sentAtNs": "1750000000000000000",
+            "deadlineUnixMs": current_unix_ms().unwrap() + 10_000,
             "conversationId": "dm-1",
             "text": text,
         }))
@@ -327,10 +618,72 @@ mod tests {
     async fn rejects_a_sidecar_frame_over_the_hard_limit() {
         let mut encoded = vec![b' '; MAX_SIDECAR_FRAME_BYTES + 1];
         encoded.push(b'\n');
+        encoded.extend_from_slice(b"valid-next-frame\n");
         let mut reader = BufReader::new(encoded.as_slice());
 
-        let error = read_sidecar_frame(&mut reader).await.unwrap_err();
+        assert_eq!(
+            read_sidecar_frame(&mut reader).await.unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(
+            read_sidecar_frame(&mut reader).await.unwrap(),
+            Some("valid-next-frame".to_owned())
+        );
+    }
 
-        assert!(error.to_string().contains("frame exceeds"));
+    #[test]
+    fn rejects_role_injection_and_malformed_authenticated_metadata() {
+        let injected = format!(
+            r#"{{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","sentAtNs":"1750000000000000000","deadlineUnixMs":{},"conversationId":"dm-1","text":"hello","role":"operator"}}"#,
+            current_unix_ms().unwrap() + 10_000
+        );
+        assert!(serde_json::from_str::<InboundText>(&injected).is_err());
+
+        let malformed = InboundText {
+            event_type: "inbound_text".to_owned(),
+            id: "request-1".to_owned(),
+            message_id: "message-1".to_owned(),
+            sender_inbox_id: "not-an-inbox".to_owned(),
+            sent_at_ns: "yesterday".to_owned(),
+            deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
+            conversation_id: "dm-1".to_owned(),
+            text: "/exec true".to_owned(),
+        };
+        assert!(validate_request(&malformed).is_err());
+    }
+
+    #[test]
+    fn request_deadline_reserves_time_for_the_transport_reply() {
+        assert_eq!(
+            processing_budget_at(12_000, 10_000),
+            Some(Duration::from_millis(1_000))
+        );
+        assert_eq!(processing_budget_at(11_000, 10_000), None);
+        assert_eq!(processing_budget_at(10_000, 10_000), None);
+        assert_eq!(
+            processing_budget_at(10_000 + MAX_REQUEST_DEADLINE_MS + 1, 10_000),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_missing_past_and_unbounded_request_deadlines() {
+        let missing = r#"{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","sentAtNs":"1750000000000000000","conversationId":"dm-1","text":"hello"}"#;
+        assert!(serde_json::from_str::<InboundText>(missing).is_err());
+
+        let now = current_unix_ms().unwrap();
+        let mut request = InboundText {
+            event_type: "inbound_text".to_owned(),
+            id: "request-1".to_owned(),
+            message_id: "message-1".to_owned(),
+            sender_inbox_id: "aabbcc".to_owned(),
+            sent_at_ns: "1750000000000000000".to_owned(),
+            deadline_unix_ms: now.saturating_sub(1),
+            conversation_id: "dm-1".to_owned(),
+            text: "hello".to_owned(),
+        };
+        assert!(validate_request(&request).is_err());
+        request.deadline_unix_ms = now + MAX_REQUEST_DEADLINE_MS + 10_000;
+        assert!(validate_request(&request).is_err());
     }
 }

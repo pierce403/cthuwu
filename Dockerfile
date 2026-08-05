@@ -17,7 +17,11 @@ RUN cargo build --package cthuwu --locked --release
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /data
-RUN mkdir -p /opt/cthuwu/agent /data && chown -R node:node /opt/cthuwu /data
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/cthuwu/agent /data \
+    && chown -R node:node /opt/cthuwu /data
 COPY --from=rust-build /build/cthuwu/target/release/uwubot /usr/local/bin/uwubot
 COPY --from=agent-build --chown=node:node /build/agent/dist /opt/cthuwu/agent/dist
 COPY --from=agent-build --chown=node:node /build/agent/node_modules /opt/cthuwu/agent/node_modules

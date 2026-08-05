@@ -3,10 +3,12 @@ import { createInterface, type Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
 export type InboundText = {
-  type: "inbound_text";
+  type: "inbound_text" | "reject_inbound" | "reject_oversized";
   id: string;
   messageId: string;
   senderInboxId: string;
+  sentAtNs: string;
+  deadlineUnixMs: number;
   conversationId: string;
   text: string;
 };
@@ -24,6 +26,7 @@ export type BridgeOptions = {
   maxReplyBytes?: number;
   maxLineBytes?: number;
   maxPending?: number;
+  now?: () => number;
 };
 
 type Pending = {
@@ -37,8 +40,6 @@ const DEFAULT_MAX_REPLY_BYTES = 16 * 1024;
 const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
 const DEFAULT_MAX_PENDING = 2;
 
-export class BridgeBusyError extends Error {}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -51,8 +52,8 @@ export function parseTimeout(value: string | undefined): number {
     throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be an integer number of milliseconds");
   }
   const timeout = Number(value);
-  if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 300_000) {
-    throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be between 1000 and 300000");
+  if (!Number.isSafeInteger(timeout) || timeout < 2_000 || timeout > 300_000) {
+    throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be between 2000 and 300000");
   }
   return timeout;
 }
@@ -65,9 +66,11 @@ export class JsonlBridge {
   readonly #maxReplyBytes: number;
   readonly #maxLineBytes: number;
   readonly #maxPending: number;
+  readonly #now: () => number;
   readonly #reader: Interface;
   readonly #pending = new Map<string, Pending>();
   #closed = false;
+  #rejecting = false;
 
   constructor(options: BridgeOptions) {
     this.#output = options.output;
@@ -77,6 +80,7 @@ export class JsonlBridge {
     this.#maxReplyBytes = options.maxReplyBytes ?? DEFAULT_MAX_REPLY_BYTES;
     this.#maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.#maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
+    this.#now = options.now ?? Date.now;
     if (!Number.isInteger(this.#maxPending) || this.#maxPending < 1) {
       throw new Error("maxPending must be a positive integer");
     }
@@ -88,40 +92,91 @@ export class JsonlBridge {
   }
 
   async request(
-    message: Omit<InboundText, "type" | "id">,
+    message: Omit<InboundText, "type" | "id" | "deadlineUnixMs">,
+  ): Promise<SidecarResponse> {
+    return this.#request("inbound_text", message);
+  }
+
+  async rejectOversized(
+    message: Omit<InboundText, "type" | "id" | "deadlineUnixMs" | "text">,
+  ): Promise<SidecarResponse> {
+    return this.#request("reject_oversized", { ...message, text: "" });
+  }
+
+  async #request(
+    eventType: "inbound_text" | "reject_oversized",
+    message: Omit<InboundText, "type" | "id" | "deadlineUnixMs">,
   ): Promise<SidecarResponse> {
     if (this.#closed) {
       throw new Error("sidecar protocol is closed");
     }
     if (this.#pending.size >= this.#maxPending) {
-      throw new BridgeBusyError("uwubot is already processing the maximum pending work");
+      if (this.#rejecting) {
+        throw new Error("sidecar rejection capacity is already occupied");
+      }
+      this.#rejecting = true;
+      try {
+        const id = this.#idFactory();
+        const acknowledgement = this.#pendingResponse(id);
+        try {
+          await this.#writeLine({
+            type: "reject_inbound",
+            id,
+            ...message,
+            text: "",
+            deadlineUnixMs: this.#now() + this.#timeoutMs,
+          });
+        } catch (error) {
+          this.#rejectPending(id, error);
+        }
+        return await acknowledgement;
+      } finally {
+        this.#rejecting = false;
+      }
     }
     const id = this.#idFactory();
     if (this.#pending.has(id)) {
       throw new Error("sidecar protocol generated a duplicate request ID");
     }
 
-    let pending!: Pending;
-    const response = new Promise<SidecarResponse>((resolve, reject) => {
+    const response = this.#pendingResponse(id);
+
+    try {
+      await this.#writeLine({
+        type: eventType,
+        id,
+        ...message,
+        deadlineUnixMs: this.#now() + this.#timeoutMs,
+      });
+    } catch (error) {
+      this.#rejectPending(id, error);
+    }
+    return response;
+  }
+
+  #pendingResponse(id: string): Promise<SidecarResponse> {
+    if (this.#pending.has(id)) {
+      throw new Error("sidecar protocol generated a duplicate request ID");
+    }
+    return new Promise<SidecarResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(new Error(`uwubot did not answer request ${id} before the timeout`));
       }, this.#timeoutMs);
-      pending = { resolve, reject, timer };
-      this.#pending.set(id, pending);
+      this.#pending.set(id, { resolve, reject, timer });
     });
+  }
 
-    try {
-      await this.#writeLine({ type: "inbound_text", id, ...message });
-    } catch (error) {
-      if (this.#pending.delete(id)) {
-        clearTimeout(pending.timer);
-        pending.reject(
-          error instanceof Error ? error : new Error("failed to write sidecar request"),
-        );
-      }
+  #rejectPending(id: string, reason: unknown): void {
+    const pending = this.#pending.get(id);
+    if (pending === undefined) {
+      return;
     }
-    return response;
+    this.#pending.delete(id);
+    clearTimeout(pending.timer);
+    pending.reject(
+      reason instanceof Error ? reason : new Error("failed to write sidecar request"),
+    );
   }
 
   close(reason = new Error("sidecar protocol closed")): void {
@@ -201,6 +256,9 @@ export class JsonlBridge {
 
   async #writeLine(value: InboundText): Promise<void> {
     const line = `${JSON.stringify(value)}\n`;
+    if (Buffer.byteLength(line, "utf8") > this.#maxLineBytes) {
+      throw new Error("sidecar request exceeds the bounded JSONL frame size");
+    }
     await new Promise<void>((resolve, reject) => {
       this.#output.write(line, "utf8", (error) => {
         if (error === null || error === undefined) {

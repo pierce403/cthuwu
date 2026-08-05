@@ -71,6 +71,8 @@ pub struct Contact {
     pub sharing_enabled: bool,
     pub sharing_consent_version: u32,
     pub introductions_paused: bool,
+    pub awaiting_onboarding_answer: bool,
+    pub onboarding_turns_since_prompt: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,16 +110,38 @@ impl Contact {
             sharing_enabled: false,
             sharing_consent_version: 0,
             introductions_paused: false,
+            awaiting_onboarding_answer: false,
+            onboarding_turns_since_prompt: 0,
         }
     }
 
     /// Records an onboarding answer and returns whether the stage advanced.
     pub fn record_answer(&mut self, answer: &str) -> bool {
         match self.stage {
-            OnboardingStage::Name => self.name = answer_value(answer),
-            OnboardingStage::Hopes => self.hopes = answer_value(answer),
-            OnboardingStage::Resources => self.resources = answer_value(answer),
-            OnboardingStage::Needs => self.needs = answer_value(answer),
+            OnboardingStage::Name => {
+                let Some(value) = answer_value(answer) else {
+                    return false;
+                };
+                self.name = Some(value);
+            }
+            OnboardingStage::Hopes => {
+                let Some(value) = answer_value(answer) else {
+                    return false;
+                };
+                self.hopes = Some(value);
+            }
+            OnboardingStage::Resources => {
+                let Some(value) = answer_value(answer) else {
+                    return false;
+                };
+                self.resources = Some(value);
+            }
+            OnboardingStage::Needs => {
+                let Some(value) = answer_value(answer) else {
+                    return false;
+                };
+                self.needs = Some(value);
+            }
             OnboardingStage::SharingConsent => {
                 let Some(consent) = sharing_consent(answer) else {
                     self.touch();
@@ -133,6 +157,9 @@ impl Contact {
             OnboardingStage::Complete => return false,
         }
         self.stage = self.stage.next();
+        self.advance_over_known_fields();
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
         self.touch();
         true
     }
@@ -150,6 +177,9 @@ impl Contact {
             OnboardingStage::Complete => return,
         }
         self.stage = self.stage.next();
+        self.advance_over_known_fields();
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
         self.touch();
     }
 
@@ -161,7 +191,72 @@ impl Contact {
             ContactField::Resources => self.resources = value,
             ContactField::Needs => self.needs = value,
         }
+        self.advance_over_known_fields();
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
         self.touch();
+    }
+
+    pub fn set_sharing_consent(&mut self, enabled: bool) {
+        self.sharing_enabled = enabled;
+        self.sharing_consent_version = if enabled {
+            CURRENT_SHARING_CONSENT_VERSION
+        } else {
+            0
+        };
+        if self.stage == OnboardingStage::SharingConsent {
+            self.stage = OnboardingStage::Complete;
+        }
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
+        self.touch();
+    }
+
+    pub fn skip_remaining_onboarding(&mut self) {
+        while self.stage != OnboardingStage::Complete {
+            self.skip();
+        }
+        self.sharing_enabled = false;
+        self.sharing_consent_version = 0;
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
+        self.touch();
+    }
+
+    pub fn mark_onboarding_prompted(&mut self) {
+        self.awaiting_onboarding_answer = true;
+        self.onboarding_turns_since_prompt = 0;
+        self.touch();
+    }
+
+    pub fn defer_onboarding(&mut self) {
+        self.awaiting_onboarding_answer = false;
+        self.onboarding_turns_since_prompt = 0;
+        self.touch();
+    }
+
+    pub fn note_conversation_turn(&mut self) {
+        self.onboarding_turns_since_prompt = self
+            .onboarding_turns_since_prompt
+            .saturating_add(1)
+            .min(100);
+        self.touch();
+    }
+
+    fn advance_over_known_fields(&mut self) {
+        loop {
+            let already_known = match self.stage {
+                OnboardingStage::Name => self.name.is_some(),
+                OnboardingStage::Hopes => self.hopes.is_some(),
+                OnboardingStage::Resources => self.resources.is_some(),
+                OnboardingStage::Needs => self.needs.is_some(),
+                OnboardingStage::SharingConsent | OnboardingStage::Complete => false,
+            };
+            if !already_known {
+                break;
+            }
+            self.stage = self.stage.next();
+        }
     }
 
     pub fn display_name(&self) -> String {
@@ -217,7 +312,7 @@ impl Contact {
 
     fn markdown(&self) -> String {
         format!(
-            "---\ninbox_id: {}\nfirst_seen_unix: {}\nlast_seen_unix: {}\nonboarding_stage: {}\nsharing_enabled: {}\nsharing_consent_version: {}\nintroductions_paused: {}\n---\n\n# Contact {}\n\n{}",
+            "---\ninbox_id: {}\nfirst_seen_unix: {}\nlast_seen_unix: {}\nonboarding_stage: {}\nsharing_enabled: {}\nsharing_consent_version: {}\nintroductions_paused: {}\nawaiting_onboarding_answer: {}\nonboarding_turns_since_prompt: {}\n---\n\n# Contact {}\n\n{}",
             self.inbox_id,
             self.first_seen,
             self.last_seen,
@@ -225,6 +320,8 @@ impl Contact {
             self.sharing_enabled,
             self.sharing_consent_version,
             self.introductions_paused,
+            self.awaiting_onboarding_answer,
+            self.onboarding_turns_since_prompt,
             self.inbox_id,
             self.profile_markdown(),
         )
@@ -238,6 +335,10 @@ impl Contact {
         let sharing_enabled = optional_bool_metadata(markdown, "sharing_enabled")?;
         let sharing_consent_version = optional_u32_metadata(markdown, "sharing_consent_version")?;
         let introductions_paused = optional_bool_metadata(markdown, "introductions_paused")?;
+        let awaiting_onboarding_answer =
+            optional_bool_metadata(markdown, "awaiting_onboarding_answer")?;
+        let onboarding_turns_since_prompt =
+            optional_u32_metadata(markdown, "onboarding_turns_since_prompt")?;
 
         Ok(Self {
             inbox_id,
@@ -251,6 +352,8 @@ impl Contact {
             sharing_enabled,
             sharing_consent_version,
             introductions_paused,
+            awaiting_onboarding_answer,
+            onboarding_turns_since_prompt,
         })
     }
 }

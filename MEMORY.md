@@ -44,7 +44,38 @@ Last reviewed: 2026-08-04
   exports, or arbitrary future same-origin API responses.
 - The sole backend command is `uwubot`.
 - Contact notes default to `contacts/<inbox-id>.md` and are ignored by git because they contain personal statements.
-- Onboarding collects name, hopes, possible contributions, and needs as user-asserted information.
+- Public Cthuwu identifies as Cthuwu rather than the configured model, uses light readable uwu
+  speech, and has an identity-policy repair/fallback for common provider boilerplate.
+- A new public sender's first message is answered. The first optional onboarding prompt is appended
+  only if the model reply contains no question; otherwise it enters the regular cadence. Onboarding
+  collects name, hopes, possible contributions, needs, and explicit sharing consent as optional
+  user-asserted information, with one casual prompt at a time and several ordinary conversation
+  turns between prompts. Ambiguous consent remains unresolved and is re-cadenced, not immediately
+  repeated.
+- Public privacy and profile controls are expressed in ordinary language; do not advertise legacy
+  slash commands to normal users.
+- Optional Brave Search is the public model's only tool. It requires an explicitly selected
+  tool-calling Ollama/OpenAI-compatible model plus `UWUBOT_WEB_SEARCH=brave`; public chat never gets
+  local file or process tools.
+- An exact canonical 64-character XMTP inbox can become a remote node operator only through local
+  `uwubot operator add`, then a one-time activation proof sent from that authenticated inbox. List
+  and revoke roles locally while the Tentacle is stopped; the ACL is loaded at startup and is not
+  hot-reloaded. Pending and revoked inboxes stay quarantined and do not create contacts.
+- Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with the closed
+  `read_file`, `write_file`, `edit_file`, `search_files`, optional `qmd_search`, and `exec` tool set.
+  The hidden stdin harness remains public-only, and Council Actions cannot reach these tools.
+- Operator ACL config version 2 is environment-bound and owner-only at `state/operators.json`.
+  Activation persists an authenticated `sentAtNs` fence, and each request's role is pinned before a
+  no-queue authority lane. Message IDs are durably claimed before admission; overload, including the
+  bounded empty-text `reject_inbound` bridge handshake, returns a busy reply only for the first claim
+  and ignores duplicates without dispatch. Node checks oversized input before forwarding content;
+  `reject_oversized` carries metadata plus an empty `text`, and Rust classifies then claims before a
+  role-specific first reply or duplicate ignore, without contact/model/tool dispatch. Retrying
+  requires a new XMTP message, shortened when oversized. Authorization is inbox-wide: every XMTP
+  installation attached to an active inbox has authority.
+- Operator `/exec` is deliberate remote code execution as the `uwubot` OS account, not a sandbox.
+  Production nodes need a dedicated unprivileged account/container, a narrow operator root, minimal
+  credentials, and immediate local plus XMTP installation revocation after compromise.
 - Matching is bilateral opt-in, explainable, and suggestion-only; chosen names and matching terms may be shown, but inbox IDs are not disclosed.
 - Browser identity exports are passphrase-encrypted wallet backups. The Browser SDK database is unencrypted and is not included in that export.
 - Backend secrets are atomically persisted at `state/xmtp-identity.json`; XMTP databases are environment-specific below `state/xmtp/`.
@@ -170,16 +201,17 @@ Operational notes from that run:
   `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/<environment>`, rejects repository-local or
   symlinked state, and lets the sidecar atomically create or reuse identity material without
   inspecting it.
-- `uwu.sh` removes `UWUBOT_MODEL_API_KEY`, `XMTP_WALLET_KEY`, and `XMTP_DB_ENCRYPTION_KEY` from
-  dependency/build subprocesses, rejects model credentials on argv, and preserves them only for the
-  final Rust process and its explicit transport allowlist.
+- `uwu.sh` removes `UWUBOT_MODEL_API_KEY`, `UWUBOT_WEB_SEARCH_API_KEY`, `XMTP_WALLET_KEY`, and
+  `XMTP_DB_ENCRYPTION_KEY` from dependency/build subprocesses, rejects model/search credentials on
+  argv, and preserves them only for the final Rust process and explicit narrower boundaries.
 - Launcher setup is serialized by the PID-owned `cthuwu/target/.uwu-build.lock` directory; this is
   necessary because concurrent `npm ci` operations can destructively race in shared `node_modules`.
 - The launcher refuses root, accepts only new/empty or environment-matching Cthuwu data roots, and
   holds a PID-owned `.uwubot.lock` across `exec` so two runtimes cannot mutate one contact store.
 
-The next release task is to add a real browser/XMTP job to GitHub CI, then check the final release
-criterion without weakening the dedicated-identity or no-secret-log rules.
+The next release tasks are to add a real browser/XMTP job to GitHub CI and run a separate live
+operator activation/use/revocation exercise inside a dedicated container. Neither gate may weaken
+the dedicated-identity, inbox-installation, or no-secret-log rules.
 
 The original manual milestone was:
 

@@ -42,6 +42,7 @@ uwu_die() {
 uwu_without_runtime_secrets() {
   env \
     -u UWUBOT_MODEL_API_KEY \
+    -u UWUBOT_WEB_SEARCH_API_KEY \
     -u XMTP_WALLET_KEY \
     -u XMTP_DB_ENCRYPTION_KEY \
     -u CARGO_TARGET_DIR \
@@ -105,6 +106,9 @@ uwu_reject_unsafe_arguments() {
       --model-api-key | --model-api-key=*)
         uwu_die "pass model credentials only through UWUBOT_MODEL_API_KEY, never command-line arguments"
         ;;
+      --web-search-api-key | --web-search-api-key=*)
+        uwu_die "pass web-search credentials only through UWUBOT_WEB_SEARCH_API_KEY, never command-line arguments"
+        ;;
       --node | --node=* | --sidecar | --sidecar=*)
         uwu_die "uwu.sh owns the validated Node and sidecar paths; run uwubot directly for transport development"
         ;;
@@ -153,6 +157,9 @@ uwu_parse_arguments() {
         ;;
       --model-api-key | --model-api-key=*)
         uwu_die "pass model credentials only through UWUBOT_MODEL_API_KEY, never command-line arguments"
+        ;;
+      --web-search-api-key | --web-search-api-key=*)
+        uwu_die "pass web-search credentials only through UWUBOT_WEB_SEARCH_API_KEY, never command-line arguments"
         ;;
       --node | --node=* | --sidecar | --sidecar=*)
         uwu_die "uwu.sh owns the validated Node and sidecar paths; run uwubot directly for transport development"
@@ -277,7 +284,33 @@ uwu_hash_file() {
 }
 
 uwu_process_start_identity() {
-  uwu_without_runtime_secrets ps -o lstart= -p "$1" 2>/dev/null
+  local stat_line stat_tail field identity index=0
+  if [[ -r "/proc/$1/stat" ]]; then
+    IFS= read -r stat_line <"/proc/$1/stat" || return 1
+    stat_tail="${stat_line##*) }"
+    for field in $stat_tail; do
+      ((index += 1))
+      if ((index == 20)); then
+        [[ "$field" =~ ^[0-9]+$ ]] || return 1
+        printf 'proc-start-ticks:%s\n' "$field"
+        return
+      fi
+    done
+    return 1
+  fi
+  identity="$(uwu_without_runtime_secrets ps -o lstart= -p "$1" 2>/dev/null)" || identity=""
+  if [[ -n "$identity" ]]; then
+    printf 'ps-start:%s\n' "$identity"
+    return
+  fi
+  # Some restricted containers expose neither a usable procfs entry nor process metadata through
+  # ps. PID liveness is a conservative fallback: PID reuse can delay startup, but cannot cause the
+  # launcher to remove a lock held by a live process it can see.
+  if kill -0 "$1" 2>/dev/null; then
+    printf 'pid-only:%s\n' "$1"
+    return
+  fi
+  return 1
 }
 
 uwu_initialize_lock_owner() {

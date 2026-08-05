@@ -14,6 +14,11 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
   must not require a Council group or registry.
 - Preserve the control-plane boundary: ordinary DM content, contact notes, private memory, and model
   credentials never enter Council messages.
+- Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
+  state; public, pending, revoked, and active operator paths must not fall through into one another.
+- Keep public conversation casual and command-free in presentation. Cthuwu must identify as Cthuwu,
+  use readable uwu speech, answer the person's request before optional onboarding, and describe
+  privacy controls in ordinary language.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
 - Record useful discoveries while they are fresh.
 - Work directly on `main` during early development unless Dean asks for a branch or PR.
@@ -37,6 +42,7 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - `web/`: TypeScript browser client built to static assets.
 - `docs/`: architecture, research, decisions, and operating notes.
 - `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
+- `docs/operator.md`: privileged XMTP operator enrollment, tools, isolation, and deployment warning.
 - `skills/`: reusable procedures specific to this repository.
 
 ## Build and verification
@@ -68,7 +74,33 @@ interoperability.
 - Make production and development XMTP environments explicit; never silently cross them.
 - Do not send inbound message text to a model provider unless the operator selected that provider.
 - Bound message size, concurrency, response size, and model/tool execution time.
-- Treat messages as untrusted input. The companion must not execute message-supplied shell commands or grant filesystem access.
+- Treat all messages as untrusted input. A normal, pending, or revoked sender must never execute a
+  message-supplied shell command or gain filesystem access. Only a locally configured, fully
+  activated, transport-authenticated operator inbox may enter the separate privileged dispatcher.
+- The operator role is remote code execution as the `uwubot` OS account. Require a dedicated
+  unprivileged account/container, a narrow tool root, bounded tools, truthful receipts, and explicit
+  revocation guidance. Do not describe rooted file helpers or environment filtering as an `exec`
+  sandbox.
+- Authorization is by the canonical full 64-character XMTP inbox ID, not wallet address or message
+  claim. Pin the role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
+  activation boundary must not privilege older messages delivered later. Every valid
+  installation attached to an authorized inbox inherits authority; preserve pending quarantine and
+  revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
+  not hot-reloaded: stop the node, update locally, and restart it.
+- Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
+  web search; operator gets only the reviewed local file/search/QMD/exec set. The hidden stdin
+  harness stays public-only. Council traffic and Actions never reach either dispatcher.
+- Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
+  before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
+  must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
+  content/model/tool dispatch. Node must check the 16 KiB UTF-8 input bound without placing
+  oversized content in JSONL: `reject_oversized` carries metadata plus an empty `text`, and Rust must
+  validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
+  Never open a contact or dispatch a model/tool on that path. Retry requires a new XMTP message,
+  shortened when oversized. Enforce the 2–300 second bridge deadline above the 1–300 second tool
+  limit and preserve the response reserve. File reads are strict UTF-8 pages capped at 12 KiB;
+  write/edit inputs are capped at 1 MiB. Process output is a bounded, potentially lossy UTF-8
+  rendering, never a verbatim byte capture.
 - Avoid logging message bodies by default; log identifiers only when operationally necessary.
 
 ## Council security rules
@@ -115,6 +147,9 @@ interoperability.
 - Bind lease acceptance to session generation and current Tentacle incarnation. Failover must not
   silently copy private memory.
 - Keep persona prompts separate from transport and model adapters.
+- Keep public and operator personas separate. Public model self-identification needs an application
+  guard; operator prose is all caps while code and bounded runtime-provided renderings are excluded
+  from uppercasing. Process bytes may be truncated and decoded lossily, so never promise exact output.
 - Use structured errors and actionable CLI messages.
 - Add tests around identity persistence, replay/idempotency, message filtering, contact files, and configuration parsing.
 - Keep browser accessibility and keyboard use working.
@@ -135,6 +170,13 @@ interoperability.
 - The browser uses a locally persisted random wallet for low-friction chat.
 - `uwubot` supervises the XMTP sidecar, creates persistent identity state, and processes direct text
   messages. The manual browser/XMTP `dev` gate passed; a real browser/XMTP CI job remains open.
+- Public chat answers the first message and appends its first optional onboarding prompt only when
+  the model reply contains no question; all deferred and later prompts use the cadence without
+  advertising slash commands. Ambiguous consent is re-cadenced. Public chat can expose only an
+  explicitly configured Brave web-search function.
+- `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Active
+  operator DMs use an isolated privileged local harness; live XMTP operator release testing and an
+  external security review remain open.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
   protected combined-snapshot persistence, and the simulator are local implementations verified by
   the deterministic workspace suite.

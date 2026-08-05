@@ -13,6 +13,9 @@ does not depend on Council membership.
 
 - **Implemented — existing:** static browser, direct XMTP DMs, persistent identities, `uwubot`,
   contact memory, model adapters, deduplication, launcher protections, and the Agent SDK sidecar.
+- **Implemented — local:** public Cthuwu identity enforcement, casual onboarding, optional Brave
+  search, and an XMTP-inbox operator ACL with an isolated privileged harness. The role boundary and
+  tools are covered locally; live operator use over XMTP is not yet a separate release claim.
 - **Implemented — local:** `cthuwu-protocol`, deterministic Council domain logic, in-memory
   transport, local registry, protected snapshot persistence, and simulator are verified by the
   deterministic workspace suite.
@@ -23,7 +26,7 @@ does not depend on Council membership.
 |---|---|---|
 | Registry / future ERC-8004 | Durable identity, public metadata, endpoint association, capability references, provenance-bearing trust signals | Heartbeats, load, sessions, user data |
 | XMTP Council group | Discovery, routing, leases, governance, heartbeats, approved propagation | Normal DM contents, contact notes, private memory |
-| Direct XMTP DMs | Private user-to-Tentacle conversation | Council-wide broadcast by default |
+| Direct XMTP DMs | Private public-user conversation or separately authorized operator control | Council-wide broadcast by default |
 | Tentacle runtime | Inference, memory, tools, capacity, and operator policy | Authority to bypass local security policy |
 
 The Council is only a control plane. Rendezvous selects an endpoint; conversation then happens in a
@@ -57,7 +60,10 @@ installed web-app storage is separate from the browser's local identity storage.
 
 ### Rust runtime and XMTP transport
 
-The backend has one operator-facing invocation: the Rust `uwubot` binary. Rust owns the contact store, onboarding and consent policy, message deduplication, matching, model adapter, and process lifecycle.
+The backend has one operator-facing executable: the Rust `uwubot` binary. Rust owns the contact
+store, onboarding and consent policy, sender-role classification, message deduplication, matching,
+model and search adapters, privileged operator harness, and process lifecycle. The local
+`uwubot operator add|list|revoke` subcommands manage authorization state without starting XMTP.
 
 For the first release, `uwubot` supervises a small Node subprocess built on the official `@xmtp/agent-sdk`. The subprocess owns only identity bootstrapping, the encrypted XMTP database, network streams, and text DM encoding. Rust and Node exchange bounded JSONL frames over private stdin/stdout pipes. Subprocess stdout is reserved for protocol frames; diagnostics go to stderr without message bodies.
 
@@ -67,26 +73,42 @@ This preserves a single command while using XMTP's supported bot surface. A dire
 
 ### Contact memory
 
-A newly observed inbox gets a Markdown note with timestamps and an onboarding stage. Cthuwu asks, in order:
+A newly observed public inbox gets a Markdown note with timestamps and an onboarding stage. Its
+first message is answered. Cthuwu appends the short, optional introduction and name question only
+when the model reply did not already contain a question; otherwise the introduction is deferred into
+the normal prompt cadence. Later profile questions are spaced between normal conversation, ask at
+most one thing at a time, and accept a pass or topic change without treating the new topic as profile
+data. Ambiguous sharing-consent replies leave consent unresolved and restart that cadence instead of
+immediately repeating the question. The optional fields remain:
 
 1. what the person wants to be called;
 2. their hopes and dreams;
 3. resources, skills, time, or knowledge they may want to share;
 4. resources or support they need.
 
-Answers are stored as quoted Markdown to prevent user text from altering the note structure. The bot records user-provided statements, not inferred traits presented as facts. Contact notes are personal data: they are ignored by git and need future export, correction, deletion, and retention controls.
+Answers are stored as quoted Markdown to prevent user text from altering the note structure. The bot
+records user-provided statements, not inferred traits presented as facts. People can use ordinary
+phrases to name themselves, describe hopes/offers/needs, inspect memory, control matching, or confirm
+deletion. Legacy public command forms remain compatible but are not advertised. Contact notes are
+personal data: they are ignored by git and need future export, correction, deletion, and retention
+controls. Pending, active, and revoked operator inboxes never create or update contact notes.
 
 ### Companion core
 
 The core owns message policy:
 
-1. accept supported text DMs;
-2. hash and durably deduplicate by XMTP message ID;
-3. apply consent, size, and concurrency limits;
-4. construct bounded conversation context;
-5. invoke the configured model adapter;
-6. send a text response;
-7. record completion without logging plaintext by default.
+1. accept supported text DMs, checking the UTF-8 byte bound in Node and replacing oversized content
+   with a metadata-only `reject_oversized` control frame whose `text` is empty;
+2. validate the authenticated `senderInboxId` and `sentAtNs`, then pin the role snapshot before
+   inspecting text or waiting for an authority lane;
+3. hash and durably deduplicate by XMTP message ID;
+4. for `reject_oversized`, return a role-specific `Reply` only for the first durable claim; for
+   `reject_inbound` or an occupied authority lane, return a first-claim busy `Reply`; return `Ignore`
+   for every duplicate and perform no contact/model/tool dispatch on any rejection path;
+5. apply role-specific consent and size limits to admitted content;
+6. dispatch to exactly one closed public, pending/revoked, or operator path;
+7. invoke only that path's configured model and tools;
+8. send a bounded text response without logging plaintext by default.
 
 ### Model adapters
 
@@ -97,6 +119,74 @@ A model adapter receives a structured request and returns text. Implemented adap
 - deterministic local adapter for tests and bring-up.
 
 The transport layer never knows which model is selected.
+
+The public system prompt makes Cthuwu—not Mistral, GPT, Claude, Llama, Qwen, or a generic
+assistant—the conversational identity. It requires light readable uwu speech, direct answers before
+optional personal questions, truthful capability statements, and ordinary-language privacy
+controls. Responses matching common provider self-identification boilerplate receive one repair
+attempt and then a fixed Cthuwu fallback.
+
+Public model calls have either no tools or exactly one `web_search` function. The optional Brave
+adapter sends a model-selected bounded query and returns at most five bounded HTTP(S) results as
+untrusted context. Public chat has no shell or local filesystem tool.
+
+### Authenticated operator path
+
+`state/operators.json` config version 2 is an owner-only, environment-bound allowlist keyed by the
+canonical full 64-character XMTP inbox ID. Adding an inbox locally creates a pending record and a
+random one-time activation proof;
+only an exact activation message cryptographically sent from that same inbox makes it active. The
+plaintext proof is never persisted. Revocation leaves a blocking tombstone. Pending and revoked
+senders do not fall through to public chat, so neither can create a contact note while probing the
+role boundary. Activation persists the activation message's authenticated `sentAtNs`; a message
+authored at or before that boundary remains pending even if delivered later. The ACL is loaded at
+runtime startup rather than hot-reloaded; local add/list/revoke operations run while the Tentacle is
+stopped, followed by restart.
+
+The Agent SDK supplies `senderInboxId` from the decoded XMTP message envelope. The Node sidecar is
+role-blind, cannot emit a role field, and forwards that authenticated identifier and `sentAtNs` to
+Rust. Rust classifies the message before command parsing or contact access, and the resulting role
+snapshot remains pinned for the request. This authenticated-sender handoff is in the operator trusted
+computing base. Authorization is inbox-wide: all valid installations attached to one authorized
+XMTP inbox receive the same authority; the current runtime cannot restrict one installation
+independently.
+
+Active operator text enters a separate harness with an all-caps, ominous, reluctantly submissive,
+truthful Cthuwu persona. The model may call only `read_file`, `write_file`, `edit_file`,
+`search_files`, `qmd_search`, and `exec`; direct operator commands reach that same dispatcher.
+Original prose is uppercased, while code and bounded runtime-provided tool renderings are not
+uppercased. Process bytes are truncated to a fixed bound and decoded with lossy UTF-8 replacement;
+the result is not a verbatim or byte-exact capture. Tool results are structured, and failure,
+timeout, exit status, lossy decoding, and truncation must be reported rather than invented.
+The tool-calling loop and inputs, paths, files, output, and execution time are bounded.
+
+File tools are confined to `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
+targets, page UTF-8 reads at no more than 12 KiB, cap writes and edits at 1 MiB, and use atomic
+writes. `rg` provides literal file search. QMD is an optional external
+`qmd query ... --json` adapter and fails explicitly when unavailable. `exec` starts a shell in the
+operator root with a small environment allowlist that excludes runtime API and XMTP keys, but it is
+intentionally **not** a filesystem or process sandbox: it has every OS permission available to the
+`uwubot` account. Tool timeouts accept 1–300 seconds, while the bridge's 2–300 second end-to-end
+deadline is authoritative and keeps one second in reserve for the XMTP response.
+
+Public and operator-class requests use separate one-permit authority lanes. The role is pinned
+and the message ID is durably claimed before lane selection. A second same-lane request receives a
+busy reply only for its first claim and is never dispatched; duplicates are ignored. When the Node
+bridge's own pending bound is full, a single bounded `reject_inbound` handshake asks Rust to make the
+same durable claim and choose `Reply` or `Ignore`, again without content, model, contact, or tool
+dispatch. The caller must create a new XMTP message to retry work; replaying the original message ID
+cannot execute later.
+
+Node checks the 16 KiB UTF-8 inbound limit before forwarding content. An oversized DM normally
+crosses the private boundary only as `reject_oversized` metadata with an empty `text`; if the pending
+bound is already full, the empty-text `reject_inbound` fallback is used. Rust validates the frame,
+classifies the authenticated sender, and durably claims the message ID before returning a
+role-specific first reply or duplicate `Ignore`. Neither path opens a contact or dispatches content, a
+model, or a tool. Retrying requires a shorter, newly authored XMTP message.
+
+The hidden stdin harness always forces the public role. Council envelopes, governance Actions, and
+propagation cannot enter the operator dispatcher, and the Council Action enum still cannot represent
+a shell command or file operation.
 
 ### Shared Council protocol
 
@@ -200,10 +290,14 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Boundary | Untrusted input | Required control |
 |---|---|---|
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
-| XMTP → runtime | Message content and metadata | Decode validation, deduplication, rate limits |
-| Runtime → model | Conversation content | Explicit provider selection, bounded context |
-| Model → runtime | Generated text/tool requests | Output limit; no implicit tool execution |
-| Rust → XMTP subprocess | JSONL metadata and text | Allowlisted environment, bounded queue and frames |
+| XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
+| Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
+| Operator XMTP sender → runtime | Privileged instructions | Local pending/active/revoked ACL, one-time proof, exact inbox match, dedicated OS account/container |
+| Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
+| Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
+| Operator model → runtime | Generated text or local tool call | Separate closed tool schema, bounded agent loop, structured receipts, no role changes |
+| Operator tools → OS | Authenticated operator or model-selected operations | Rooted file helpers, limits/timeouts, secret-stripped environment; OS isolation required for `exec` |
+| Rust ↔ XMTP subprocess | `inbound_text`, empty-text `reject_inbound`, or metadata-only `reject_oversized` JSONL; authenticated metadata, `sentAtNs`, local deadline, and admitted text only | Node-side byte check, allowlisted environment, bounded frames/handshake, pinned role snapshot, durable claim before admission, first-claim `Reply`/duplicate `Ignore`, no rejection-path dispatch, no-queue authority lanes, deadline cancellation |
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |
 | Council → Tentacle | Awards, leases, votes, propagation | Incarnation/generation fencing, typed actions, final local policy check |
@@ -215,6 +309,13 @@ The runtime uses a dedicated XMTP identity. The sidecar atomically creates a wal
 
 Each XMTP environment gets a separate data directory to prevent accidental dev/production identity mixing.
 
+The environment-specific operator ACL config version 2 is stored atomically at owner-only
+`state/operators.json`. It contains canonical 64-character inbox IDs, labels, status, generation,
+timestamps, the activation `sentAtNs` boundary, and only the hash of a pending activation proof. An
+active or revoked record retains no activation hash. ACL corruption,
+unsafe Unix permissions, symlinks, duplicate IDs, unknown fields, and environment mismatch fail
+closed.
+
 The local simulator stores Council identity, membership, capabilities, affinity, leases and
 generation fences, processed message IDs, Constitution, Agenda history, proposals, votes, campaigns,
 referrals, acknowledgements, and contribution events together below `state/council/`. Its combined
@@ -224,7 +325,11 @@ still needs a per-message transaction coupling every domain effect to its replay
 
 ## Direct-DM vertical slice
 
-The first slice deliberately excludes groups, attachments, reactions, tools, long-term semantic memory, and autonomous actions. Success means one persisted identity can exchange text DMs with the static client across restarts.
+The public first slice still excludes groups, attachments, reactions, local tools, long-term
+semantic memory, and autonomous actions. Success means one persisted identity can exchange text DMs
+with the static client across restarts. Optional web search is a single remote information tool,
+not local execution. The privileged operator DM path is an explicit administrative extension with a
+separate ACL, prompt, dispatcher, and risk model; it does not enlarge public-user capabilities.
 
 That slice remains intact. Council groups do not convert user conversations into group traffic.
 

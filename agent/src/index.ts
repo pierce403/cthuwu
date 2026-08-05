@@ -1,6 +1,8 @@
 import type { LogLevel } from "@xmtp/agent-sdk";
 import { prepareAgentEnvironment } from "./identity.js";
-import { BridgeBusyError, JsonlBridge, parseTimeout } from "./protocol.js";
+import { JsonlBridge, parseTimeout } from "./protocol.js";
+
+const MAX_INBOUND_TEXT_BYTES = 16 * 1024;
 
 function diagnostic(message: string): void {
   process.stderr.write(`[cthuwu-xmtp] ${message.replace(/[\r\n]+/gu, " ")}\n`);
@@ -59,29 +61,25 @@ async function main(): Promise<void> {
     if (!context.isDm()) {
       return;
     }
-    void bridge
-      .request({
-        messageId: context.message.id,
-        senderInboxId: context.message.senderInboxId,
-        conversationId: context.message.conversationId,
-        text: context.message.content,
-      })
+    const metadata = {
+      messageId: context.message.id,
+      senderInboxId: context.message.senderInboxId,
+      // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
+      // Rust still owns role classification; the sidecar never accepts or emits a role.
+      sentAtNs: context.message.sentAtNs.toString(),
+      conversationId: context.message.conversationId,
+    };
+    const response =
+      Buffer.byteLength(context.message.content, "utf8") > MAX_INBOUND_TEXT_BYTES
+        ? bridge.rejectOversized(metadata)
+        : bridge.request({ ...metadata, text: context.message.content });
+    void response
       .then(async (response) => {
         if (response.type === "reply") {
           await context.conversation.sendText(response.text);
         }
       })
-      .catch(async (error: unknown) => {
-        if (error instanceof BridgeBusyError) {
-          try {
-            await context.conversation.sendText(
-              "the dream-current is crowded right now. please try that whisper again in a moment.",
-            );
-          } catch {
-            diagnostic("failed to send the busy response");
-          }
-          return;
-        }
+      .catch(async (_error: unknown) => {
         diagnostic("failed to process an inbound XMTP text message");
       });
   });

@@ -40,10 +40,19 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
   also installable as a standalone PWA with dedicated icons, a restrained install nudge, and an
   honest branded offline screen.
 - `uwubot` creates a persistent XMTP wallet and encrypted database on first start, then reuses both.
-- A new sender gets exactly `contacts/<inbox-id>.md` and a deterministic conversation about their name, hopes, possible contributions, and needs.
-- `/profile`, `/set`, `/skip`, `/share`, `/matches`, `/pause`, `/resume`, and `/forget confirm` provide inspectable consent and data controls.
+- Cthuwu answers a new sender's first message, identifies itself as Cthuwu rather than the configured
+  model, and uses light readable uwu speech. It appends the first optional profile question only when
+  that model reply did not already ask one; otherwise all profile prompts are deferred into the
+  casual conversation cadence.
+- People use ordinary language to inspect, correct, pause, share, or delete their local contact note;
+  public replies do not advertise command syntax.
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
-- Deterministic, Ollama, and OpenAI-compatible model modes are available. No message reaches a model provider unless the operator explicitly selects it.
+- Deterministic, Ollama, and OpenAI-compatible model modes are available. An optional Brave Search
+  adapter gives the public model one closed `web_search` tool and no local file or process tools. No
+  message reaches a model or search provider unless the node operator explicitly configures it.
+- A node operator can authorize an exact XMTP inbox through a local, one-time activation ceremony.
+  Active operator DMs enter a separate all-caps operator harness with bounded file/search tools and
+  intentionally privileged shell execution; public, pending, and revoked inboxes cannot reach it.
 - Structured, versioned Cthulhu personalities include deterministic Archivist, Hermit, Merchant,
   Wanderer, Oracle, and Trickster personas with different local policy positions without an LLM.
 - The local Council implementation models validated envelopes, Tentacle lifecycle and liveness,
@@ -112,6 +121,7 @@ Normal state is kept below `UWUBOT_DATA_DIR`:
 contacts/<inbox-id>.md
 .uwubot.lock/<running-pid>
 state/environment
+state/operators.json
 state/processed/<hashed-message-id>
 state/council/<bounded-state-name>.json
 state/xmtp-identity.json
@@ -127,6 +137,57 @@ For an offline contact-flow harness:
 ```
 
 Each input line is the next message from that test inbox.
+
+The hidden stdin harness is deliberately public-only. It cannot simulate an operator, even when its
+inbox argument matches an active operator record.
+
+## XMTP operator role
+
+> [!DANGER]
+> An active operator inbox has remote code execution as the OS account running `uwubot`. Use a
+> dedicated unprivileged service account or container, choose a narrow `UWUBOT_OPERATOR_ROOT`, keep
+> that account away from unrelated credentials and data, and secure every XMTP installation attached
+> to the authorized inbox. See [the operator guide](docs/operator.md) before enabling this feature.
+
+Operator authorization is keyed by the canonical full 64-character XMTP inbox ID, not a wallet
+address, prefix, display name, or message claim. Stop the Tentacle, then create a pending record
+locally in the same data directory and XMTP environment it uses:
+
+```bash
+./uwu.sh --xmtp-env production operator add <full-inbox-id> --label Dean
+```
+
+The command prints a one-time activation message and exits. Restart the Tentacle, then send that
+exact message from the pending XMTP inbox. Only then does the inbox become active. ACL management is
+not hot-reloaded: stop the Tentacle before listing or revoking, then restart after a change.
+
+```bash
+./uwu.sh --xmtp-env production operator list
+./uwu.sh --xmtp-env production operator revoke <full-inbox-id>
+```
+
+Pending and revoked inboxes never fall through to public chat and never create contact notes. The
+sidecar does not accept a role field: Rust classifies the Agent SDK's authenticated
+`senderInboxId` before interpreting message text or dispatching commands, pins that role to the
+request, and rejects operator messages authored at or before activation. Because an XMTP inbox can have
+multiple installations, every installation authorized for that inbox receives the same operator
+authority. Revoke the Cthuwu role and the compromised XMTP installation immediately if any device or
+installation key may be lost: stop the node first, persist the local revocation, then restart it.
+
+Once active, the operator may use direct `/exec`, `/read`, `/write`, `/edit`, `/search`, and `/qmd`
+commands or ask an Ollama/OpenAI-compatible tool-calling model to use the same closed tool set. QMD
+is an optional external adapter; set `UWUBOT_QMD` to a compatible executable that supports
+`qmd query <query> --json`. Public users are not shown this syntax and cannot invoke these tools.
+Public and privileged work use separate single-request authority lanes. Rust pins the role and
+durably claims the XMTP message ID before admission. If a lane or the Node bridge is full, the first
+claim receives a busy reply without content/model/tool dispatch; duplicate delivery receives no
+reply. Node also checks the 16 KiB UTF-8 input bound before sending content to Rust. An oversized DM
+uses a metadata-only rejection control frame with an empty `text`; after classification and durable
+claim, Rust returns a role-specific first reply or ignores a duplicate, without contact, model, or
+tool dispatch. These tombstones mean retrying the same network message can never execute later—the
+client must send a new XMTP message after capacity returns, and shorten an oversized message. The
+bridge's configured 2–300 second end-to-end deadline cancels work while reserving one second to
+reply. See the operator guide for the distinct 12 KiB UTF-8 read page and 1 MiB write/edit limits.
 
 ## Council architecture
 
@@ -146,10 +207,10 @@ user reference, then rendezvous returns the selected Tentacle's XMTP endpoint fo
 Failover does not silently copy private memory.
 
 The local deterministic simulator exercises Council joins, announcements, heartbeats, capabilities,
-routing and offers, lease issuance, Tentacle failure and failover, persona arguments, one-Cthulhu-
-one-vote governance, Agenda parent hashes, invitations, multi-level propagation, loop/duplicate
-suppression, bounded depth/fan-out, acknowledgements, useful-outcome contribution credit, and replay-
-safe persistence. It does not connect to a live XMTP group or ERC-8004 deployment.
+routing and offers, lease issuance, Tentacle failure and failover, persona arguments,
+one-Cthulhu-one-vote governance, Agenda parent hashes, invitations, multi-level propagation,
+loop/duplicate suppression, bounded depth/fan-out, acknowledgements, useful-outcome contribution
+credit, and replay-safe persistence. It does not connect to a live XMTP group or ERC-8004 deployment.
 
 Run that opt-in local scenario without starting the XMTP DM sidecar or a model adapter:
 
@@ -183,6 +244,22 @@ UWUBOT_MODEL_NAME=qwen3:8b \
 
 For another OpenAI-compatible provider, select `UWUBOT_MODEL=openai` and set `UWUBOT_MODEL_API_KEY`, `UWUBOT_MODEL_ENDPOINT`, and `UWUBOT_MODEL_NAME`. The XMTP transport subprocess receives an allowlisted environment and cannot see the model credential.
 
+To allow the public model to request web results, configure Brave Search in the environment:
+
+```bash
+UWUBOT_MODEL=openai \
+UWUBOT_MODEL_API_KEY='...' \
+UWUBOT_WEB_SEARCH=brave \
+UWUBOT_WEB_SEARCH_API_KEY='...' \
+./uwu.sh
+```
+
+This is opt-in and requires an Ollama or OpenAI-compatible model that supports standard tool calls.
+When the model invokes `web_search`, its bounded query is sent to Brave and up to five bounded
+HTTP(S) results return as untrusted context. The public tool schema contains no shell or filesystem
+capability. Search credentials, like model credentials, are rejected on the command line and stripped
+from build and transport subprocesses.
+
 ## Container
 
 The container packages Rust, Node, the Agent SDK, and its native binding while preserving the one-command runtime:
@@ -214,6 +291,14 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
 - Never commit wallet keys, XMTP database keys, model credentials, generated databases, or contact notes.
 - Use dedicated identities with no material funds.
 - Normal logs omit keys and message bodies.
+- The operator allowlist is environment-scoped, atomically stored at owner-only
+  `state/operators.json` using config version 2, and keyed by exact authenticated 64-character XMTP
+  inbox ID. This does not distinguish installations within one inbox.
+- Operator mode is deliberate remote code execution. File helpers are rooted and reject traversal
+  and direct symlink targets, but `/exec` is not a filesystem sandbox and can exercise every
+  permission of the `uwubot` OS account. Run it under a dedicated service identity or container.
+- Public model calls expose only optional web search. Operator model calls expose only the closed
+  local operator tool set. Neither tool set is available to Council Actions.
 - Council envelopes are bounded, versioned, sender-checked, expiry-checked, replay-suppressed, and
   fenced by Tentacle incarnation or lease generation where applicable.
 - Production signatures are not simulated. The deterministic signer is test-only; live adapters
@@ -222,7 +307,8 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
   on-chain.
 - Council votes and propagated requests cannot override a Tentacle operator's local security policy.
 - Opting into matching permits other opted-in people to see the chosen display name and matching terms, but never the inbox ID; Cthuwu does not make automatic introductions.
-- `/forget confirm` deletes the caller's local contact note. It cannot erase copies already delivered over XMTP.
+- A person can ask Cthuwu in ordinary language to show, correct, or delete their local contact note.
+  Deletion cannot erase message copies already delivered over XMTP.
 
 ## License
 

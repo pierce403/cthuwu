@@ -94,6 +94,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Properties**:
   - Cargo exposes one application binary named `uwubot`.
   - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle.
+  - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
+    ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
+    requires stopping and restarting the Tentacle rather than mutating a live process.
   - `uwubot` supervises the pinned official `@xmtp/agent-sdk@2.3.0` transport as an implementation detail.
   - The transport atomically creates or loads a dedicated wallet key and encrypted XMTP database under `UWUBOT_DATA_DIR`.
   - Environment markers prevent silent development/production state reuse.
@@ -117,18 +120,43 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Description**: Each inbound text DM is processed once and receives at most one Cthuwu response.
 - **Properties**:
   - The Agent SDK filters self-authored messages; the sidecar forwards only direct text messages.
-  - Inbound content remains data and never becomes a shell command or filesystem path.
-  - Inbound and outbound text is limited to 16 KiB.
+  - Rust classifies the authenticated XMTP sender inbox before inspecting text or touching contact
+    state. Public content remains data and never becomes a shell command or filesystem path.
+  - Inbound and outbound text is limited to 16 KiB. Node checks the inbound UTF-8 byte length before
+    forwarding content; an oversized message normally becomes a metadata-only `reject_oversized`
+    frame whose shared-schema `text` field is empty.
   - Opaque XMTP message IDs are SHA-256 hashed into durable replay tombstones.
-  - Rust processes globally in sequence; the sidecar permits at most two pending requests and returns a friendly busy response beyond the bound.
+  - Public and privileged work use separate one-request authority lanes, so one of each may progress
+    concurrently. Role is classified and pinned, then the message is durably claimed before lane
+    selection. A lane-busy message is never dispatched: its first claim gets a busy reply and a
+    duplicate gets `Ignore`.
+  - When the Node bridge's pending set is full, one bounded `reject_inbound` handshake carries the
+    authenticated metadata—but no message text—to Rust for that same durable claim. Rust returns a
+    busy `Reply` only for the first claim and `Ignore` for duplicates, without content, contact,
+    model, or tool dispatch.
+  - For `reject_oversized`, Rust validates the frame, classifies the authenticated sender, and makes
+    that durable claim before returning a role-specific first `Reply` or duplicate `Ignore`. It never
+    opens a contact or dispatches content, a model, or a tool. Clients retry with a shorter, newly
+    authored XMTP message rather than replaying the old ID.
+  - The bridge supplies a locally generated 2–300 second end-to-end deadline. Rust validates it,
+    reserves one second for the response, and cancels work when the remaining budget closes.
   - Model calls time out after 45 seconds and output is bounded to 4,000 characters before the final transport bound.
 - **Test Criteria**:
   - [x] Oversized text is rejected before contact onboarding.
+  - [x] Sidecar tests prove the oversized control frame omits original content; Rust tests cover its
+    text-free validation, role-specific first reply, and duplicate `Ignore`.
   - [x] Groups and non-text content do not cross the JSONL boundary.
   - [x] Replayed message IDs do not produce duplicate replies across store instances.
   - [x] Self-authored messages are filtered by the pinned Agent SDK.
   - [x] Pending work and JSONL line/reply sizes are bounded and tested.
-  - [x] Sequential processing prevents concurrent contact-file corruption in this release.
+  - [x] A public serialization gate prevents concurrent contact-file corruption in this release.
+  - [x] Role injection in JSONL is rejected and malformed authenticated sender metadata fails closed.
+  - [x] Tests cover pinned pre-lane role snapshots, bridge deadline creation/bounds, and Rust's
+    response-reserve calculation.
+  - [x] Bridge and bot tests cover the bounded rejection handshake and prove that its durable
+    tombstone prevents a later operator replay from invoking a tool.
+  - [ ] A transport integration test exercises first-claim `Reply`, duplicate `Ignore`, same-lane
+    overload, in-flight cancellation, and late-response suppression together.
   - [ ] Per-sender rate limits are configurable and tested.
 
 ### Per-inbox contact notes
@@ -148,7 +176,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Path traversal and malformed inbox IDs are rejected.
   - [x] Multiline answers survive save/load and cannot create note sections.
   - [x] Every accepted message updates `last_seen`, including completed chats.
-  - [x] The caller can inspect, correct, export, and delete their note through XMTP commands.
+  - [x] The caller can inspect, correct, control, and delete their note through ordinary XMTP text.
+  - [x] Pending, active, and revoked operator inboxes do not create contact notes.
   - [ ] Crash-injection tests prove interrupted-write recovery.
   - [ ] Contact updates are verified on Linux, macOS, and Windows.
 
@@ -157,18 +186,27 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Stability**: in-progress
 - **Description**: Cthuwu gets to know a new person through a gentle conversation relevant to a future resource-sharing network.
 - **Properties**:
-  - Cthuwu asks for a chosen name, hopes and dreams, resources they may enjoy sharing, and resources or support they need.
+  - Cthuwu answers a new person's first message. It adds the short optional introduction and name
+    question only if the model reply did not already contain a question; otherwise onboarding is
+    deferred into the normal conversation cadence.
+  - Later prompts for hopes, possible resources, needs, and sharing consent are spaced between
+    ordinary conversation, ask only one thing at a time, and accept a pass or topic change.
   - Stored notes contain user-provided statements, not model guesses presented as facts.
-  - `/skip`, `/set`, `/profile`, and `/forget confirm` provide decline, correction, inspection, and deletion.
-  - Sharing consent requires an explicit yes or no; an ambiguous answer repeats the question.
+  - Ordinary phrases provide decline, correction, inspection, matching, and confirmed deletion;
+    public replies do not advertise slash commands. Legacy public forms remain compatible.
+  - Sharing consent requires an explicit yes or no. An ambiguous answer leaves consent unresolved
+    and re-cadences the prompt instead of repeating it immediately.
   - Cthuwu does not pressure people to disclose sensitive information or contribute resources.
 - **Test Criteria**:
-  - [x] A new inbox starts at the name question.
+  - [x] A new inbox's substantive first message reaches the model and receives an answer.
+  - [x] The optional name prompt follows a question-free first answer; when the model already asks a
+    question it is deferred, and subsequent prompts obey a conversation-turn cadence.
   - [x] Each valid answer advances the deterministic onboarding state.
   - [x] Completion persists all four categories and sharing state.
   - [x] A person can explicitly skip any question.
-  - [x] A person can correct an earlier answer with `/set`.
-  - [x] A person can delete their contact note with a confirmed command.
+  - [x] A person can correct an earlier answer in ordinary language.
+  - [x] A person can delete their contact note with ordinary-language confirmation.
+  - [x] Public help and onboarding contain no slash-command catalogue.
   - [x] Ambiguous sharing consent does not silently opt in or complete onboarding.
   - [ ] Model-generated summaries retain provenance and uncertainty if summaries are added later.
 
@@ -178,18 +216,87 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Description**: Cthuwu is a cute eldritch buddy with a consistent personality and a configurable language model.
 - **Properties**:
   - Persona prompts are separate from XMTP transport and contact persistence.
+  - The public prompt names Cthuwu as the identity, forbids provider/generic-assistant
+    self-identification, requires light readable uwu speech, and requires direct answers before
+    optional personal questions.
+  - Common provider-identity boilerplate triggers one repair attempt and then a fixed Cthuwu
+    fallback rather than leaking the configured model identity as the companion.
   - Deterministic local behavior is the default.
   - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code changes.
   - The operator must explicitly select a provider before any message content leaves the machine.
   - Profile text is labeled as untrusted user data, not injected as a system message.
-  - Model output cannot execute tools or mutate files and is UTF-8 safely bounded.
+  - Public model output is UTF-8 safely bounded and can call only optional `web_search`; it cannot
+    execute local tools or mutate files.
+  - Brave Search is opt-in, uses a separately configured API key, bounds query/response/result data,
+    accepts only HTTP(S) result URLs, and returns results as untrusted context.
 - **Test Criteria**:
   - [x] Deterministic tests verify stable, non-echoing core behavior.
   - [x] OpenAI-compatible and Ollama configuration is implemented behind one adapter.
   - [x] Logs omit message bodies and credentials by default.
   - [x] Provider failure produces a useful response without losing contact state.
+  - [x] Tests cover the reported Mistral self-identification failure, public prompt invariants, one
+    identity repair, and a public tool schema containing no operator capabilities.
+  - [x] Search result parsing, URL validation, limits, and credential-bearing endpoint rejection are tested.
   - [ ] A live local Ollama request passes with bounded context and output.
   - [ ] A live selected remote provider request passes without credential leakage.
+
+### Authenticated XMTP operator harness
+
+- **Stability**: in-progress
+- **Description**: Let a locally authorized XMTP inbox administer its Tentacle through a separate,
+  explicitly privileged agentic harness without exposing those capabilities to public users or the
+  Council.
+- **Properties**:
+  - Local `uwubot operator add` accepts only a canonical full 64-character XMTP inbox ID and creates
+    a pending environment-specific version-2 record plus a cryptographically random one-time
+    activation proof.
+  - The pending inbox must send the exact activation message over XMTP. Only the proof hash is
+    persisted, activation is one-time, and adding a non-active record again rotates its generation
+    and proof.
+  - Rust classifies the Agent SDK-authenticated `senderInboxId` and `sentAtNs` before deduplication,
+    content parsing, commands, model calls, contact access, or lane selection. That role snapshot is
+    pinned for the request; text cannot promote it while it waits or runs.
+  - Activation records its message's authenticated `sentAtNs`. Messages authored at or before that
+    boundary remain pending even if delivered after activation.
+  - Pending and revoked inboxes are closed states: they cannot use tools, fall through to public
+    chat, or create contact notes. Revocation persists as a blocking tombstone.
+  - Authorization applies to the whole XMTP inbox. Every installation legitimately attached to that
+    inbox has operator authority; per-installation authorization is not implemented.
+  - Operator replies use an enforced all-caps, theatrical ominous/submissive voice while excluding
+    code and bounded runtime-provided tool renderings from prose uppercasing. Process streams are
+    truncated and decoded as potentially lossy UTF-8, not preserved byte-exactly. The prompt requires
+    truthful receipts and explicit failure rather than invented success.
+  - Direct operator commands and model tool calls share a closed tool dispatcher:
+    `read_file`, `write_file`, `edit_file`, literal `rg` search, optional external QMD search, and
+    `exec`. Operator mode deliberately contains no web-search tool.
+  - File helpers stay under `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
+    targets, page UTF-8 reads at 12 KiB, cap writes/edits at 1 MiB, and write atomically. The agent
+    loop and child processes have hard step, output, and 1–300 second tool-timeout limits, subordinate
+    to the bridge's 2–300 second end-to-end deadline.
+  - `exec` starts in the operator root with a secret-stripped environment, but is intentionally
+    unsandboxed within the permissions of the `uwubot` OS account. Production operation therefore
+    requires a dedicated unprivileged service account or container.
+  - QMD is an optional command adapter configured with `UWUBOT_QMD`; absence or failure is reported
+    and never treated as success.
+  - The stdin harness always forces the public role. Council messages and typed Council Actions have
+    no route to operator tools.
+- **Test Criteria**:
+  - [x] ACL tests cover exact 64-character IDs, version-2 bounded records, exact fresh activation,
+    one-time use, `sentAtNs` fencing, persistence, generation rotation, revocation, environment
+    binding, owner-only permissions, and symlink rejection.
+  - [x] Public `/exec`-style text is inert, while active operator text reaches only the operator
+    harness.
+  - [x] Pending and revoked records never fall through to public contact handling.
+  - [x] The hidden stdin harness remains public even when given an active operator inbox ID.
+  - [x] The JSONL protocol rejects a caller-supplied role and preserves `senderInboxId` without
+    giving the sidecar authorization logic.
+  - [x] Tool tests cover the closed schema, direct dispatch, traversal/symlink rejection, bounded
+    reads/writes/edits, process status, timeout/output handling, and API-key removal from child
+    process environments.
+  - [x] Operator prose casing excludes code and bounded tool renderings from uppercase transformation.
+  - [ ] A manual release test activates, uses, revokes, and rechecks an operator inbox over live XMTP.
+  - [ ] An external security review covers XMTP installation compromise/revocation, OS isolation,
+    command auditability, and operator-model prompt injection.
 
 ### Resource-sharing network
 
@@ -203,7 +310,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Suggestions are not commitments or automatic introductions.
   - Sensitive traits are not inferred for matching.
 - **Test Criteria**:
-  - [x] `/set`, `/share on|off`, and `/pause`/`/resume` revise and control participation.
+  - [x] Ordinary-language controls revise, opt into/out of, pause, and resume participation.
   - [x] A proposed match cites compatible need/offer terms.
   - [x] Bilateral opt-in is required and skipped fields cannot create false matches.
   - [x] Inbox IDs are absent from suggestions and display names are single-line and bounded.
@@ -220,12 +327,15 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Council traffic is control-plane data only: discovery, routing, leases, governance, heartbeats, and approved propagation.
   - A deployment with no Council configuration follows the existing startup, launcher, sidecar, contact-memory, model, and direct-DM paths.
   - Council configuration cannot expose model credentials to the XMTP sidecar or weaken protected data-directory validation.
+  - Council envelopes and typed Actions cannot authorize an operator, enter the operator harness, or
+    represent its file/process tools.
 - **Test Criteria**:
   - [ ] `uwubot` without Council configuration passes all pre-Council tests and starts in standalone mode.
   - [ ] The browser-to-`uwubot` live DM path still produces exactly one reply and persists identities/contact state.
   - [ ] Council state is absent or idle when Council mode is disabled.
   - [ ] Launcher, sidecar environment allowlist, secret isolation, deduplication, and data-directory tests remain unchanged or stronger.
   - [ ] No Council message contains normal DM text, contact-note contents, model credentials, or private memory.
+  - [ ] Council input cannot activate an operator or invoke an operator tool.
 
 ### Shared Council protocol crate and envelopes
 
@@ -429,9 +539,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - XMTP-delivered copies and the Browser SDK database are outside local contact-note deletion.
 - **Test Criteria**:
   - [x] Onboarding includes a concise storage explanation.
-  - [x] `/profile` returns only the authenticated caller's stored profile.
-  - [x] `/set` updates only the authenticated caller's note.
-  - [x] `/forget confirm` removes the caller's contact note.
+  - [x] Ordinary-language inspection returns only the authenticated caller's stored profile.
+  - [x] Ordinary-language corrections update only the authenticated caller's note.
+  - [x] Ordinary-language confirmed deletion removes the caller's contact note.
   - [x] Environment-mismatch startup fails closed in Rust and the XMTP sidecar.
   - [ ] Configurable retention removes expired contact notes and replay tombstones with non-sensitive audit output.
   - [ ] Backup and restore procedures are tested for the complete backend data directory.
