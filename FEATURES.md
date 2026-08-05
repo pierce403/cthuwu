@@ -221,9 +221,24 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     optional personal questions.
   - Common provider-identity boilerplate triggers one repair attempt and then a fixed Cthuwu
     fallback rather than leaking the configured model identity as the companion.
-  - Deterministic local behavior is the default.
-  - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code changes.
-  - The operator must explicitly select a provider before any message content leaves the machine.
+  - The operator lane independently enforces the same Cthuwu/model distinction and requires its
+    recognizable all-caps theatrical voice to retain light readable uwu touches.
+  - The compiled preference is Venice `e2ee-deepseek-v4-flash` in TEE-only mode; a configured Venice
+    credential is the explicit opt-in that permits remote prompt egress.
+  - Before Venice first receives prompt content, the runtime requires the exact live model to
+    advertise text, TEE-attestation, and function-calling capabilities and performs a fresh
+    nonce/model-bound baseline attestation, cached for at most five minutes. It rejects explicitly
+    reported debug mode but does not claim full E2EE or independent Intel/NVIDIA evidence validation.
+  - Venice-native system prompting, web search, scraping, citations, and X search are explicitly
+    disabled; public web search remains the separate opt-in Brave tool.
+  - Missing credentials, attestation/provider errors, exhausted balance, rate limits, and other
+    inference failures fall back to credential-free loopback Ollama and then deterministic behavior.
+    A locally selected provider never falls forward to a remote provider.
+  - Authenticated direct `/provider` and `/model` commands switch the node-wide route using only a
+    closed provider set and bounded model IDs. Only names persist; credentials and endpoints do not.
+  - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code
+    changes. Loopback clients bypass ambient proxy settings, and Ollama's bounded whole-response
+    timeout is configurable.
   - Profile text is labeled as untrusted user data, not injected as a system message.
   - Public model output is UTF-8 safely bounded and can call only optional `web_search`; it cannot
     execute local tools or mutate files.
@@ -232,10 +247,18 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Test Criteria**:
   - [x] Deterministic tests verify stable, non-echoing core behavior.
   - [x] OpenAI-compatible and Ollama configuration is implemented behind one adapter.
+  - [x] Venice TEE mode validates exact capabilities and fresh baseline attestation before prompt
+    egress, disables Venice's supplemental system prompt, and does not claim full E2EE.
+  - [x] Operator-only provider/model switching is bounded, persisted without secrets, denied to
+    public users, and clears in-process operator history after a route change.
+  - [x] Remote failure falls through loopback Ollama to deterministic local behavior without a
+    local-to-remote fallback path.
   - [x] Logs omit message bodies and credentials by default.
   - [x] Provider failure produces a useful response without losing contact state.
   - [x] Tests cover the reported Mistral self-identification failure, public prompt invariants, one
     identity repair, and a public tool schema containing no operator capabilities.
+  - [x] The reported operator-lane Mistral self-identification receives one repair attempt and a
+    fixed Cthuwu fallback instead of being uppercased and delivered.
   - [x] Search result parsing, URL validation, limits, and credential-bearing endpoint rejection are tested.
   - [ ] A live local Ollama request passes with bounded context and output.
   - [ ] A live selected remote provider request passes without credential leakage.
@@ -261,17 +284,38 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     public chat, or create contact notes. Revocation persists as a blocking tombstone.
   - Authorization applies to the whole XMTP inbox. Every installation legitimately attached to that
     inbox has operator authority; per-installation authorization is not implemented.
-  - Operator replies use an enforced all-caps, theatrical ominous/submissive voice while excluding
-    code and bounded runtime-provided tool renderings from prose uppercasing. Process streams are
+  - Operator replies use an enforced all-caps, theatrical ominous/submissive Cthuwu voice with
+    light readable uwu touches while excluding code and bounded runtime-provided tool renderings
+    from prose uppercasing. Process streams are
     truncated and decoded as potentially lossy UTF-8, not preserved byte-exactly. The prompt requires
     truthful receipts and explicit failure rather than invented success.
-  - Direct operator commands and model tool calls share a closed tool dispatcher:
-    `read_file`, `write_file`, `edit_file`, literal `rg` search, optional external QMD search, and
-    `exec`. Operator mode deliberately contains no web-search tool.
+  - Protected instance `SOUL.md` and shared `memories/MEMORY.md` are seeded once; a separate
+    `operators/<inbox-id>.md` profile is seeded for each authenticated operator on first use. Each
+    request loads a globally bounded snapshot plus the workspace's first project context file,
+    workspace `MEMORY.md`, a top-level manifest, and a compact `skills/*/SKILL.md` index; full skills
+    remain progressive `read_file` reads. Bounded in-process dialogue history is also isolated by
+    operator inbox and cleared on restart.
+  - Auto-loaded workspace context is untrusted reference data. A current-message project-inspection
+    request coarsely delegates bounded reads across the configured workspace, so context may influence
+    selected paths and results may reach the model endpoint. It cannot expose effects or contact access.
+    Identity-repair inference runs with an empty tool schema.
+  - Model inference receives only bounded `list_files`, `read_file`, literal `rg` search, and optional
+    external QMD search. Exact direct `/write`, `/edit`, and `/exec` commands retain the bounded shared
+    dispatcher without exposing effectful schemas to workspace prompt injection. Terminal
+    `list_users`/`get_user` access is likewise limited to strict runtime routing or direct commands.
+    Operator mode deliberately contains no web-search tool.
+  - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
+    describe only retained local notes, distinguish observations from unverified user assertions,
+    redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
+    omit raw DMs/message counts, and terminate without returning contact text to the model. This
+    guarantee covers those dedicated tools; unsandboxed direct `/exec` retains the service
+    account's ambient filesystem access.
   - File helpers stay under `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
     targets, page UTF-8 reads at 12 KiB, cap writes/edits at 1 MiB, and write atomically. The agent
     loop and child processes have hard step, output, and 1–300 second tool-timeout limits, subordinate
     to the bridge's 2–300 second end-to-end deadline.
+  - Startup rejects canonical overlap between the operator root and private data root in either
+    direction, preventing workspace reads from reaching XMTP identity, contacts, or agent profiles.
   - `exec` starts in the operator root with a secret-stripped environment, but is intentionally
     unsandboxed within the permissions of the `uwubot` OS account. Production operation therefore
     requires a dedicated unprivileged service account or container.
@@ -292,6 +336,15 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Tool tests cover the closed schema, direct dispatch, traversal/symlink rejection, bounded
     reads/writes/edits, process status, timeout/output handling, and API-key removal from child
     process environments.
+  - [x] Tests cover protected Markdown seeding without overwrite, per-operator profile/history
+    isolation, project memory/context and skill discovery, bounded file listing, and a workspace
+    manifest.
+  - [x] A natural operator request for users returns retained contacts from a disjoint data root,
+    redacts inbox IDs, labels provenance/scope, provides cursor pagination, reports truncation, and
+    cannot turn hostile contact text into an exec. Negated, policy, and count-only requests do not
+    disclose profiles; contact scans and note reads are bounded.
+  - [x] Tests reject autonomous tools from auto-loaded context, side effects during identity repair,
+    and contact reads after an earlier privileged tool step.
   - [x] Operator prose casing excludes code and bounded tool renderings from uppercase transformation.
   - [ ] A manual release test authorizes, uses, revokes, and rechecks an operator inbox over live XMTP.
   - [ ] An external security review covers XMTP installation compromise/revocation, OS isolation,

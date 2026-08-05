@@ -87,6 +87,10 @@ test_rejected "model credential after option terminator" \
   uwu_parse_arguments -- "--model-api-key=$secret_marker"
 test_rejected "split model credential after option terminator" \
   uwu_parse_arguments -- --model-api-key "$secret_marker"
+test_rejected "Venice credential argument" \
+  uwu_parse_arguments "--venice-api-key=$secret_marker"
+test_rejected "Venice credential after option terminator" \
+  uwu_parse_arguments -- "--venice-api-key=$secret_marker"
 set +e
 search_secret_error="$(
   (uwu_parse_arguments "--web-search-api-key=$search_secret_marker") 2>&1
@@ -197,6 +201,8 @@ uwu_acquire_runtime_lock
 uwu_release_runtime_lock
 
 export UWUBOT_MODEL_API_KEY="$secret_marker"
+export UWUBOT_VENICE_API_KEY="$secret_marker"
+export VENICE_API_KEY="$secret_marker"
 export UWUBOT_WEB_SEARCH_API_KEY="$search_secret_marker"
 export XMTP_WALLET_KEY="wallet-secret-must-not-appear"
 export XMTP_DB_ENCRYPTION_KEY="database-secret-must-not-appear"
@@ -207,6 +213,8 @@ export RUSTC_WRAPPER="untrusted-rustc-wrapper"
 export RUSTC_WORKSPACE_WRAPPER="untrusted-workspace-wrapper"
 uwu_without_runtime_secrets /bin/sh -c '
   test -z "${UWUBOT_MODEL_API_KEY+x}" &&
+  test -z "${UWUBOT_VENICE_API_KEY+x}" &&
+  test -z "${VENICE_API_KEY+x}" &&
   test -z "${UWUBOT_WEB_SEARCH_API_KEY+x}" &&
   test -z "${XMTP_WALLET_KEY+x}" &&
   test -z "${XMTP_DB_ENCRYPTION_KEY+x}" &&
@@ -217,9 +225,14 @@ uwu_without_runtime_secrets /bin/sh -c '
   test -z "${RUSTC_WORKSPACE_WRAPPER+x}"
 ' || test_fail "build subprocess inherited runtime secrets"
 test_equal "$secret_marker" "$UWUBOT_MODEL_API_KEY" "runtime credential preservation"
+test_equal "$secret_marker" "$UWUBOT_VENICE_API_KEY" \
+  "runtime namespaced Venice credential preservation"
+test_equal "$secret_marker" "$VENICE_API_KEY" \
+  "runtime official Venice credential preservation"
 test_equal "$search_secret_marker" "$UWUBOT_WEB_SEARCH_API_KEY" \
   "web-search credential preservation"
-unset UWUBOT_MODEL_API_KEY UWUBOT_WEB_SEARCH_API_KEY
+unset UWUBOT_MODEL_API_KEY UWUBOT_VENICE_API_KEY VENICE_API_KEY
+unset UWUBOT_WEB_SEARCH_API_KEY
 unset XMTP_WALLET_KEY XMTP_DB_ENCRYPTION_KEY
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET
 unset RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER

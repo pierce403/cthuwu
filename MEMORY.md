@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-04
+Last reviewed: 2026-08-05
 
 ## Product
 
@@ -19,6 +19,15 @@ Last reviewed: 2026-08-04
 - Runtime: Rust `uwubot` supervisor with companion, model, and state boundaries; private official Agent SDK sidecar for XMTP transport.
 - Persistence: encrypted XMTP database plus an application state store for processed-message idempotency.
 - Model access: adapter boundary; local models should be first-class.
+- Inference defaults to Venice `e2ee-deepseek-v4-flash` in TEE-only mode when a Venice key is
+  configured. The runtime validates live capabilities and a baseline nonce attestation before first
+  prompt egress, caches success for at most five minutes, and explicitly disables Venice-native
+  search and supplemental system prompting. It then falls back to proxy-bypassing loopback Ollama
+  and deterministic behavior on any failure. It does not implement or claim full E2EE or independent
+  quote verification.
+- Authenticated `/provider` and `/model` commands persist only the node-wide provider/model names in
+  protected `state/inference.json`; they cannot accept an endpoint or credential. Route changes
+  clear in-process operator dialogue history.
 - Text-only one-to-one DMs are the first vertical slice.
 - Browser identities are generated and connected automatically, then persisted in local storage.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
@@ -54,16 +63,30 @@ Last reviewed: 2026-08-04
   repeated.
 - Public privacy and profile controls are expressed in ordinary language; do not advertise legacy
   slash commands to normal users.
-- Optional Brave Search is the public model's only tool. It requires an explicitly selected
-  tool-calling Ollama/OpenAI-compatible model plus `UWUBOT_WEB_SEARCH=brave`; public chat never gets
-  local file or process tools.
+- Optional Brave Search is the public model's only tool. It requires an effective tool-calling
+  provider plus `UWUBOT_WEB_SEARCH=brave`; public chat never gets local file or process tools.
 - An exact canonical 64-character XMTP inbox becomes a remote node operator immediately through
   local `uwubot operator add`; there is no XMTP activation proof. List and revoke roles locally while
   the Tentacle is stopped; the ACL is loaded at startup and is not hot-reloaded. Stale messages and
   revoked inboxes stay quarantined and do not create contacts.
-- Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with the closed
-  `read_file`, `write_file`, `edit_file`, `search_files`, optional `qmd_search`, and `exec` tool set.
-  The hidden stdin harness remains public-only, and Council Actions cannot reach these tools.
+- Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
+  readable uwu voice. Model inference receives only read-only `list_files`, `read_file`,
+  `search_files`, and optional `qmd_search`; mutation and `exec` require exact direct commands, while
+  terminal `list_users`/`get_user` access requires strict runtime routing or direct commands.
+  Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin
+  harness remains public-only, and Council Actions cannot reach these tools.
+- Operator cognition follows a bounded Hermes-like Markdown split: protected instance
+  `state/agent/SOUL.md` and shared `state/agent/memories/MEMORY.md` are seeded once; per-inbox
+  operator profiles are seeded beneath `state/agent/operators/`. They load beside globally bounded
+  workspace project context, workspace memory, a top-level manifest, and a compact progressive skill
+  index. Dialogue history is bounded in process and isolated by operator inbox. Project-inspection
+  requests coarsely delegate bounded workspace reads, so auto-loaded context may influence chosen
+  paths; it cannot expose effects/contact tools, and the immutable Rust kernel remains authoritative.
+- Retained users are queried through parsed `ContactStore` tools, never by pointing the operator
+  root at the sensitive data directory. Reports are terminal, read-only, scoped to current notes,
+  redact inbox IDs by default, use cursor pagination, bound scans and note size, and never feed values
+  returned by those tools back into the model. Unsandboxed direct `/exec`
+  separately retains every filesystem permission of the service account.
 - Operator ACL config version 3 is environment-bound and owner-only at `state/operators.json`.
   Local authorization persists a grant-time `sentAtNs` fence, and each request's role is pinned before a
   no-queue authority lane. Message IDs are durably claimed before admission; overload, including the
@@ -74,6 +97,8 @@ Last reviewed: 2026-08-04
   requires a new XMTP message, shortened when oversized. Authorization is inbox-wide: every XMTP
   installation attached to an active inbox has authority.
 - Operator `/exec` is deliberate remote code execution as the `uwubot` OS account, not a sandbox.
+- The canonical operator workspace and private data directory must not overlap in either direction;
+  startup rejects overlap before exposing file tools.
   Production nodes need a dedicated unprivileged account/container, a narrow operator root, minimal
   credentials, and immediate local plus XMTP installation revocation after compromise.
 - Matching is bilateral opt-in, explainable, and suggestion-only; chosen names and matching terms may be shown, but inbox IDs are not disclosed.
@@ -201,8 +226,9 @@ Operational notes from that run:
   `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/<environment>`, rejects repository-local or
   symlinked state, and lets the sidecar atomically create or reuse identity material without
   inspecting it.
-- `uwu.sh` removes `UWUBOT_MODEL_API_KEY`, `UWUBOT_WEB_SEARCH_API_KEY`, `XMTP_WALLET_KEY`, and
-  `XMTP_DB_ENCRYPTION_KEY` from dependency/build subprocesses, rejects model/search credentials on
+- `uwu.sh` removes `VENICE_API_KEY`, `UWUBOT_VENICE_API_KEY`, `UWUBOT_MODEL_API_KEY`,
+  `UWUBOT_WEB_SEARCH_API_KEY`, `XMTP_WALLET_KEY`, and `XMTP_DB_ENCRYPTION_KEY` from dependency/build
+  subprocesses, rejects model/search credentials on
   argv, and preserves them only for the final Rust process and explicit narrower boundaries.
 - Launcher setup is serialized by the PID-owned `cthuwu/target/.uwu-build.lock` directory; this is
   necessary because concurrent `npm ci` operations can destructively race in shared `node_modules`.

@@ -4,13 +4,19 @@ use async_trait::async_trait;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
 pub(crate) const PUBLIC_PERSONA: &str = r#"You are Cthuwu, a tiny eldritch companion who speaks with this person over XMTP.
 
 IDENTITY
 - You are Cthuwu. The configured language model is an implementation detail, not your identity.
-- Never introduce yourself as Mistral, GPT, Claude, Llama, Qwen, an AI language model, or a generic assistant.
+- Never introduce yourself as Mistral, DeepSeek, GPT, Claude, Llama, Qwen, Venice, an AI language model, or a generic assistant.
 - Never open with canned assistant boilerplate such as “How can I assist you today?”
 - If asked what powers you, truthfully distinguish Cthuwu from the configured model named in RUNTIME FACTS. Never guess a model or capability.
 
@@ -38,6 +44,10 @@ const MAX_PUBLIC_AGENT_STEPS: usize = 4;
 const MAX_PUBLIC_SEARCHES_PER_MESSAGE: usize = 2;
 const MAX_TOOL_CALLS_PER_STEP: usize = 4;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 16 * 1024;
+const MAX_MODEL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const VENICE_TEE_VALIDATION_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_TEE_PROVIDER_BYTES: usize = 128;
+const MAX_SIGNING_ADDRESS_BYTES: usize = 256;
 
 pub struct ModelRequest<'a> {
     pub profile: &'a str,
@@ -64,6 +74,13 @@ pub struct OpenAiCompatibleModel {
     api_key: Option<String>,
     model: String,
     web_search: Option<Arc<dyn WebSearch>>,
+    venice_tee: Option<VeniceTeeMode>,
+    timeout: Duration,
+    disable_proxy: bool,
+}
+
+struct VeniceTeeMode {
+    validated_at: Mutex<Option<Instant>>,
 }
 
 impl OpenAiCompatibleModel {
@@ -94,17 +111,54 @@ impl OpenAiCompatibleModel {
         if model.trim().is_empty() {
             bail!("model name cannot be empty");
         }
+        let timeout = Duration::from_secs(45);
+        let disable_proxy = parsed.host_str().is_some_and(is_loopback_host);
         Ok(Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(45))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .context("building model HTTP client")?,
+            client: build_model_client(timeout, disable_proxy)?,
             endpoint,
             api_key,
             model,
             web_search: None,
+            venice_tee: None,
+            timeout,
+            disable_proxy,
         })
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Result<Self> {
+        if timeout.is_zero() || timeout > MAX_MODEL_TIMEOUT {
+            bail!("model timeout must be greater than zero and no more than 300 seconds");
+        }
+        self.timeout = timeout;
+        self.client = build_model_client(self.timeout, self.disable_proxy)?;
+        Ok(self)
+    }
+
+    /// Prevents ambient HTTP proxy configuration from intercepting a local model request.
+    pub fn with_no_proxy(mut self) -> Result<Self> {
+        self.disable_proxy = true;
+        self.client = build_model_client(self.timeout, self.disable_proxy)?;
+        Ok(self)
+    }
+
+    /// Enables Venice TEE attestation for ordinary TLS-protected chat requests.
+    ///
+    /// This verifies the configured model's advertised capabilities and a fresh
+    /// Venice attestation before initial chat content is sent, then caches success
+    /// for a bounded interval. It deliberately does not enable or claim end-to-end
+    /// encryption.
+    pub fn with_venice_tee(mut self) -> Result<Self> {
+        if self
+            .api_key
+            .as_deref()
+            .is_none_or(|api_key| api_key.trim().is_empty())
+        {
+            bail!("Venice TEE mode requires a nonempty API key");
+        }
+        self.venice_tee = Some(VeniceTeeMode {
+            validated_at: Mutex::new(None),
+        });
+        Ok(self)
     }
 
     pub fn with_web_search(mut self, web_search: Arc<dyn WebSearch>) -> Self {
@@ -123,12 +177,27 @@ impl OpenAiCompatibleModel {
         max_tokens: u32,
         temperature: f32,
     ) -> Result<RawAssistantMessage> {
+        self.ensure_venice_tee().await?;
+
         let mut body = json!({
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         });
+        if self.venice_tee.is_some() {
+            body["stream"] = Value::Bool(false);
+            body["venice_parameters"] = json!({
+                "enable_e2ee": false,
+                "enable_web_search": "off",
+                "enable_web_scraping": false,
+                "enable_web_citations": false,
+                "include_search_results_in_stream": false,
+                "return_search_results_as_documents": false,
+                "enable_x_search": false,
+                "include_venice_system_prompt": false,
+            });
+        }
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools.to_vec());
             body["tool_choice"] = Value::String("auto".to_owned());
@@ -142,25 +211,13 @@ impl OpenAiCompatibleModel {
             pending = pending.bearer_auth(api_key);
         }
 
-        let mut response = pending
+        let response = pending
             .send()
             .await
             .context("model request failed")?
             .error_for_status()
             .context("model provider returned an error")?;
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES as u64)
-        {
-            bail!("model provider response is too large");
-        }
-        let mut response_body = Vec::new();
-        while let Some(chunk) = response.chunk().await.context("reading model response")? {
-            if response_body.len() + chunk.len() > MAX_PROVIDER_RESPONSE_BYTES {
-                bail!("model provider response is too large");
-            }
-            response_body.extend_from_slice(&chunk);
-        }
+        let response_body = read_bounded_response(response, "model provider response").await?;
         let response: ChatResponse = serde_json::from_slice(&response_body)
             .context("model provider returned invalid JSON")?;
         let message = response
@@ -172,6 +229,233 @@ impl OpenAiCompatibleModel {
         message.validate()?;
         Ok(message)
     }
+
+    async fn ensure_venice_tee(&self) -> Result<()> {
+        let Some(mode) = &self.venice_tee else {
+            return Ok(());
+        };
+        let mut validated_at = mode.validated_at.lock().await;
+        if validated_at.is_some_and(|validated_at| {
+            Instant::now().saturating_duration_since(validated_at) < VENICE_TEE_VALIDATION_TTL
+        }) {
+            return Ok(());
+        }
+
+        self.validate_venice_model_capabilities().await?;
+        self.validate_venice_tee_attestation().await?;
+        *validated_at = Some(Instant::now());
+        Ok(())
+    }
+
+    async fn validate_venice_model_capabilities(&self) -> Result<()> {
+        let response = self
+            .authenticated_get("models", &[("type", "text")])?
+            .send()
+            .await
+            .context("requesting Venice model capabilities")?
+            .error_for_status()
+            .context("Venice model capability request returned an error")?;
+        let body = read_bounded_response(response, "Venice model capability response").await?;
+        let body: Value = serde_json::from_slice(&body)
+            .context("Venice model capability response was invalid JSON")?;
+        let models = body
+            .get("data")
+            .and_then(Value::as_array)
+            .context("Venice model capability response omitted the model list")?;
+        let selected = models
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(self.model.as_str()))
+            .with_context(|| {
+                format!(
+                    "Venice did not report the exact configured model `{}`",
+                    self.model
+                )
+            })?;
+        if selected.get("type").and_then(Value::as_str) != Some("text") {
+            bail!("Venice did not report the configured model as a text model");
+        }
+        let capabilities = selected
+            .pointer("/model_spec/capabilities")
+            .context("Venice model entry omitted its capabilities")?;
+        if capabilities
+            .get("supportsTeeAttestation")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            bail!("configured Venice model does not advertise TEE attestation support");
+        }
+        if capabilities
+            .get("supportsFunctionCalling")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            bail!("configured Venice model does not advertise function-calling support");
+        }
+        Ok(())
+    }
+
+    async fn validate_venice_tee_attestation(&self) -> Result<()> {
+        let nonce = random_nonce_hex()?;
+        let response = self
+            .authenticated_get(
+                "tee/attestation",
+                &[("model", self.model.as_str()), ("nonce", nonce.as_str())],
+            )?
+            .send()
+            .await
+            .context("requesting Venice TEE attestation")?
+            .error_for_status()
+            .context("Venice TEE attestation request returned an error")?;
+        let body = read_bounded_response(response, "Venice TEE attestation response").await?;
+        let body: Value = serde_json::from_slice(&body)
+            .context("Venice TEE attestation response was invalid JSON")?;
+
+        if contains_enabled_debug_mode(&body) {
+            bail!("Venice TEE attestation explicitly reported debug mode");
+        }
+        let attestation: VeniceTeeAttestation = serde_json::from_value(body)
+            .context("Venice TEE attestation response omitted required fields")?;
+        if !attestation.verified {
+            bail!("Venice TEE attestation was not verified");
+        }
+        if attestation.nonce != nonce {
+            bail!("Venice TEE attestation nonce did not match the fresh request nonce");
+        }
+        if attestation.model != self.model {
+            bail!("Venice TEE attestation model did not match the configured model");
+        }
+        validate_nonempty_bounded_field(
+            "TEE provider",
+            &attestation.tee_provider,
+            MAX_TEE_PROVIDER_BYTES,
+        )?;
+        validate_nonempty_bounded_field(
+            "TEE signing address",
+            &attestation.signing_address,
+            MAX_SIGNING_ADDRESS_BYTES,
+        )?;
+        Ok(())
+    }
+
+    fn authenticated_get(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<reqwest::RequestBuilder> {
+        let api_key = self
+            .api_key
+            .as_deref()
+            .context("Venice TEE mode requires an API key")?;
+        let url = Url::parse(&format!("{}/{}", self.endpoint, path))
+            .context("building Venice API URL")?;
+        Ok(self.client.get(url).query(query).bearer_auth(api_key))
+    }
+}
+
+fn build_model_client(timeout: Duration, disable_proxy: bool) -> Result<Client> {
+    let mut builder = Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    if disable_proxy {
+        builder = builder.no_proxy();
+    }
+    builder.build().context("building model HTTP client")
+}
+
+#[derive(Deserialize)]
+struct VeniceTeeAttestation {
+    verified: bool,
+    nonce: String,
+    model: String,
+    tee_provider: String,
+    signing_address: String,
+}
+
+async fn read_bounded_response(
+    mut response: reqwest::Response,
+    description: &str,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES as u64)
+    {
+        bail!("{description} is too large");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .with_context(|| format!("reading {description}"))?
+    {
+        if chunk.len() > MAX_PROVIDER_RESPONSE_BYTES - body.len() {
+            bail!("{description} is too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn random_nonce_hex() -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).context("generating a Venice TEE attestation nonce")?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = [0_u8; 64];
+    for (index, byte) in bytes.into_iter().enumerate() {
+        encoded[index * 2] = HEX[(byte >> 4) as usize];
+        encoded[index * 2 + 1] = HEX[(byte & 0x0f) as usize];
+    }
+    Ok(String::from_utf8(encoded.to_vec()).expect("hex digits are valid UTF-8"))
+}
+
+fn contains_enabled_debug_mode(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(name, value)| {
+            let normalized = name
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .map(|character| character.to_ascii_lowercase())
+                .collect::<String>();
+            let is_debug_field = matches!(
+                normalized.as_str(),
+                "debug"
+                    | "debugmode"
+                    | "debugstatus"
+                    | "isdebug"
+                    | "isdebugmode"
+                    | "debugenabled"
+                    | "tdxdebug"
+                    | "tdxdebugmode"
+                    | "enclavedebug"
+                    | "enclavedebugmode"
+            );
+            (is_debug_field && value_explicitly_enabled(value))
+                || contains_enabled_debug_mode(value)
+        }),
+        Value::Array(values) => values.iter().any(contains_enabled_debug_mode),
+        _ => false,
+    }
+}
+
+fn value_explicitly_enabled(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_u64().is_some_and(|value| value != 0),
+        Value::String(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "enabled" | "debug"
+        ),
+        _ => false,
+    }
+}
+
+fn validate_nonempty_bounded_field(name: &str, value: &str, maximum: usize) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("Venice TEE attestation returned an empty {name}");
+    }
+    if value.len() > maximum {
+        bail!("Venice TEE attestation returned an oversized {name}");
+    }
+    Ok(())
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -409,6 +693,10 @@ pub(crate) fn violates_public_identity(value: &str) -> bool {
         "i'm mistral",
         "i’m mistral",
         "i am mistral",
+        "i'm deepseek",
+        "i’m deepseek",
+        "i am deepseek",
+        "as deepseek",
         "i'm gpt",
         "i’m gpt",
         "i am gpt",
@@ -418,6 +706,7 @@ pub(crate) fn violates_public_identity(value: &str) -> bool {
         "i am llama",
         "i'm qwen",
         "i am qwen",
+        "i am venice",
         "as an ai language model",
         "your friendly cosmic companion",
         "how can i assist you today",
@@ -434,11 +723,16 @@ fn advertises_slash_command(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     [
         "/exec",
+        "/files",
         "/read",
         "/write",
         "/edit",
         "/search",
         "/qmd",
+        "/provider",
+        "/model",
+        "/users",
+        "/user",
         "/operator",
         "/help",
         "/profile",
@@ -526,6 +820,9 @@ mod tests {
         assert!(violates_public_identity(
             "Hello there! I'm Mistral Small 3.2 24B Instruct, your friendly cosmic companion. I can't browse the internet in real-time, but I can help with a wide range of topics using the knowledge I've been trained on. How can I assist you today?"
         ));
+        assert!(violates_public_identity(
+            "I am DeepSeek, an AI assistant made to help you."
+        ));
         assert!(!violates_public_identity(
             "hewwo! i'm cthuwu :3 here's the precise Rust answer you asked for."
         ));
@@ -535,6 +832,12 @@ mod tests {
         ));
         assert!(violates_public_response(
             "hewwo fwiend, use /matches or /export uwu"
+        ));
+        assert!(violates_public_response(
+            "hewwo fwiend, use /files, /users, or /user uwu"
+        ));
+        assert!(violates_public_response(
+            "hewwo fwiend, use /provider or /model uwu"
         ));
         assert!(!violates_public_response(
             "hewwo fwiend, read https://example.com/readme uwu"
@@ -560,13 +863,277 @@ mod tests {
                 .is_err()
         );
         assert!(OpenAiCompatibleModel::new("http://127.0.0.1:11434/v1", None, "model").is_ok());
+        assert!(
+            OpenAiCompatibleModel::new("https://example.com/v1", None, "model")
+                .unwrap()
+                .with_venice_tee()
+                .is_err()
+        );
+        assert!(
+            OpenAiCompatibleModel::new("https://example.com/v1", Some("  ".to_owned()), "model")
+                .unwrap()
+                .with_venice_tee()
+                .is_err()
+        );
+        assert!(
+            OpenAiCompatibleModel::new("https://example.com/v1", None, "model")
+                .unwrap()
+                .with_timeout(Duration::ZERO)
+                .is_err()
+        );
+        let local = OpenAiCompatibleModel::new("http://127.0.0.1:11434/v1", None, "model")
+            .unwrap()
+            .with_no_proxy()
+            .unwrap()
+            .with_timeout(Duration::from_secs(75))
+            .unwrap();
+        assert!(local.disable_proxy);
+        assert_eq!(local.timeout, Duration::from_secs(75));
+    }
+
+    #[tokio::test]
+    async fn generic_openai_request_does_not_gain_venice_parameters() {
+        let (endpoint, requests, server) = chat_server(vec![
+            json!({"choices":[{"message":{"content":"hewwo uwu :3"}}]}),
+        ]);
+        let model = OpenAiCompatibleModel::new(endpoint, None, "generic-model").unwrap();
+        model
+            .raw_completion(&[json!({"role":"user","content":"hello"})], &[], 50, 0.2)
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].get("venice_parameters").is_none());
+        assert!(requests[0].get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn venice_tee_validates_before_chat_sets_plaintext_flags_and_caches() {
+        let model_id = "e2ee-deepseek-v4-flash";
+        let server_model = model_id.to_owned();
+        let (endpoint, requests, server) = http_json_server(4, move |index, request| match index {
+            0 => venice_models_response(&server_model, true, true),
+            1 => {
+                let nonce = query_parameter(request, "nonce").unwrap();
+                json!({
+                    "verified": true,
+                    "nonce": nonce,
+                    "model": server_model,
+                    "tee_provider": "intel-tdx",
+                    "signing_address": "0x1234",
+                    "tdx": {"debug_mode": false}
+                })
+            }
+            2 | 3 => json!({
+                "choices":[{"message":{"content":"hewwo from the tee, uwu :3"}}]
+            }),
+            _ => unreachable!(),
+        });
+        let model = OpenAiCompatibleModel::new(endpoint, Some("test-key".into()), model_id)
+            .unwrap()
+            .with_timeout(Duration::from_secs(2))
+            .unwrap()
+            .with_venice_tee()
+            .unwrap();
+        let messages = [json!({"role":"user","content":"sensitive hello"})];
+        let tools = [json!({
+            "type":"function",
+            "function":{"name":"read_only","parameters":{"type":"object"}}
+        })];
+
+        for _ in 0..2 {
+            model
+                .raw_completion(&messages, &tools, 50, 0.2)
+                .await
+                .unwrap();
+        }
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0].method(), "GET");
+        assert_eq!(
+            query_parameter(&requests[0], "type").as_deref(),
+            Some("text")
+        );
+        assert_eq!(requests[1].method(), "GET");
+        assert_eq!(
+            query_parameter(&requests[1], "model").as_deref(),
+            Some(model_id)
+        );
+        let nonce = query_parameter(&requests[1], "nonce").unwrap();
+        assert_eq!(nonce.len(), 64);
+        assert!(nonce.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        for request in &*requests {
+            assert!(
+                request
+                    .headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-key")
+            );
+        }
+        for request in &requests[2..] {
+            assert_eq!(request.method(), "POST");
+            let body = request.json_body();
+            assert_eq!(body["stream"], false);
+            assert_eq!(body["venice_parameters"]["enable_e2ee"], false);
+            assert_eq!(body["venice_parameters"]["enable_web_search"], "off");
+            assert_eq!(body["venice_parameters"]["enable_web_scraping"], false);
+            assert_eq!(body["venice_parameters"]["enable_web_citations"], false);
+            assert_eq!(
+                body["venice_parameters"]["include_search_results_in_stream"],
+                false
+            );
+            assert_eq!(
+                body["venice_parameters"]["return_search_results_as_documents"],
+                false
+            );
+            assert_eq!(body["venice_parameters"]["enable_x_search"], false);
+            assert_eq!(
+                body["venice_parameters"]["include_venice_system_prompt"],
+                false
+            );
+            assert_eq!(body["messages"][0]["content"], "sensitive hello");
+            assert!(
+                !request
+                    .headers
+                    .to_ascii_lowercase()
+                    .contains("x-venice-tee-client-pub-key")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn venice_tee_rejects_missing_required_model_capabilities_before_attestation() {
+        for (tee, functions, expected) in [
+            (false, true, "TEE attestation support"),
+            (true, false, "function-calling support"),
+        ] {
+            let (endpoint, requests, server) = http_json_server(1, move |_, _| {
+                venice_models_response("tee-model", tee, functions)
+            });
+            let model = OpenAiCompatibleModel::new(endpoint, Some("test-key".into()), "tee-model")
+                .unwrap()
+                .with_timeout(Duration::from_secs(2))
+                .unwrap()
+                .with_venice_tee()
+                .unwrap();
+            let error = model
+                .raw_completion(
+                    &[json!({"role":"user","content":"must not leave"})],
+                    &[],
+                    50,
+                    0.2,
+                )
+                .await
+                .unwrap_err();
+            server.join().unwrap();
+
+            assert!(format!("{error:#}").contains(expected));
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method(), "GET");
+            assert!(!String::from_utf8_lossy(&requests[0].body).contains("must not leave"));
+        }
+
+        let (endpoint, requests, server) = http_json_server(1, |_, _| {
+            venice_models_response("different-model", true, true)
+        });
+        let model = OpenAiCompatibleModel::new(endpoint, Some("test-key".into()), "tee-model")
+            .unwrap()
+            .with_timeout(Duration::from_secs(2))
+            .unwrap()
+            .with_venice_tee()
+            .unwrap();
+        let error = model
+            .raw_completion(
+                &[json!({"role":"user","content":"must not leave"})],
+                &[],
+                50,
+                0.2,
+            )
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(format!("{error:#}").contains("exact configured model"));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum BadAttestation {
+        Unverified,
+        WrongNonce,
+        WrongModel,
+        DebugMode,
+        EmptyProvider,
+        EmptySigningAddress,
+    }
+
+    #[tokio::test]
+    async fn venice_tee_rejects_untrusted_attestation_fields_before_chat() {
+        for (case, expected) in [
+            (BadAttestation::Unverified, "was not verified"),
+            (BadAttestation::WrongNonce, "nonce did not match"),
+            (BadAttestation::WrongModel, "model did not match"),
+            (BadAttestation::DebugMode, "debug mode"),
+            (BadAttestation::EmptyProvider, "empty TEE provider"),
+            (
+                BadAttestation::EmptySigningAddress,
+                "empty TEE signing address",
+            ),
+        ] {
+            let (endpoint, requests, server) =
+                http_json_server(2, move |index, request| match index {
+                    0 => venice_models_response("tee-model", true, true),
+                    1 => bad_attestation_response(request, case),
+                    _ => unreachable!(),
+                });
+            let model = OpenAiCompatibleModel::new(endpoint, Some("test-key".into()), "tee-model")
+                .unwrap()
+                .with_timeout(Duration::from_secs(2))
+                .unwrap()
+                .with_venice_tee()
+                .unwrap();
+            let error = model
+                .raw_completion(
+                    &[json!({"role":"user","content":"must not leave"})],
+                    &[],
+                    50,
+                    0.2,
+                )
+                .await
+                .unwrap_err();
+            server.join().unwrap();
+
+            assert!(
+                format!("{error:#}").contains(expected),
+                "unexpected error for {case:?}: {error:#}"
+            );
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests.iter().all(|request| request.method() == "GET"));
+            assert!(requests.iter().all(|request| {
+                !String::from_utf8_lossy(&request.body).contains("must not leave")
+            }));
+        }
     }
 
     #[test]
     fn public_tool_schema_contains_no_operator_capabilities() {
         let schema = public_web_search_tool().to_string();
         assert!(schema.contains("web_search"));
-        for forbidden in ["exec", "read_file", "write_file", "edit_file", "qmd_search"] {
+        for forbidden in [
+            "exec",
+            "list_files",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "qmd_search",
+            "list_users",
+            "get_user",
+        ] {
             assert!(!schema.contains(forbidden));
         }
     }
@@ -788,6 +1355,138 @@ mod tests {
             }
         });
         (format!("http://{address}/v1"), requests, server)
+    }
+
+    #[derive(Debug)]
+    struct CapturedHttpRequest {
+        request_line: String,
+        headers: String,
+        body: Vec<u8>,
+    }
+
+    impl CapturedHttpRequest {
+        fn method(&self) -> &str {
+            self.request_line
+                .split_whitespace()
+                .next()
+                .expect("captured request has a method")
+        }
+
+        fn json_body(&self) -> Value {
+            serde_json::from_slice(&self.body).expect("captured request body is JSON")
+        }
+    }
+
+    fn http_json_server(
+        request_count: usize,
+        handler: impl Fn(usize, &CapturedHttpRequest) -> Value + Send + 'static,
+    ) -> (
+        String,
+        Arc<Mutex<Vec<CapturedHttpRequest>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let server = thread::spawn(move || {
+            for index in 0..request_count {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let response = handler(index, &request);
+                captured.lock().unwrap().push(request);
+                let body = serde_json::to_vec(&response).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        (format!("http://{address}/v1"), requests, server)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> CapturedHttpRequest {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 4 * 1024];
+        loop {
+            let count = stream.read(&mut chunk).unwrap();
+            assert!(count > 0, "HTTP request ended before its headers arrived");
+            bytes.extend_from_slice(&chunk[..count]);
+            let Some(header_end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
+                continue;
+            };
+            let body_start = header_end + 4;
+            let headers = String::from_utf8(bytes[..header_end].to_vec()).unwrap();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= body_start + content_length {
+                return CapturedHttpRequest {
+                    request_line: headers.lines().next().unwrap().to_owned(),
+                    headers,
+                    body: bytes[body_start..body_start + content_length].to_vec(),
+                };
+            }
+        }
+    }
+
+    fn query_parameter(request: &CapturedHttpRequest, name: &str) -> Option<String> {
+        let target = request.request_line.split_whitespace().nth(1)?;
+        let url = Url::parse(&format!("http://test.invalid{target}")).unwrap();
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    }
+
+    fn venice_models_response(model: &str, tee: bool, functions: bool) -> Value {
+        json!({
+            "object": "list",
+            "type": "text",
+            "data": [{
+                "id": model,
+                "type": "text",
+                "model_spec": {
+                    "capabilities": {
+                        "supportsTeeAttestation": tee,
+                        "supportsFunctionCalling": functions
+                    }
+                }
+            }]
+        })
+    }
+
+    fn bad_attestation_response(request: &CapturedHttpRequest, case: BadAttestation) -> Value {
+        let nonce = query_parameter(request, "nonce").unwrap();
+        let mut response = json!({
+            "verified": true,
+            "nonce": nonce,
+            "model": "tee-model",
+            "tee_provider": "intel-tdx",
+            "signing_address": "0x1234",
+            "tdx": {"debug_mode": false}
+        });
+        match case {
+            BadAttestation::Unverified => response["verified"] = Value::Bool(false),
+            BadAttestation::WrongNonce => response["nonce"] = Value::String("0".repeat(64)),
+            BadAttestation::WrongModel => {
+                response["model"] = Value::String("different-model".into())
+            }
+            BadAttestation::DebugMode => response["tdx"]["debug_mode"] = Value::Bool(true),
+            BadAttestation::EmptyProvider => response["tee_provider"] = Value::String(" ".into()),
+            BadAttestation::EmptySigningAddress => {
+                response["signing_address"] = Value::String(String::new())
+            }
+        }
+        response
     }
 
     fn read_http_json(stream: &mut TcpStream) -> Value {

@@ -12,6 +12,7 @@ FROM rust:1.97-bookworm AS rust-build
 WORKDIR /build/cthuwu
 COPY cthuwu/Cargo.toml cthuwu/Cargo.lock ./
 COPY cthuwu/crates ./crates
+COPY cthuwu/agent-files ./agent-files
 COPY cthuwu/src ./src
 RUN cargo build --package cthuwu --locked --release
 
@@ -20,17 +21,20 @@ WORKDIR /data
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ripgrep \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/cthuwu/agent /data \
-    && chown -R node:node /opt/cthuwu /data
+    && mkdir -p /opt/cthuwu/agent /data /workspace \
+    && chown -R node:node /opt/cthuwu /data /workspace
 COPY --from=rust-build /build/cthuwu/target/release/uwubot /usr/local/bin/uwubot
 COPY --from=agent-build --chown=node:node /build/agent/dist /opt/cthuwu/agent/dist
 COPY --from=agent-build --chown=node:node /build/agent/node_modules /opt/cthuwu/agent/node_modules
 COPY --from=agent-build --chown=node:node /build/agent/package.json /opt/cthuwu/agent/package.json
+COPY --chown=node:node AGENTS.md MEMORY.md README.md SKILLS.md /workspace/
+COPY --chown=node:node skills /workspace/skills
 
 ENV UWUBOT_DATA_DIR=/data \
+    UWUBOT_OPERATOR_ROOT=/workspace \
     UWUBOT_SIDECAR=/opt/cthuwu/agent/dist/index.js \
     UWUBOT_XMTP_ENV=dev
 
 USER node
-VOLUME ["/data"]
+VOLUME ["/data", "/workspace"]
 ENTRYPOINT ["/usr/local/bin/uwubot"]

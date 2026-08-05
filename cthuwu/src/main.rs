@@ -1,6 +1,8 @@
+mod agent_context;
 mod bot;
 mod contact;
 mod dedupe;
+mod inference;
 mod matching;
 mod model;
 mod operator;
@@ -9,14 +11,19 @@ mod sidecar;
 mod storage;
 mod web_search;
 
+use agent_context::AgentContext;
 use anyhow::{Context, Result, bail};
 use bot::UwUBot;
 use clap::{Parser, Subcommand, ValueEnum};
 use contact::ContactStore;
 use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
-use model::{DeterministicModel, Model, OpenAiCompatibleModel};
-use operator::{DeterministicOperatorModel, LocalOperatorTools, OperatorHarness, OperatorModel};
+use inference::{
+    DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
+    DEFAULT_VENICE_MODEL, InferenceConfig, InferenceRouter, Provider,
+};
+use model::Model;
+use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
 use sidecar::run_xmtp_sidecar;
 use std::{
@@ -24,7 +31,7 @@ use std::{
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage::{ensure_private_directory, sync_directory};
 use tracing::info;
@@ -44,8 +51,9 @@ struct Cli {
     #[arg(long, env = "UWUBOT_XMTP_ENV", value_enum, default_value_t = Network::Dev)]
     xmtp_env: Network,
 
-    #[arg(long, env = "UWUBOT_MODEL", value_enum, default_value_t = ModelKind::Deterministic)]
-    model: ModelKind,
+    /// Optional startup override. Without one, the persisted selection or Venice default is used.
+    #[arg(long, env = "UWUBOT_MODEL", value_enum)]
+    model: Option<ModelKind>,
 
     #[arg(long, env = "UWUBOT_MODEL_ENDPOINT")]
     model_endpoint: Option<String>,
@@ -55,6 +63,38 @@ struct Cli {
 
     #[arg(long, env = "UWUBOT_MODEL_API_KEY", hide = true)]
     model_api_key: Option<String>,
+
+    /// Venice credential. VENICE_API_KEY is also accepted and takes precedence when identical.
+    #[arg(long, env = "UWUBOT_VENICE_API_KEY", hide = true)]
+    venice_api_key: Option<String>,
+
+    #[arg(
+        long,
+        env = "UWUBOT_VENICE_MODEL",
+        default_value = DEFAULT_VENICE_MODEL
+    )]
+    venice_model: String,
+
+    #[arg(
+        long,
+        env = "UWUBOT_OLLAMA_ENDPOINT",
+        default_value = DEFAULT_OLLAMA_ENDPOINT
+    )]
+    ollama_endpoint: String,
+
+    #[arg(
+        long,
+        env = "UWUBOT_OLLAMA_MODEL",
+        default_value = DEFAULT_OLLAMA_MODEL
+    )]
+    ollama_model: String,
+
+    #[arg(
+        long,
+        env = "UWUBOT_OLLAMA_TIMEOUT_SECONDS",
+        default_value_t = DEFAULT_OLLAMA_TIMEOUT_SECONDS
+    )]
+    ollama_timeout_seconds: u64,
 
     /// Optional normal-user web-search adapter. Public chat never receives local tools.
     #[arg(long, env = "UWUBOT_WEB_SEARCH", value_enum, default_value_t = WebSearchKind::None)]
@@ -149,6 +189,7 @@ impl Network {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ModelKind {
+    Venice,
     Deterministic,
     Ollama,
     Openai,
@@ -169,6 +210,8 @@ async fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
     enforce_environment(&cli.data_dir, cli.xmtp_env)?;
+    cli.data_dir = fs::canonicalize(&cli.data_dir)
+        .with_context(|| format!("resolving data directory {}", cli.data_dir.display()))?;
     let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     if let Some(command) = cli.command.take() {
         return run_management_command(operators, command);
@@ -179,26 +222,26 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    let operator_root = resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?;
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
-    let (model, operator_model) = build_models(&cli, search)?;
-    let operator_tools = Arc::new(LocalOperatorTools::new(
-        &cli.operator_root,
-        cli.qmd.clone(),
-        cli.operator_tool_timeout_seconds,
-    )?);
-    let operator_root = fs::canonicalize(&cli.operator_root).with_context(|| {
-        format!(
-            "resolving operator workspace root {}",
-            cli.operator_root.display()
-        )
-    })?;
-    let operator_harness = Arc::new(OperatorHarness::new(
-        operator_model,
-        operator_tools,
-        operator_root,
-    ));
+    let router = Arc::new(InferenceRouter::new(build_inference_config(&cli, search)?)?);
+    let model: Arc<dyn Model> = router.clone();
+    let operator_model: Arc<dyn OperatorModel> = router.clone();
+    let operator_context = AgentContext::new(&cli.data_dir, &operator_root)?;
+    let operator_tools = Arc::new(
+        LocalOperatorTools::new(
+            &operator_root,
+            cli.qmd.clone(),
+            cli.operator_tool_timeout_seconds,
+        )?
+        .with_contacts(contacts.clone()),
+    );
+    let operator_harness = Arc::new(
+        OperatorHarness::new(operator_model, operator_tools, operator_context)
+            .with_model_control(router.clone()),
+    );
     let bot = UwUBot::new(
         contacts,
         processed,
@@ -210,7 +253,7 @@ async fn main() -> Result<()> {
     info!(
         xmtp_env = cli.xmtp_env.as_str(),
         data_dir = %cli.data_dir.display(),
-        model = ?cli.model,
+        inference = %router.status_line(),
         "starting uwubot"
     );
 
@@ -226,6 +269,25 @@ async fn main() -> Result<()> {
         cli.xmtp_env.as_str(),
     )
     .await
+}
+
+fn resolve_isolated_operator_root(data_dir: &Path, operator_root: &Path) -> Result<PathBuf> {
+    let data_dir = fs::canonicalize(data_dir)
+        .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
+    let operator_root = fs::canonicalize(operator_root).with_context(|| {
+        format!(
+            "resolving operator workspace root {}",
+            operator_root.display()
+        )
+    })?;
+    if data_dir.starts_with(&operator_root) || operator_root.starts_with(&data_dir) {
+        bail!(
+            "UWUBOT_OPERATOR_ROOT ({}) and UWUBOT_DATA_DIR ({}) must be separate, non-overlapping directories; the operator workspace must never expose private XMTP or contact state",
+            operator_root.display(),
+            data_dir.display()
+        );
+    }
+    Ok(operator_root)
 }
 
 fn build_web_search(cli: &Cli) -> Result<Option<Arc<dyn WebSearch>>> {
@@ -244,53 +306,68 @@ fn build_web_search(cli: &Cli) -> Result<Option<Arc<dyn WebSearch>>> {
     }
 }
 
-fn build_models(
+fn build_inference_config(
     cli: &Cli,
     web_search: Option<Arc<dyn WebSearch>>,
-) -> Result<(Arc<dyn Model>, Arc<dyn OperatorModel>)> {
-    match cli.model {
-        ModelKind::Deterministic => {
-            if web_search.is_some() {
-                bail!("web search requires an Ollama or OpenAI-compatible tool-calling model");
-            }
-            Ok((
-                Arc::new(DeterministicModel),
-                Arc::new(DeterministicOperatorModel),
-            ))
-        }
-        ModelKind::Ollama => {
-            let mut model = OpenAiCompatibleModel::new(
-                cli.model_endpoint
-                    .as_deref()
-                    .unwrap_or("http://127.0.0.1:11434/v1"),
-                None,
-                cli.model_name.as_deref().unwrap_or("qwen3:8b"),
-            )?;
-            if let Some(web_search) = web_search {
-                model = model.with_web_search(web_search);
-            }
-            let model = Arc::new(model);
-            Ok((model.clone(), model))
-        }
-        ModelKind::Openai => {
-            let api_key = cli
-                .model_api_key
-                .clone()
-                .context("UWUBOT_MODEL_API_KEY is required for --model openai")?;
-            let mut model = OpenAiCompatibleModel::new(
-                cli.model_endpoint
-                    .as_deref()
-                    .unwrap_or("https://api.openai.com/v1"),
-                Some(api_key),
-                cli.model_name.as_deref().unwrap_or("gpt-5-mini"),
-            )?;
-            if let Some(web_search) = web_search {
-                model = model.with_web_search(web_search);
-            }
-            let model = Arc::new(model);
-            Ok((model.clone(), model))
-        }
+) -> Result<InferenceConfig> {
+    let normalize_key = |value: Option<String>| {
+        value.and_then(|value| {
+            let value = value.trim().to_owned();
+            (!value.is_empty()).then_some(value)
+        })
+    };
+    let official_venice_key = normalize_key(std::env::var("VENICE_API_KEY").ok());
+    let namespaced_venice_key = normalize_key(cli.venice_api_key.clone());
+    if let (Some(official), Some(namespaced)) = (&official_venice_key, &namespaced_venice_key)
+        && official != namespaced
+    {
+        bail!("VENICE_API_KEY and UWUBOT_VENICE_API_KEY disagree; keep only one credential source");
     }
+    let startup_provider = cli.model.map(|model| match model {
+        ModelKind::Venice => Provider::Venice,
+        ModelKind::Ollama => Provider::Ollama,
+        ModelKind::Openai => Provider::Openai,
+        ModelKind::Deterministic => Provider::Deterministic,
+    });
+    let ollama_endpoint = if matches!(cli.model, Some(ModelKind::Ollama)) {
+        cli.model_endpoint
+            .clone()
+            .unwrap_or_else(|| cli.ollama_endpoint.clone())
+    } else {
+        cli.ollama_endpoint.clone()
+    };
+    let ollama_model = if matches!(cli.model, Some(ModelKind::Ollama)) {
+        cli.model_name
+            .clone()
+            .unwrap_or_else(|| cli.ollama_model.clone())
+    } else {
+        cli.ollama_model.clone()
+    };
+    Ok(InferenceConfig {
+        data_dir: cli.data_dir.clone(),
+        xmtp_environment: cli.xmtp_env.as_str().to_owned(),
+        startup_provider,
+        startup_model: if matches!(cli.model, Some(ModelKind::Ollama | ModelKind::Openai)) {
+            cli.model_name.clone()
+        } else {
+            None
+        },
+        venice_api_key: official_venice_key.or(namespaced_venice_key),
+        venice_model: cli.venice_model.clone(),
+        ollama_endpoint,
+        ollama_model,
+        ollama_timeout: Duration::from_secs(cli.ollama_timeout_seconds),
+        openai_endpoint: cli
+            .model_endpoint
+            .clone()
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_owned()),
+        openai_api_key: cli.model_api_key.clone(),
+        openai_model: cli
+            .model_name
+            .clone()
+            .unwrap_or_else(|| "gpt-5-mini".to_owned()),
+        web_search,
+    })
 }
 
 fn run_management_command(mut operators: OperatorStore, command: CliCommand) -> Result<()> {
@@ -397,7 +474,14 @@ mod tests {
         assert!(!standalone.council_simulate);
         assert!(standalone.stdin_inbox.is_none());
         assert!(standalone.command.is_none());
-        assert!(matches!(standalone.model, ModelKind::Deterministic));
+        assert!(standalone.model.is_none());
+        assert_eq!(standalone.venice_model, DEFAULT_VENICE_MODEL);
+        assert_eq!(standalone.ollama_endpoint, DEFAULT_OLLAMA_ENDPOINT);
+        assert_eq!(standalone.ollama_model, DEFAULT_OLLAMA_MODEL);
+        assert_eq!(
+            standalone.ollama_timeout_seconds,
+            DEFAULT_OLLAMA_TIMEOUT_SECONDS
+        );
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);
@@ -420,5 +504,25 @@ mod tests {
                 command: OperatorCommand::Add { .. }
             })
         ));
+    }
+
+    #[test]
+    fn operator_workspace_must_not_overlap_private_data() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&data).unwrap();
+        fs::create_dir(&workspace).unwrap();
+
+        assert_eq!(
+            resolve_isolated_operator_root(&data, &workspace).unwrap(),
+            fs::canonicalize(&workspace).unwrap()
+        );
+        assert!(resolve_isolated_operator_root(&data, &data).is_err());
+        assert!(resolve_isolated_operator_root(&data, root.path()).is_err());
+
+        let nested_workspace = data.join("workspace");
+        fs::create_dir(&nested_workspace).unwrap();
+        assert!(resolve_isolated_operator_root(&data, &nested_workspace).is_err());
     }
 }

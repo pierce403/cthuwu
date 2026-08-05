@@ -47,9 +47,11 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
 - People use ordinary language to inspect, correct, pause, share, or delete their local contact note;
   public replies do not advertise command syntax.
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
-- Deterministic, Ollama, and OpenAI-compatible model modes are available. An optional Brave Search
-  adapter gives the public model one closed `web_search` tool and no local file or process tools. No
-  message reaches a model or search provider unless the node operator explicitly configures it.
+- The default inference preference is Venice's TEE-backed `e2ee-deepseek-v4-flash` when a Venice
+  credential is configured, with loopback Ollama and then deterministic local behavior as automatic
+  fallbacks. An optional Brave Search adapter gives the public model one closed `web_search` tool and
+  no local file or process tools. Supplying a remote credential is the explicit opt-in that permits
+  message content to leave the node.
 - A node operator can authorize an exact XMTP inbox immediately with a local CLI command.
   Active operator DMs enter a separate all-caps operator harness with bounded file/search tools and
   intentionally privileged shell execution; public, stale, and revoked messages cannot reach it.
@@ -121,6 +123,10 @@ Normal state is kept below `UWUBOT_DATA_DIR`:
 contacts/<inbox-id>.md
 .uwubot.lock/<running-pid>
 state/environment
+state/agent/SOUL.md
+state/agent/memories/MEMORY.md
+state/agent/operators/<operator-inbox-id>.md
+state/inference.json
 state/operators.json
 state/processed/<hashed-message-id>
 state/council/<bounded-state-name>.json
@@ -162,6 +168,19 @@ the Tentacle and newly authored messages from that inbox enter the operator harn
 is not hot-reloaded: stop the Tentacle before adding, listing, or revoking, then restart after a
 change.
 
+On first start, Cthuwu seeds protected instance Markdown for its identity and curated shared memory;
+it seeds a separate profile for each authenticated operator inbox on first use and never overwrites
+later edits. Each operator request also loads a globally bounded project snapshot from the operator
+workspace: the first supported instruction file, `MEMORY.md`, the top-level manifest, and a compact
+`skills/*/SKILL.md` index. Workspace context is untrusted reference data and cannot enable effectful
+or contact tools or alter Rust authorization. An operator request to inspect or work on the project
+delegates bounded reads within the entire configured workspace; context may influence the paths chosen,
+and file/QMD results may be sent to the selected model endpoint. Keep credentials and unrelated secrets
+outside `UWUBOT_OPERATOR_ROOT`. Authentication, isolation, and tool-truth rules remain an immutable
+security kernel rather than editable Markdown.
+Natural-language dialogue history is bounded in memory and isolated per operator inbox; it does not
+silently become a persistent transcript.
+
 ```bash
 ./uwu.sh --xmtp-env production operator list
 ./uwu.sh --xmtp-env production operator revoke <full-inbox-id>
@@ -176,10 +195,28 @@ can have multiple installations, every installation authorized for that inbox re
 authority. Revoke the Cthuwu role and the compromised XMTP installation immediately if any device or
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
-Once active, the operator may use direct `/exec`, `/read`, `/write`, `/edit`, `/search`, and `/qmd`
-commands or ask an Ollama/OpenAI-compatible tool-calling model to use the same closed tool set. QMD
-is an optional external adapter; set `UWUBOT_QMD` to a compatible executable that supports
-`qmd query <query> --json`. Public users are not shown this syntax and cannot invoke these tools.
+Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
+`/qmd`, `/provider`, `/model`, `/users`, and `/user` commands. `/provider` and `/model` change the
+persisted node-wide inference route without accepting a URL or credential over XMTP, and route changes
+clear bounded in-process operator dialogue history. A tool-calling provider receives only
+the bounded read/discovery/search subset; file mutation, process execution, and contact access require
+the exact authenticated direct command or strict runtime contact route. The safe launcher defaults
+`UWUBOT_OPERATOR_ROOT` to the repository root;
+set it explicitly for a narrower production workspace. QMD is an optional external adapter; set
+`UWUBOT_QMD` to a compatible executable that supports `qmd query <query> --json`. Public users are
+not shown this syntax and cannot invoke these tools.
+
+`list_users` and `get_user` read parsed, retained `ContactStore` notes through a dedicated operator-only
+boundary. They do not widen generic file-tool access to the data directory. User reports are terminal
+renderings with redacted inbox fingerprints by default, cursor pagination, bounded scans, and honest
+truncation markers. They mark profile claims as unverified self-report and disclose neither raw DMs
+nor message counts. The reported set is retained contacts, not everyone who may ever have sent the
+Tentacle a message. This terminal-data guarantee applies to the dedicated contact tools; `/exec`
+remains deliberate RCE and can read anything the service account itself can access.
+
+Startup rejects canonical overlap between `UWUBOT_OPERATOR_ROOT` and `UWUBOT_DATA_DIR`, including
+either directory containing the other. The safe launcher and container defaults keep them separate.
+
 Public and privileged work use separate single-request authority lanes. Rust pins the role and
 durably claims the XMTP message ID before admission. If a lane or the Node bridge is full, the first
 claim receives a busy reply without content/model/tool dispatch; duplicate delivery receives no
@@ -233,18 +270,61 @@ adapter work.
 
 ## Model modes
 
-The default `deterministic` mode keeps all conversation content local and is useful for bring-up.
+The compiled preference is Venice's TEE-backed DeepSeek V4 Flash model. Configure either
+`VENICE_API_KEY` or `UWUBOT_VENICE_API_KEY` in the runtime environment:
+
+```bash
+VENICE_API_KEY='...' ./uwu.sh
+```
+
+Before the first prompt content is sent, Cthuwu requires the live Venice catalog to report the exact
+`e2ee-deepseek-v4-flash` model as text, TEE-attestable, and function-calling, then performs a fresh
+nonce-bound baseline attestation. A successful validation is cached for at most five minutes before
+it must be refreshed. Requests explicitly set `enable_e2ee=false`, so this is TEE-only inference
+with ordinary TLS—not Venice's separate full E2EE streaming protocol. Cthuwu checks Venice's server
+verification and nonce/model binding, rejects explicitly reported debug mode, and requires bounded
+nonempty provider and signing-address fields. It does not yet independently parse Intel/NVIDIA
+evidence or verify response signatures.
+
+Venice's supplemental system prompt and provider-native web, scraping, citation, and X-search
+features are explicitly disabled. Public web search remains the separate opt-in Brave tool described
+below.
+
+If the Venice key is absent, exhausted, rejected, rate-limited, or the provider/attestation fails,
+Cthuwu tries the configured loopback Ollama model and then its deterministic local response. It never
+silently substitutes the non-TEE `deepseek-v4-flash` model, and a locally selected provider never
+falls forward to a remote provider. A provider failure enters a short cooldown so every message does
+not repeatedly hit the same failed endpoint.
 
 For Ollama's OpenAI-compatible endpoint:
 
 ```bash
 UWUBOT_MODEL=ollama \
-UWUBOT_MODEL_ENDPOINT=http://127.0.0.1:11434/v1 \
-UWUBOT_MODEL_NAME=qwen3:8b \
+UWUBOT_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1 \
+UWUBOT_OLLAMA_MODEL=qwen3:8b \
+UWUBOT_OLLAMA_TIMEOUT_SECONDS=75 \
 ./uwu.sh
 ```
 
-For another OpenAI-compatible provider, select `UWUBOT_MODEL=openai` and set `UWUBOT_MODEL_API_KEY`, `UWUBOT_MODEL_ENDPOINT`, and `UWUBOT_MODEL_NAME`. The XMTP transport subprocess receives an allowlisted environment and cannot see the model credential.
+Automatic Ollama fallback is restricted to a credential-free loopback HTTP endpoint, bypasses
+ambient HTTP proxy settings, and uses a configurable 1–300 second whole-response timeout. The legacy
+`UWUBOT_MODEL_ENDPOINT` and `UWUBOT_MODEL_NAME` values still override Ollama when
+`UWUBOT_MODEL=ollama` is explicitly selected. That legacy startup override wins for the running
+process; remove it on later launches if `/model` should use the persisted slot instead.
+
+Treat that loopback endpoint as part of the trusted node boundary: on a shared host, another local
+process could impersonate an unauthenticated Ollama listener. Run Cthuwu and Ollama in a dedicated
+single-tenant account, VM, or network namespace.
+
+For another OpenAI-compatible provider, select `UWUBOT_MODEL=openai` and set
+`UWUBOT_MODEL_API_KEY`, `UWUBOT_MODEL_ENDPOINT`, and `UWUBOT_MODEL_NAME`. The XMTP transport
+subprocess receives an allowlisted environment and cannot see model credentials. Operators can later
+use `/provider` to inspect or select `venice`, `ollama`, `openai`, or `deterministic`, and `/model`
+to inspect the current route, list configured slots, or change the selected provider's bounded model
+ID. A new model ID is verified by its provider on the next inference request; failure enters the
+normal local fallback path. Only provider/model names persist in owner-only `state/inference.json`;
+keys and endpoints do not. Route changes apply to subsequent requests; already-running inference is
+allowed to finish under the route it started with.
 
 To allow the public model to request web results, configure Brave Search in the environment:
 
@@ -256,7 +336,7 @@ UWUBOT_WEB_SEARCH_API_KEY='...' \
 ./uwu.sh
 ```
 
-This is opt-in and requires an Ollama or OpenAI-compatible model that supports standard tool calls.
+This is opt-in and requires the effective provider to support standard tool calls.
 When the model invokes `web_search`, its bounded query is sent to Brave and up to five bounded
 HTTP(S) results return as untrusted context. The public tool schema contains no shell or filesystem
 capability. Search credentials, like model credentials, are rejected on the command line and stripped
@@ -269,10 +349,23 @@ The container packages Rust, Node, the Agent SDK, and its native binding while p
 ```bash
 docker build -t cthuwu .
 docker volume create cthuwu-data
-docker run --rm -it --init -v cthuwu-data:/data cthuwu
+docker volume create cthuwu-workspace
+docker run --rm -it --init \
+  -v cthuwu-data:/data \
+  -v cthuwu-workspace:/workspace \
+  cthuwu
 ```
 
-Pass `-e UWUBOT_XMTP_ENV=production` when operating the website's intro Tentacle.
+The container keeps private identity/contact state under `/data` and operator-visible files under
+`/workspace`; the image seeds the workspace volume with project context and skill metadata on first
+creation. Bind-mount a real working tree there when the operator should inspect or change source.
+File tools never receive the data directory as their root, and startup rejects an overlapping custom
+root. Pass
+`-e UWUBOT_XMTP_ENV=production` when operating the website's intro Tentacle.
+
+The image does not bundle Ollama. Because automatic fallback intentionally accepts only loopback,
+run Ollama in the same network namespace. On Linux, a host Ollama service can be reached by adding
+`--network host` to `docker run`; otherwise the fallback proceeds to the deterministic local voice.
 
 ## Browser deployment
 

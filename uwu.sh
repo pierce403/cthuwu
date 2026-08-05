@@ -42,6 +42,8 @@ uwu_die() {
 uwu_without_runtime_secrets() {
   env \
     -u UWUBOT_MODEL_API_KEY \
+    -u UWUBOT_VENICE_API_KEY \
+    -u VENICE_API_KEY \
     -u UWUBOT_WEB_SEARCH_API_KEY \
     -u XMTP_WALLET_KEY \
     -u XMTP_DB_ENCRYPTION_KEY \
@@ -106,6 +108,9 @@ uwu_reject_unsafe_arguments() {
       --model-api-key | --model-api-key=*)
         uwu_die "pass model credentials only through UWUBOT_MODEL_API_KEY, never command-line arguments"
         ;;
+      --venice-api-key | --venice-api-key=*)
+        uwu_die "pass Venice credentials only through VENICE_API_KEY or UWUBOT_VENICE_API_KEY, never command-line arguments"
+        ;;
       --web-search-api-key | --web-search-api-key=*)
         uwu_die "pass web-search credentials only through UWUBOT_WEB_SEARCH_API_KEY, never command-line arguments"
         ;;
@@ -157,6 +162,9 @@ uwu_parse_arguments() {
         ;;
       --model-api-key | --model-api-key=*)
         uwu_die "pass model credentials only through UWUBOT_MODEL_API_KEY, never command-line arguments"
+        ;;
+      --venice-api-key | --venice-api-key=*)
+        uwu_die "pass Venice credentials only through VENICE_API_KEY or UWUBOT_VENICE_API_KEY, never command-line arguments"
         ;;
       --web-search-api-key | --web-search-api-key=*)
         uwu_die "pass web-search credentials only through UWUBOT_WEB_SEARCH_API_KEY, never command-line arguments"
@@ -609,6 +617,7 @@ uwu_main() {
   export UWUBOT_XMTP_ENV="$UWU_XMTP_ENV"
   export UWUBOT_NODE="$UWU_NODE_BIN"
   export UWUBOT_SIDECAR="$UWU_AGENT_DIR/dist/index.js"
+  export UWUBOT_OPERATOR_ROOT="${UWUBOT_OPERATOR_ROOT:-$UWU_REPO_ROOT}"
 
   UWU_RUNTIME_LOCK_PATH="$UWU_DATA_DIR/.uwubot.lock"
   uwu_acquire_runtime_lock
