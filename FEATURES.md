@@ -177,7 +177,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Multiline answers survive save/load and cannot create note sections.
   - [x] Every accepted message updates `last_seen`, including completed chats.
   - [x] The caller can inspect, correct, control, and delete their note through ordinary XMTP text.
-  - [x] Pending, active, and revoked operator inboxes do not create contact notes.
+  - [x] Stale, active, and revoked operator paths do not create contact notes.
   - [ ] Crash-injection tests prove interrupted-write recovery.
   - [ ] Contact updates are verified on Linux, macOS, and Windows.
 
@@ -248,18 +248,17 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   Council.
 - **Properties**:
   - Local `uwubot operator add` accepts only a canonical full 64-character XMTP inbox ID and creates
-    a pending environment-specific version-2 record plus a cryptographically random one-time
-    activation proof.
-  - The pending inbox must send the exact activation message over XMTP. Only the proof hash is
-    persisted, activation is one-time, and adding a non-active record again rotates its generation
-    and proof.
+    an active environment-specific version-3 record immediately. No XMTP activation proof is
+    required.
+  - Adding or re-adding an inbox advances its generation and records the local grant time as its
+    authorization boundary. Messages authored at or before that boundary cannot use tools.
   - Rust classifies the Agent SDK-authenticated `senderInboxId` and `sentAtNs` before deduplication,
     content parsing, commands, model calls, contact access, or lane selection. That role snapshot is
     pinned for the request; text cannot promote it while it waits or runs.
-  - Activation records its message's authenticated `sentAtNs`. Messages authored at or before that
-    boundary remain pending even if delivered after activation.
-  - Pending and revoked inboxes are closed states: they cannot use tools, fall through to public
-    chat, or create contact notes. Revocation persists as a blocking tombstone.
+  - Version-2 pending records migrate to active without a proof, using migration time as the
+    boundary. Existing active and revoked records retain their state.
+  - Stale messages and revoked inboxes are closed paths: they cannot use tools, fall through to
+    public chat, or create contact notes. Revocation persists as a blocking tombstone.
   - Authorization applies to the whole XMTP inbox. Every installation legitimately attached to that
     inbox has operator authority; per-installation authorization is not implemented.
   - Operator replies use an enforced all-caps, theatrical ominous/submissive voice while excluding
@@ -281,12 +280,12 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The stdin harness always forces the public role. Council messages and typed Council Actions have
     no route to operator tools.
 - **Test Criteria**:
-  - [x] ACL tests cover exact 64-character IDs, version-2 bounded records, exact fresh activation,
-    one-time use, `sentAtNs` fencing, persistence, generation rotation, revocation, environment
+  - [x] ACL tests cover exact 64-character IDs, immediate local authorization, version-2 pending
+    migration, `sentAtNs` fencing, persistence, generation rotation, revocation, environment
     binding, owner-only permissions, and symlink rejection.
   - [x] Public `/exec`-style text is inert, while active operator text reaches only the operator
     harness.
-  - [x] Pending and revoked records never fall through to public contact handling.
+  - [x] Stale messages and revoked records never fall through to public contact handling.
   - [x] The hidden stdin harness remains public even when given an active operator inbox ID.
   - [x] The JSONL protocol rejects a caller-supplied role and preserves `senderInboxId` without
     giving the sidecar authorization logic.
@@ -294,7 +293,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     reads/writes/edits, process status, timeout/output handling, and API-key removal from child
     process environments.
   - [x] Operator prose casing excludes code and bounded tool renderings from uppercase transformation.
-  - [ ] A manual release test activates, uses, revokes, and rechecks an operator inbox over live XMTP.
+  - [ ] A manual release test authorizes, uses, revokes, and rechecks an operator inbox over live XMTP.
   - [ ] An external security review covers XMTP installation compromise/revocation, OS isolation,
     command auditability, and operator-model prompt injection.
 

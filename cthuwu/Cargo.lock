@@ -232,7 +232,6 @@ dependencies = [
  "async-trait",
  "clap",
  "cthuwu-council",
- "getrandom 0.2.17",
  "libc",
  "reqwest",
  "serde",

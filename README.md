@@ -50,9 +50,9 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
 - Deterministic, Ollama, and OpenAI-compatible model modes are available. An optional Brave Search
   adapter gives the public model one closed `web_search` tool and no local file or process tools. No
   message reaches a model or search provider unless the node operator explicitly configures it.
-- A node operator can authorize an exact XMTP inbox through a local, one-time activation ceremony.
+- A node operator can authorize an exact XMTP inbox immediately with a local CLI command.
   Active operator DMs enter a separate all-caps operator harness with bounded file/search tools and
-  intentionally privileged shell execution; public, pending, and revoked inboxes cannot reach it.
+  intentionally privileged shell execution; public, stale, and revoked messages cannot reach it.
 - Structured, versioned Cthulhu personalities include deterministic Archivist, Hermit, Merchant,
   Wanderer, Oracle, and Trickster personas with different local policy positions without an LLM.
 - The local Council implementation models validated envelopes, Tentacle lifecycle and liveness,
@@ -150,27 +150,29 @@ inbox argument matches an active operator record.
 > to the authorized inbox. See [the operator guide](docs/operator.md) before enabling this feature.
 
 Operator authorization is keyed by the canonical full 64-character XMTP inbox ID, not a wallet
-address, prefix, display name, or message claim. Stop the Tentacle, then create a pending record
+address, prefix, display name, or message claim. Stop the Tentacle, then authorize the inbox
 locally in the same data directory and XMTP environment it uses:
 
 ```bash
 ./uwu.sh --xmtp-env production operator add <full-inbox-id> --label Dean
 ```
 
-The command prints a one-time activation message and exits. Restart the Tentacle, then send that
-exact message from the pending XMTP inbox. Only then does the inbox become active. ACL management is
-not hot-reloaded: stop the Tentacle before listing or revoking, then restart after a change.
+The command writes an active ACL record and exits; there is no XMTP activation proof to copy. Restart
+the Tentacle and newly authored messages from that inbox enter the operator harness. ACL management
+is not hot-reloaded: stop the Tentacle before adding, listing, or revoking, then restart after a
+change.
 
 ```bash
 ./uwu.sh --xmtp-env production operator list
 ./uwu.sh --xmtp-env production operator revoke <full-inbox-id>
 ```
 
-Pending and revoked inboxes never fall through to public chat and never create contact notes. The
+Messages authored at or before the local authorization boundary, and every message from a revoked
+inbox, never fall through to public chat and never create contact notes. The
 sidecar does not accept a role field: Rust classifies the Agent SDK's authenticated
 `senderInboxId` before interpreting message text or dispatching commands, pins that role to the
-request, and rejects operator messages authored at or before activation. Because an XMTP inbox can have
-multiple installations, every installation authorized for that inbox receives the same operator
+request, and rejects operator messages authored at or before the local grant. Because an XMTP inbox
+can have multiple installations, every installation authorized for that inbox receives the same operator
 authority. Revoke the Cthuwu role and the compromised XMTP installation immediately if any device or
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
@@ -292,7 +294,7 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
 - Use dedicated identities with no material funds.
 - Normal logs omit keys and message bodies.
 - The operator allowlist is environment-scoped, atomically stored at owner-only
-  `state/operators.json` using config version 2, and keyed by exact authenticated 64-character XMTP
+  `state/operators.json` using config version 3, and keyed by exact authenticated 64-character XMTP
   inbox ID. This does not distinguish installations within one inbox.
 - Operator mode is deliberate remote code execution. File helpers are rooted and reject traversal
   and direct symlink targets, but `/exec` is not a filesystem sandbox and can exercise every

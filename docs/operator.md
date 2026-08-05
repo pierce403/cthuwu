@@ -21,7 +21,8 @@ The official Agent SDK decodes an incoming XMTP DM and supplies its authenticate
 cannot send a `role` field. Rust validates the metadata and classifies the full inbox ID before
 interpreting or dispatching message text, parsing any command, calling a model, or opening contact
 state. The role snapshot stays pinned while the request runs. An authenticated `sentAtNs` at or
-before that inbox's activation message is never granted active authority, even if delivered later.
+before that inbox's local authorization boundary is never granted active authority, even if
+delivered later.
 
 This makes the Agent SDK, the local sidecar process, and their private pipe part of the trusted
 computing base. Message content is never evidence of a role.
@@ -33,12 +34,12 @@ computing base. Message content is never evidence of a role.
 > installation through the relevant XMTP client immediately. Re-adding the same inbox does not make
 > a compromised installation safe.
 
-Operator records are stored below the selected data root at `state/operators.json`. Config version 2
+Operator records are stored below the selected data root at `state/operators.json`. Config version 3
 is bound to the selected XMTP environment, size-bounded, symlink-rejected, atomically replaced, and
-owner-only on Unix. It stores a hash—not the plaintext—of a pending activation proof and, after
-activation, the authenticated activation-message `sentAtNs` boundary.
+owner-only on Unix. It stores the local authorization time as a nanosecond boundary; it does not
+store or require an activation proof.
 
-## Add and activate an operator
+## Add an operator
 
 Use the same `UWUBOT_DATA_DIR` and XMTP environment as the Tentacle. The deployed website uses XMTP
 `production`. Operator ACL state is loaded at process start and is not hot-reloaded. Stop the
@@ -49,20 +50,18 @@ directory. Its intro node normally uses:
 ./uwu.sh --xmtp-env production operator add <full-xmtp-inbox-id> --label Dean
 ```
 
-The command does not start XMTP. It writes a `pending` ACL record, prints a random one-time
-activation message, and exits. Keep the line temporarily, restart the Tentacle, then copy that exact
-line to a DM sent **from the pending inbox** to the Tentacle:
+The command does not start XMTP. It writes an `active` ACL record, records the local authorization
+time, and exits. Restart the Tentacle; newly authored messages cryptographically sent from that exact
+inbox may use the operator harness immediately. There is no activation message to copy.
 
-```text
-/operator activate <one-time-token>
-```
+Running `add` again advances the role generation and replaces the authorization boundary. Messages
+authored at or before the boundary get a fixed stale-message response, never reach public chat or a
+tool, and never create a contact note. Keep the node and XMTP sender clocks synchronized so fresh
+messages sort after the locally recorded boundary.
 
-The role becomes active only when both the authenticated sender inbox and proof match. The proof is
-consumed once. A missing, stale, malformed, or wrong proof exposes no tool. Running `add` again for a
-pending or revoked inbox rotates its generation and proof; adding an already active inbox fails.
-
-Pending inboxes are deliberately quarantined: every message other than successful activation gets a
-fixed response, never public chat, and never creates a contact note.
+On first load, a version-2 pending record is migrated to active without a proof. Migration time
+becomes its boundary, so messages authored before the upgrade remain non-privileged. Existing
+version-2 active and revoked records keep their state.
 
 Check the local ACL:
 
@@ -182,8 +181,7 @@ Recommended deployment controls:
 2. Use a dedicated container or VM and a narrow writable mount for `UWUBOT_OPERATOR_ROOT`.
 3. Keep cloud, SSH, wallet, package-publishing, browser, and personal credentials out of that account.
 4. Restrict outbound network access and OS capabilities to what the node needs.
-5. Back up the data directory securely and monitor local ACL changes without logging activation
-   proofs or DM bodies.
+5. Back up the data directory securely and monitor local ACL changes without logging DM bodies.
 6. Revoke operator access before rotating, retiring, or transferring an XMTP inbox.
 
 ## Optional QMD adapter
@@ -199,9 +197,9 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 
 ## Isolation invariants
 
-- A public sender cannot become an operator by mentioning a role, inbox, token, or command.
+- A public sender cannot become an operator by mentioning a role, inbox, or command.
 - A public operator-looking command receives a safe refusal and executes nothing.
-- A pending or revoked operator never falls through to the public model or contact store.
+- A stale operator message or revoked operator never falls through to the public model or contact store.
 - The hidden stdin harness is always public, including when its supplied ID matches an active inbox.
 - Public model calls expose no local tool; their only optional tool is bounded Brave web search.
 - Operator model calls expose the closed local tool set and no public web-search tool.
@@ -209,6 +207,6 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 - Council messages, votes, propagation, and typed Actions cannot grant operator status or call these
   tools.
 
-These invariants are covered by local unit and protocol tests. A complete live-XMTP activation,
+These invariants are covered by local unit and protocol tests. A complete live-XMTP authorization,
 execution, revocation, installation-compromise, and OS-containment release exercise remains required
 before treating the feature as production-hardened.

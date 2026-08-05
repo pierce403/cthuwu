@@ -15,7 +15,7 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - Preserve the control-plane boundary: ordinary DM content, contact notes, private memory, and model
   credentials never enter Council messages.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
-  state; public, pending, revoked, and active operator paths must not fall through into one another.
+  state; public, stale, revoked, and active operator paths must not fall through into one another.
 - Keep public conversation casual and command-free in presentation. Cthuwu must identify as Cthuwu,
   use readable uwu speech, answer the person's request before optional onboarding, and describe
   privacy controls in ordinary language.
@@ -74,7 +74,7 @@ interoperability.
 - Make production and development XMTP environments explicit; never silently cross them.
 - Do not send inbound message text to a model provider unless the operator selected that provider.
 - Bound message size, concurrency, response size, and model/tool execution time.
-- Treat all messages as untrusted input. A normal, pending, or revoked sender must never execute a
+- Treat all messages as untrusted input. A normal, stale, or revoked sender must never execute a
   message-supplied shell command or gain filesystem access. Only a locally configured, fully
   activated, transport-authenticated operator inbox may enter the separate privileged dispatcher.
 - The operator role is remote code execution as the `uwubot` OS account. Require a dedicated
@@ -83,8 +83,8 @@ interoperability.
   sandbox.
 - Authorization is by the canonical full 64-character XMTP inbox ID, not wallet address or message
   claim. Pin the role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
-  activation boundary must not privilege older messages delivered later. Every valid
-  installation attached to an authorized inbox inherits authority; preserve pending quarantine and
+  authorization boundary must not privilege older messages delivered later. Every valid
+  installation attached to an authorized inbox inherits authority; preserve stale-message quarantine and
   revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
   not hot-reloaded: stop the node, update locally, and restart it.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
@@ -174,7 +174,8 @@ interoperability.
   the model reply contains no question; all deferred and later prompts use the cadence without
   advertising slash commands. Ambiguous consent is re-cadenced. Public chat can expose only an
   explicitly configured Brave web-search function.
-- `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Active
+- `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Local add
+  authorizes immediately without an XMTP proof; active
   operator DMs use an isolated privileged local harness; live XMTP operator release testing and an
   external security review remain open.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,

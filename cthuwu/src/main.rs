@@ -116,7 +116,7 @@ enum CliCommand {
 
 #[derive(Debug, Subcommand)]
 enum OperatorCommand {
-    /// Add a pending operator inbox and print its one-time activation proof.
+    /// Authorize an operator inbox immediately using a local timestamp fence.
     Add {
         /// Full XMTP inbox ID. Wallet addresses, prefixes, and display names are not accepted.
         inbox_id: String,
@@ -297,14 +297,10 @@ fn run_management_command(mut operators: OperatorStore, command: CliCommand) -> 
     match command {
         CliCommand::Operator { command } => match command {
             OperatorCommand::Add { inbox_id, label } => {
-                let pending = operators.add(&inbox_id, &label)?;
-                println!("pending operator: {}", pending.inbox_id);
-                println!("generation: {}", pending.generation);
-                println!("send this exact message from that XMTP inbox to activate it once:");
-                println!("/operator activate {}", pending.activation_token);
-                println!(
-                    "the token is not stored in plaintext and cannot be recovered; rerun add to rotate it"
-                );
+                let authorized = operators.add(&inbox_id, &label)?;
+                println!("active operator: {}", authorized.inbox_id);
+                println!("generation: {}", authorized.generation);
+                println!("restart the Tentacle; newly authored messages from this inbox may use the operator harness");
             }
             OperatorCommand::Revoke { inbox_id } => {
                 if operators.revoke(&inbox_id)? {

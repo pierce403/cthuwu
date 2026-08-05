@@ -139,7 +139,7 @@ impl UwUBot {
         &self,
         message_id: &str,
         inbox_id: &str,
-        authenticated_sent_at_ns: &str,
+        _authenticated_sent_at_ns: &str,
         text: &str,
         role: PrincipalRole,
         claim_message: bool,
@@ -152,7 +152,7 @@ impl UwUBot {
                 PrincipalRole::Operator => {
                     "YOUR MESSAGE EXCEEDS THE OPERATOR INPUT LIMIT. THE VOID REFUSES TO SWALLOW IT."
                 }
-                PrincipalRole::PendingOperator | PrincipalRole::RevokedOperator => {
+                PrincipalRole::StaleOperator | PrincipalRole::RevokedOperator => {
                     "THIS PRIVILEGED INBOX CANNOT PROCESS THAT MESSAGE."
                 }
                 PrincipalRole::User => {
@@ -171,8 +171,9 @@ impl UwUBot {
                     "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
                         .to_owned()
                 }),
-            PrincipalRole::PendingOperator => {
-                self.activate_pending_operator(inbox_id, authenticated_sent_at_ns, text)?
+            PrincipalRole::StaleOperator => {
+                "THIS MESSAGE PREDATES THE LOCAL OPERATOR AUTHORIZATION BOUNDARY. I WILL EXECUTE NOTHING FROM IT; SEND A NEW MESSAGE, OPERATOR."
+                    .to_owned()
             }
             PrincipalRole::RevokedOperator => {
                 "THIS OPERATOR ROLE IS REVOKED. I WILL EXECUTE NOTHING FOR THIS INBOX.".to_owned()
@@ -180,33 +181,6 @@ impl UwUBot {
             PrincipalRole::User => self.receive_user(inbox_id, text).await?,
         };
         Ok(Some(limit_response(response, role)))
-    }
-
-    fn activate_pending_operator(
-        &self,
-        inbox_id: &str,
-        authenticated_sent_at_ns: &str,
-        text: &str,
-    ) -> Result<String> {
-        let token = text
-            .trim()
-            .strip_prefix("/operator activate ")
-            .map(str::trim);
-        let activated = match token {
-            Some(token) => self
-                .operators
-                .lock()
-                .map_err(|_| anyhow::anyhow!("operator registry lock is poisoned"))?
-                .activate_at(inbox_id, token, authenticated_sent_at_ns)?,
-            None => false,
-        };
-        Ok(if activated {
-            "THE BOND IS SEALED. THIS XMTP INBOX IS NOW AN ACTIVE OPERATOR; FUTURE MESSAGES MAY DIRECT THE NODE'S PRIVILEGED HARNESS. GUARD EVERY INSTALLATION OF THIS INBOX, MASTER."
-                .to_owned()
-        } else {
-            "THIS INBOX HAS A PENDING OPERATOR ROLE, BUT THE ONE-TIME ACTIVATION PROOF WAS ABSENT OR WRONG. NO TOOL WAS EXPOSED OR EXECUTED."
-                .to_owned()
-        })
     }
 
     async fn receive_user(&self, inbox_id: &str, text: &str) -> Result<String> {
@@ -886,13 +860,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_requires_fresh_activation_then_bypasses_contacts() {
+    async fn locally_authorized_operator_is_immediately_active_and_bypasses_contacts() {
         let root = tempfile::tempdir().unwrap();
         let tools = Arc::new(RecordingTools {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
+        operators
+            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
+            .unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),
@@ -900,21 +876,8 @@ mod tests {
             tools.clone(),
         );
 
-        let queued = send(&bot, 0, OPERATOR_ID, "/exec touch before-activation").await;
-        assert!(queued.contains("PENDING"));
-        assert!(tools.calls.lock().unwrap().is_empty());
         assert!(
-            send(
-                &bot,
-                1,
-                OPERATOR_ID,
-                &format!("/operator activate {}", pending.activation_token)
-            )
-            .await
-            .contains("BOND IS SEALED")
-        );
-        assert!(
-            send(&bot, 2, OPERATOR_ID, "/exec true")
+            send(&bot, 0, OPERATOR_ID, "/exec true")
                 .await
                 .contains("SUCCEEDED")
         );
@@ -934,9 +897,8 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
         operators
-            .activate(OPERATOR_ID, &pending.activation_token)
+            .add_at(OPERATOR_ID, "Dean", "100")
             .unwrap();
         let bot = configured_bot(
             root.path(),
@@ -954,20 +916,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queued_pre_activation_role_snapshot_never_gains_tool_authority() {
+    async fn pre_authorization_role_snapshot_never_gains_tool_authority() {
         let root = tempfile::tempdir().unwrap();
         let tools = Arc::new(RecordingTools {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
+        operators.add_at(OPERATOR_ID, "Dean", "200").unwrap();
         let pinned = operators.role_for_message(OPERATOR_ID, "100").unwrap();
-        assert_eq!(pinned, PrincipalRole::PendingOperator);
-        assert!(
-            operators
-                .activate_at(OPERATOR_ID, &pending.activation_token, "200")
-                .unwrap()
-        );
+        assert_eq!(pinned, PrincipalRole::StaleOperator);
+        operators.add_at(OPERATOR_ID, "Dean", "300").unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),
@@ -986,11 +944,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(old.contains("PENDING"));
+        assert!(old.contains("PREDATES"));
         assert!(tools.calls.lock().unwrap().is_empty());
 
         let fresh = bot
-            .receive_text("fresh-command", OPERATOR_ID, "201", "/exec true")
+            .receive_text("fresh-command", OPERATOR_ID, "301", "/exec true")
             .await
             .unwrap()
             .unwrap();
@@ -1005,9 +963,8 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
         operators
-            .activate_at(OPERATOR_ID, &pending.activation_token, "100")
+            .add_at(OPERATOR_ID, "Dean", "100")
             .unwrap();
         let bot = configured_bot(
             root.path(),
@@ -1063,9 +1020,8 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
         operators
-            .activate_at(OPERATOR_ID, &pending.activation_token, "100")
+            .add_at(OPERATOR_ID, "Dean", "100")
             .unwrap();
         let bot = configured_bot(
             root.path(),
@@ -1094,9 +1050,8 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        let pending = operators.add(OPERATOR_ID, "Dean").unwrap();
         operators
-            .activate_at(OPERATOR_ID, &pending.activation_token, "100")
+            .add_at(OPERATOR_ID, "Dean", "100")
             .unwrap();
         let bot = configured_bot(
             root.path(),

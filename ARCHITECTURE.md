@@ -91,7 +91,7 @@ records user-provided statements, not inferred traits presented as facts. People
 phrases to name themselves, describe hopes/offers/needs, inspect memory, control matching, or confirm
 deletion. Legacy public command forms remain compatible but are not advertised. Contact notes are
 personal data: they are ignored by git and need future export, correction, deletion, and retention
-controls. Pending, active, and revoked operator inboxes never create or update contact notes.
+controls. Stale, active, and revoked operator paths never create or update contact notes.
 
 ### Companion core
 
@@ -106,7 +106,7 @@ The core owns message policy:
    `reject_inbound` or an occupied authority lane, return a first-claim busy `Reply`; return `Ignore`
    for every duplicate and perform no contact/model/tool dispatch on any rejection path;
 5. apply role-specific consent and size limits to admitted content;
-6. dispatch to exactly one closed public, pending/revoked, or operator path;
+6. dispatch to exactly one closed public, stale/revoked, or operator path;
 7. invoke only that path's configured model and tools;
 8. send a bounded text response without logging plaintext by default.
 
@@ -132,14 +132,13 @@ untrusted context. Public chat has no shell or local filesystem tool.
 
 ### Authenticated operator path
 
-`state/operators.json` config version 2 is an owner-only, environment-bound allowlist keyed by the
-canonical full 64-character XMTP inbox ID. Adding an inbox locally creates a pending record and a
-random one-time activation proof;
-only an exact activation message cryptographically sent from that same inbox makes it active. The
-plaintext proof is never persisted. Revocation leaves a blocking tombstone. Pending and revoked
-senders do not fall through to public chat, so neither can create a contact note while probing the
-role boundary. Activation persists the activation message's authenticated `sentAtNs`; a message
-authored at or before that boundary remains pending even if delivered later. The ACL is loaded at
+`state/operators.json` config version 3 is an owner-only, environment-bound allowlist keyed by the
+canonical full 64-character XMTP inbox ID. Adding an inbox locally makes it active immediately and
+records the local grant time as a nanosecond authorization boundary; no XMTP activation proof is
+required. Revocation leaves a blocking tombstone. Revoked senders and messages authored at or before
+the authorization boundary do not fall through to public chat, so neither can create a contact note
+while probing the role boundary. A stale message remains non-privileged even if delivered later.
+The ACL is loaded at
 runtime startup rather than hot-reloaded; local add/list/revoke operations run while the Tentacle is
 stopped, followed by restart.
 
@@ -292,7 +291,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
-| Operator XMTP sender → runtime | Privileged instructions | Local pending/active/revoked ACL, one-time proof, exact inbox match, dedicated OS account/container |
+| Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
 | Operator model → runtime | Generated text or local tool call | Separate closed tool schema, bounded agent loop, structured receipts, no role changes |
@@ -309,10 +308,11 @@ The runtime uses a dedicated XMTP identity. The sidecar atomically creates a wal
 
 Each XMTP environment gets a separate data directory to prevent accidental dev/production identity mixing.
 
-The environment-specific operator ACL config version 2 is stored atomically at owner-only
+The environment-specific operator ACL config version 3 is stored atomically at owner-only
 `state/operators.json`. It contains canonical 64-character inbox IDs, labels, status, generation,
-timestamps, the activation `sentAtNs` boundary, and only the hash of a pending activation proof. An
-active or revoked record retains no activation hash. ACL corruption,
+timestamps, and the local authorization-time `sentAtNs` boundary. Version-2 records are migrated
+fail-closed: an existing pending record becomes active without a proof, using the migration time as
+its boundary, while active and revoked states are preserved. ACL corruption,
 unsafe Unix permissions, symlinks, duplicate IDs, unknown fields, and environment mismatch fail
 closed.
 

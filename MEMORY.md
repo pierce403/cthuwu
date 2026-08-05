@@ -57,15 +57,15 @@ Last reviewed: 2026-08-04
 - Optional Brave Search is the public model's only tool. It requires an explicitly selected
   tool-calling Ollama/OpenAI-compatible model plus `UWUBOT_WEB_SEARCH=brave`; public chat never gets
   local file or process tools.
-- An exact canonical 64-character XMTP inbox can become a remote node operator only through local
-  `uwubot operator add`, then a one-time activation proof sent from that authenticated inbox. List
-  and revoke roles locally while the Tentacle is stopped; the ACL is loaded at startup and is not
-  hot-reloaded. Pending and revoked inboxes stay quarantined and do not create contacts.
+- An exact canonical 64-character XMTP inbox becomes a remote node operator immediately through
+  local `uwubot operator add`; there is no XMTP activation proof. List and revoke roles locally while
+  the Tentacle is stopped; the ACL is loaded at startup and is not hot-reloaded. Stale messages and
+  revoked inboxes stay quarantined and do not create contacts.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with the closed
   `read_file`, `write_file`, `edit_file`, `search_files`, optional `qmd_search`, and `exec` tool set.
   The hidden stdin harness remains public-only, and Council Actions cannot reach these tools.
-- Operator ACL config version 2 is environment-bound and owner-only at `state/operators.json`.
-  Activation persists an authenticated `sentAtNs` fence, and each request's role is pinned before a
+- Operator ACL config version 3 is environment-bound and owner-only at `state/operators.json`.
+  Local authorization persists a grant-time `sentAtNs` fence, and each request's role is pinned before a
   no-queue authority lane. Message IDs are durably claimed before admission; overload, including the
   bounded empty-text `reject_inbound` bridge handshake, returns a busy reply only for the first claim
   and ignores duplicates without dispatch. Node checks oversized input before forwarding content;
@@ -210,7 +210,7 @@ Operational notes from that run:
   holds a PID-owned `.uwubot.lock` across `exec` so two runtimes cannot mutate one contact store.
 
 The next release tasks are to add a real browser/XMTP job to GitHub CI and run a separate live
-operator activation/use/revocation exercise inside a dedicated container. Neither gate may weaken
+operator authorization/use/revocation exercise inside a dedicated container. Neither gate may weaken
 the dedicated-identity, inbox-installation, or no-secret-log rules.
 
 The original manual milestone was:

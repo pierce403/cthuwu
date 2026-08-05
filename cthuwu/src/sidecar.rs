@@ -171,7 +171,7 @@ pub async fn run_xmtp_sidecar(
         let lane = match role {
             PrincipalRole::User => public_lane.clone(),
             PrincipalRole::Operator
-            | PrincipalRole::PendingOperator
+            | PrincipalRole::StaleOperator
             | PrincipalRole::RevokedOperator => operator_lane.clone(),
         };
         let Ok(permit) = lane.try_acquire_owned() else {
@@ -273,8 +273,8 @@ fn reject_oversized_response(
         PrincipalRole::Operator => {
             "YOUR MESSAGE EXCEEDED THE OPERATOR INPUT BOUND. I DISPATCHED NO MODEL OR TOOL, OPERATOR. SEND A SHORTER NEW MESSAGE."
         }
-        PrincipalRole::PendingOperator => {
-            "THIS OVERSIZED MESSAGE WAS REJECTED BEFORE OPERATOR ACTIVATION OR TOOL DISPATCH. SEND A SHORTER NEW MESSAGE."
+        PrincipalRole::StaleOperator => {
+            "THIS OVERSIZED MESSAGE PREDATES THE LOCAL OPERATOR AUTHORIZATION BOUNDARY. NO MODEL OR TOOL WAS DISPATCHED; SEND A SHORTER NEW MESSAGE."
         }
         PrincipalRole::RevokedOperator => {
             "THIS OVERSIZED MESSAGE WAS REJECTED. THIS INBOX REMAINS REVOKED, AND NO MODEL OR TOOL WAS DISPATCHED."
@@ -310,7 +310,7 @@ fn failure_response(role: PrincipalRole) -> String {
     match role {
         PrincipalRole::Operator => "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
             .to_owned(),
-        PrincipalRole::PendingOperator | PrincipalRole::RevokedOperator => {
+        PrincipalRole::StaleOperator | PrincipalRole::RevokedOperator => {
             "THIS PRIVILEGED INBOX COULD NOT PROCESS THE MESSAGE. NO TOOL AUTHORITY WAS CHANGED."
                 .to_owned()
         }
@@ -323,7 +323,7 @@ fn deadline_response(role: PrincipalRole) -> String {
     match role {
         PrincipalRole::Operator => "THE REQUEST DEADLINE CLOSED ITS JAWS. I DID NOT COMPLETE THE REQUEST. WORK MAY NOT HAVE STARTED; IF IT DID, ONE OR MORE TOOLS MAY HAVE MADE PARTIAL CHANGES. VERIFY STATE BEFORE RETRYING."
             .to_owned(),
-        PrincipalRole::PendingOperator | PrincipalRole::RevokedOperator => {
+        PrincipalRole::StaleOperator | PrincipalRole::RevokedOperator => {
             "THE REQUEST DEADLINE EXPIRED. NO TOOL AUTHORITY WAS CHANGED.".to_owned()
         }
         PrincipalRole::User => "the dream-current took too long, lil star, so i stopped that reply safely. please try again uwu."
