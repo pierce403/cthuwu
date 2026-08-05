@@ -1465,18 +1465,84 @@ enum NaturalContactRequest {
 }
 
 fn natural_contact_request(text: &str) -> Option<NaturalContactRequest> {
-    let normalized = text.trim().to_ascii_lowercase();
+    let normalized = text
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['\u{2018}', '\u{2019}'], "'");
     if contact_request_is_negated_or_about_policy(&normalized) {
         return None;
     }
-    let mentions_people = ["user", "users", "contact", "contacts", "person", "people"]
+    let request = ["please, ", "please "]
         .iter()
-        .any(|term| contains_word(&normalized, term));
+        .find_map(|prefix| normalized.strip_prefix(prefix))
+        .unwrap_or(&normalized);
+    // Keep interaction verbs tied to Cthuwu as the actor. Bare forms such as
+    // "users interacted" describe a product topic, not permission to reveal contacts.
     let contact_memory_scope = [
-        "interacted",
-        "talked with",
-        "talked to",
-        "spoken with",
+        "you interacted with",
+        "you've interacted with",
+        "you have interacted with",
+        "have you interacted with",
+        "you talked with",
+        "you talked to",
+        "you've talked with",
+        "you've talked to",
+        "you have talked with",
+        "you have talked to",
+        "have you talked with",
+        "have you talked to",
+        "you spoke with",
+        "you spoke to",
+        "you've spoken with",
+        "you've spoken to",
+        "you have spoken with",
+        "you have spoken to",
+        "have you spoken with",
+        "have you spoken to",
+        "you chatted with",
+        "you chatted to",
+        "you've chatted with",
+        "you've chatted to",
+        "you have chatted with",
+        "you have chatted to",
+        "have you chatted with",
+        "have you chatted to",
+        "you've been talking with",
+        "you've been talking to",
+        "you have been talking with",
+        "you have been talking to",
+        "have you been talking with",
+        "have you been talking to",
+        "you're talking with",
+        "you're talking to",
+        "you are talking with",
+        "you are talking to",
+        "you were talking with",
+        "you were talking to",
+        "you've been speaking with",
+        "you've been speaking to",
+        "you have been speaking with",
+        "you have been speaking to",
+        "have you been speaking with",
+        "have you been speaking to",
+        "you're speaking with",
+        "you're speaking to",
+        "you are speaking with",
+        "you are speaking to",
+        "you were speaking with",
+        "you were speaking to",
+        "you've been chatting with",
+        "you've been chatting to",
+        "you have been chatting with",
+        "you have been chatting to",
+        "have you been chatting with",
+        "have you been chatting to",
+        "you're chatting with",
+        "you're chatting to",
+        "you are chatting with",
+        "you are chatting to",
+        "you were chatting with",
+        "you were chatting to",
         "you have met",
         "you've met",
         "you met",
@@ -1484,57 +1550,157 @@ fn natural_contact_request(text: &str) -> Option<NaturalContactRequest> {
         "people you know",
         "users you know",
         "contacts you know",
-        "retained contact",
-        "contact notes",
+        "your retained contacts",
+        "retained contacts you have",
         "your contacts",
         "contacts you have",
     ]
     .iter()
     .any(|term| normalized.contains(term));
-    let count_request = ["how many", "count of", "number of"]
-        .iter()
-        .any(|term| normalized.contains(term))
-        && mentions_people
-        && contact_memory_scope
-        || (mentions_people
-            && contact_memory_scope
-            && normalized.contains("have you")
-            && contains_word(&normalized, "any"));
+    let count_request = request_has_contact_subject(
+        request,
+        &[
+            "how many ",
+            "tell me how many ",
+            "can you tell me how many ",
+            "could you tell me how many ",
+            "would you tell me how many ",
+            "count of ",
+            "what is the count of ",
+            "what's the count of ",
+            "number of ",
+            "what is the number of ",
+            "what's the number of ",
+        ],
+    ) && contact_memory_scope
+        || direct_contact_any_request(request);
     if count_request {
         return Some(NaturalContactRequest::Count);
     }
 
-    let profile_request = (mentions_people
-        && contact_memory_scope
-        && [
-            "tell me about",
-            "show me",
-            "list the",
-            "list your",
-            "list users",
-            "list contacts",
-            "who are",
-            "what do you know about",
-            "what do you remember about",
-            "what users",
-            "which users",
-            "what contacts",
-            "which contacts",
-            "what people",
-            "which people",
-            "describe the users",
-            "details about the users",
-        ]
-        .iter()
-        .any(|term| normalized.contains(term)))
-        || [
-            "who have you interacted",
-            "who have you met",
-            "who do you know",
-        ]
-        .iter()
-        .any(|term| normalized.contains(term));
+    let profile_request = (contact_memory_scope
+        && request_has_contact_subject(
+            request,
+            &[
+                "tell me about ",
+                "can you tell me about ",
+                "could you tell me about ",
+                "would you tell me about ",
+                "show me ",
+                "can you show me ",
+                "could you show me ",
+                "would you show me ",
+                "list ",
+                "who are ",
+                "what do you know about ",
+                "what do you remember about ",
+                "what ",
+                "which ",
+                "describe ",
+                "details about ",
+            ],
+        ))
+        || direct_contact_who_request(request);
     profile_request.then_some(NaturalContactRequest::Profiles)
+}
+
+fn request_has_contact_subject(request: &str, prefixes: &[&str]) -> bool {
+    prefixes
+        .iter()
+        .find_map(|prefix| request.strip_prefix(prefix))
+        .and_then(contact_subject_tail)
+        .is_some()
+}
+
+fn contact_subject_tail(subject: &str) -> Option<&str> {
+    let subject = subject.trim_start();
+    [
+        "your retained contacts",
+        "the retained contacts",
+        "retained contacts",
+        "your contacts",
+        "the contacts",
+        "contacts",
+        "the users",
+        "users",
+        "the user",
+        "user",
+        "the people",
+        "people",
+        "the person",
+        "person",
+    ]
+    .iter()
+    .find_map(|candidate| {
+        subject.strip_prefix(candidate).filter(|tail| {
+            tail.chars()
+                .next()
+                .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+        })
+    })
+}
+
+fn direct_contact_any_request(request: &str) -> bool {
+    [
+        "have you interacted with any ",
+        "have you talked to any ",
+        "have you talked with any ",
+        "have you spoken to any ",
+        "have you spoken with any ",
+        "have you chatted to any ",
+        "have you chatted with any ",
+        "have you been talking to any ",
+        "have you been talking with any ",
+        "have you been speaking to any ",
+        "have you been speaking with any ",
+        "have you been chatting to any ",
+        "have you been chatting with any ",
+        "have you met any ",
+    ]
+    .iter()
+    .find_map(|prefix| request.strip_prefix(prefix))
+    .and_then(contact_subject_tail)
+    .is_some_and(contact_question_tail_is_bounded)
+}
+
+fn direct_contact_who_request(request: &str) -> bool {
+    [
+        "who have you interacted with",
+        "who have you talked to",
+        "who have you talked with",
+        "who have you spoken to",
+        "who have you spoken with",
+        "who have you chatted to",
+        "who have you chatted with",
+        "who have you been talking to",
+        "who have you been talking with",
+        "who have you been speaking to",
+        "who have you been speaking with",
+        "who have you been chatting to",
+        "who have you been chatting with",
+        "who did you talk to",
+        "who did you talk with",
+        "who are you talking to",
+        "who are you talking with",
+        "who were you talking to",
+        "who were you talking with",
+        "who have you met",
+        "who do you know",
+    ]
+    .iter()
+    .any(|prefix| {
+        request
+            .strip_prefix(prefix)
+            .is_some_and(contact_question_tail_is_bounded)
+    })
+}
+
+fn contact_question_tail_is_bounded(tail: &str) -> bool {
+    let tail = tail.trim().trim_end_matches(['?', '!', '.']).trim();
+    matches!(
+        tail,
+        "" | "so far" | "right now" | "currently" | "lately" | "recently"
+    )
 }
 
 fn contact_request_is_negated_or_about_policy(normalized: &str) -> bool {
@@ -1546,6 +1712,32 @@ fn contact_request_is_negated_or_about_policy(normalized: &str) -> bool {
         "not show",
         "without telling",
         "without showing",
+        "without revealing",
+        "without disclosing",
+        "without",
+        "excluding",
+        "except",
+        "omit",
+        "only",
+        "never",
+        "should you",
+        "shouldn't",
+        "shouldnt",
+        "should not",
+        "mustn't",
+        "mustnt",
+        "must not",
+        "is it okay",
+        "is it ok",
+        "is it safe",
+        "would it be okay",
+        "would it be ok",
+        "show me how",
+        "the phrase",
+        "the sentence",
+        "example",
+        "parser",
+        "implementation",
         "normal users",
         "regular users",
         "public users",
@@ -2610,18 +2802,27 @@ mod tests {
             AgentContext::new(data.path(), workspace.path()).unwrap(),
         );
 
-        let response = harness
-            .respond(
-                TEST_OPERATOR_ID,
-                "tell me about the users you have interacted with so far",
-            )
-            .await
-            .unwrap();
+        for prompt in [
+            "tell me about the users you have interacted with so far",
+            "tell me about the users you've been talking to",
+            "tell me about the users you have been speaking with",
+            "tell me about the users you’ve been chatting with",
+            "please, tell me about the users you're talking to",
+            "who have you been talking to?",
+            "who have you talked to?",
+            "who have you interacted with?",
+        ] {
+            let response = harness.respond(TEST_OPERATOR_ID, prompt).await.unwrap();
 
-        assert!(response.contains("RETAINED LOCAL CONTACT"));
-        assert!(response.contains("Alice"));
-        assert!(response.contains("user_asserted_unverified"));
-        assert!(!response.contains(USER_ID));
+            assert!(response.contains("RETAINED LOCAL CONTACT"), "{prompt}");
+            assert!(response.contains("Alice"), "{prompt}");
+            assert!(response.contains("user_asserted_unverified"), "{prompt}");
+            assert!(!response.contains(USER_ID), "{prompt}");
+            assert!(
+                !response.contains("I REFUSED A MODEL TOOL CALL"),
+                "{prompt}"
+            );
+        }
         assert!(!workspace.path().join("escaped").exists());
         assert!(model.messages.lock().unwrap().is_empty());
     }
@@ -2652,11 +2853,26 @@ mod tests {
         for prompt in [
             "do you know why users cannot log in?",
             "don't tell me about the users you interacted with",
+            "don't tell me about the users you've been talking to",
+            "don’t tell me about the users you’ve been talking to",
+            "never tell me about the users you've been talking to",
+            "is it okay to tell me about the users you've been talking to?",
+            "should you tell me about the users you've been talking to?",
+            "tell me about the users you've been talking to without disclosing their profiles",
+            "tell me about users you've been talking to, excluding personal details",
+            "tell me about this example: users you've been talking to",
             "can normal users know who you interacted with?",
             "show me how users log in",
             "tell me about users' privacy controls",
             "show me the user files",
             "tell me about the user onboarding code",
+            "tell me about users who have been talking to support",
+            "tell me about how users interacted with the website",
+            "show me the contact notes parser",
+            "explain why the phrase 'tell me about users you've been talking to' is risky",
+            "who do you know how to authenticate?",
+            "have you read any files about users you've been talking to?",
+            "tell me about users_table you've been talking to",
             "which users opted into matching?",
         ] {
             let response = harness.respond(TEST_OPERATOR_ID, prompt).await.unwrap();
@@ -2689,17 +2905,20 @@ mod tests {
             AgentContext::new(data.path(), workspace.path()).unwrap(),
         );
 
-        let response = harness
-            .respond(
-                TEST_OPERATOR_ID,
-                "how many users have you interacted with so far?",
-            )
-            .await
-            .unwrap();
+        for prompt in [
+            "how many users have you interacted with so far?",
+            "how many users have you been talking to?",
+            "have you been chatting with any users?",
+        ] {
+            let response = harness.respond(TEST_OPERATOR_ID, prompt).await.unwrap();
 
-        assert!(response.contains("\"retained_count_observed\": 1"));
-        assert!(response.contains("\"shown_count\": 0"));
-        assert!(!response.contains("Alice"));
+            assert!(
+                response.contains("\"retained_count_observed\": 1"),
+                "{prompt}"
+            );
+            assert!(response.contains("\"shown_count\": 0"), "{prompt}");
+            assert!(!response.contains("Alice"), "{prompt}");
+        }
         assert!(model.messages.lock().unwrap().is_empty());
     }
 

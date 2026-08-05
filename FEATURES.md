@@ -342,7 +342,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] A natural operator request for users returns retained contacts from a disjoint data root,
     redacts inbox IDs, labels provenance/scope, provides cursor pagination, reports truncation, and
     cannot turn hostile contact text into an exec. Negated, policy, and count-only requests do not
-    disclose profiles; contact scans and note reads are bounded.
+    disclose profiles; common contracted/progressive conversation wording such as “users you've
+    been talking to” takes the same terminal route, while generic user-topic wording does not.
+    Contact scans and note reads are bounded.
   - [x] Tests reject autonomous tools from auto-loaded context, side effects during identity repair,
     and contact reads after an earlier privileged tool step.
   - [x] Operator prose casing excludes code and bounded tool renderings from uppercase transformation.

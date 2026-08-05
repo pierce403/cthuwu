@@ -85,7 +85,11 @@ Last reviewed: 2026-08-05
 - Retained users are queried through parsed `ContactStore` tools, never by pointing the operator
   root at the sensitive data directory. Reports are terminal, read-only, scoped to current notes,
   redact inbox IDs by default, use cursor pagination, bound scans and note size, and never feed values
-  returned by those tools back into the model. Unsandboxed direct `/exec`
+  returned by those tools back into the model. Natural contact intent must be recognized before
+  model inference with a closed contact subject and actor-anchored conversational forms (including
+  contractions, progressive tense, and smart apostrophes); generic user-topic, qualified, or
+  negated wording must not disclose profiles.
+  Unsandboxed direct `/exec`
   separately retains every filesystem permission of the service account.
 - Operator ACL config version 3 is environment-bound and owner-only at `state/operators.json`.
   Local authorization persists a grant-time `sentAtNs` fence, and each request's role is pinned before a

@@ -185,9 +185,10 @@ role-management, Council, wallet, or arbitrary dynamic tool. Contact questions i
 runtime route, while `/users` and `/user` directly dispatch `list_users` and `get_user`. Those handlers
 read parsed contact notes through `ContactStore`, not generic filesystem paths, and return a terminal
 report without feeding profile text back to the model. Natural count questions omit profiles;
-affirmative profile questions return bounded records. Default reports redact inbox IDs and return a
-numeric continuation cursor. If both Venice and Ollama are unavailable, the deterministic fallback
-does not plan tool calls; direct commands remain available.
+affirmative profile questions such as “tell me about the users you've been talking to” return
+bounded records. Default reports redact inbox IDs and return a numeric continuation cursor. If both
+Venice and Ollama are unavailable, the deterministic fallback does not plan tool calls; direct
+commands remain available.
 
 Treat everything under `UWUBOT_OPERATOR_ROOT` as readable by an operator-delegated model inspection
 and potentially sent to the configured model endpoint. Do not place credentials, private XMTP state,
