@@ -897,9 +897,7 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        operators
-            .add_at(OPERATOR_ID, "Dean", "100")
-            .unwrap();
+        operators.add_at(OPERATOR_ID, "Dean", "100").unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),
@@ -963,9 +961,7 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        operators
-            .add_at(OPERATOR_ID, "Dean", "100")
-            .unwrap();
+        operators.add_at(OPERATOR_ID, "Dean", "100").unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),
@@ -1020,9 +1016,7 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        operators
-            .add_at(OPERATOR_ID, "Dean", "100")
-            .unwrap();
+        operators.add_at(OPERATOR_ID, "Dean", "100").unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),
@@ -1050,9 +1044,7 @@ mod tests {
             calls: StdMutex::new(Vec::new()),
         });
         let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
-        operators
-            .add_at(OPERATOR_ID, "Dean", "100")
-            .unwrap();
+        operators.add_at(OPERATOR_ID, "Dean", "100").unwrap();
         let bot = configured_bot(
             root.path(),
             Arc::new(DeterministicModel),

@@ -300,7 +300,9 @@ fn run_management_command(mut operators: OperatorStore, command: CliCommand) -> 
                 let authorized = operators.add(&inbox_id, &label)?;
                 println!("active operator: {}", authorized.inbox_id);
                 println!("generation: {}", authorized.generation);
-                println!("restart the Tentacle; newly authored messages from this inbox may use the operator harness");
+                println!(
+                    "restart the Tentacle; newly authored messages from this inbox may use the operator harness"
+                );
             }
             OperatorCommand::Revoke { inbox_id } => {
                 if operators.revoke(&inbox_id)? {

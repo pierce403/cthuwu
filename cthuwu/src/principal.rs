@@ -105,10 +105,7 @@ impl OperatorStore {
                     LEGACY_OPERATOR_CONFIG_VERSION => {
                         let records = validate_legacy_records(config.operators)?;
                         (
-                            validate_records(migrate_legacy_records(
-                                records,
-                                unix_nanoseconds(),
-                            ))?,
+                            validate_records(migrate_legacy_records(records, unix_nanoseconds()))?,
                             true,
                         )
                     }
@@ -582,7 +579,8 @@ mod tests {
         fs::remove_file(&path).unwrap();
         fs::rename(&backup, &path).unwrap();
         assert_eq!(
-            store.add_at(OPERATOR_ID, "Dean updated", "300")
+            store
+                .add_at(OPERATOR_ID, "Dean updated", "300")
                 .unwrap()
                 .generation,
             2
@@ -620,12 +618,19 @@ mod tests {
         let before_migration = unix_nanoseconds();
         let store = OperatorStore::new(root.path(), "production").unwrap();
         let after_migration = unix_nanoseconds();
-        assert_eq!(store.role_for(OPERATOR_ID).unwrap(), PrincipalRole::Operator);
+        assert_eq!(
+            store.role_for(OPERATOR_ID).unwrap(),
+            PrincipalRole::Operator
+        );
         let migrated: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(migrated["version"], 3);
         assert_eq!(migrated["operators"][0]["status"], "active");
-        assert!(migrated["operators"][0].get("activation_token_hash").is_none());
+        assert!(
+            migrated["operators"][0]
+                .get("activation_token_hash")
+                .is_none()
+        );
         let boundary = migrated["operators"][0]["authorized_after_sent_at_ns"]
             .as_str()
             .unwrap()
