@@ -28,12 +28,26 @@ const MAX_RENDERED_CONTEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct AgentContext {
+    data_root: PathBuf,
     workspace_root: PathBuf,
     instance_root: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentLocations {
+    pub workspace_root: PathBuf,
+    pub workspace_memory: PathBuf,
+    pub workspace_skills: PathBuf,
+    pub protected_soul: PathBuf,
+    pub protected_memory: PathBuf,
+    pub protected_operator_profile: PathBuf,
+    pub retained_contacts: PathBuf,
+}
+
 impl AgentContext {
     pub fn new(data_dir: &Path, workspace_root: &Path) -> Result<Self> {
+        let data_root = fs::canonicalize(data_dir)
+            .with_context(|| format!("resolving agent data root {}", data_dir.display()))?;
         let workspace_root = fs::canonicalize(workspace_root).with_context(|| {
             format!(
                 "resolving operator workspace root {}",
@@ -44,7 +58,7 @@ impl AgentContext {
             bail!("operator workspace root must be a directory");
         }
 
-        let instance_root = data_dir.join("state/agent");
+        let instance_root = data_root.join("state/agent");
         let memories = instance_root.join("memories");
         let operators = instance_root.join("operators");
         ensure_private_directory(&instance_root)?;
@@ -54,6 +68,7 @@ impl AgentContext {
         seed_file(&memories.join("MEMORY.md"), DEFAULT_MEMORY)?;
 
         Ok(Self {
+            data_root,
             workspace_root,
             instance_root,
         })
@@ -61,6 +76,22 @@ impl AgentContext {
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn locations(&self, operator_inbox_id: &str) -> Result<AgentLocations> {
+        let operator_inbox_id = normalize_inbox_id(operator_inbox_id)?;
+        Ok(AgentLocations {
+            workspace_root: self.workspace_root.clone(),
+            workspace_memory: self.workspace_root.join("MEMORY.md"),
+            workspace_skills: self.workspace_root.join("skills"),
+            protected_soul: self.instance_root.join("SOUL.md"),
+            protected_memory: self.instance_root.join("memories/MEMORY.md"),
+            protected_operator_profile: self
+                .instance_root
+                .join("operators")
+                .join(format!("{operator_inbox_id}.md")),
+            retained_contacts: self.data_root.join("contacts"),
+        })
     }
 
     pub fn ensure_operator_profile(&self, operator_inbox_id: &str) -> Result<()> {
@@ -344,9 +375,9 @@ fn parse_skill_header(content: &str, fallback: &str) -> (String, String) {
                 break;
             }
             if let Some(value) = line.strip_prefix("name:") {
-                name = Some(unquote(value.trim()).to_owned());
+                name = Some(unquote(value.trim()));
             } else if let Some(value) = line.strip_prefix("description:") {
-                description = Some(unquote(value.trim()).to_owned());
+                description = Some(unquote(value.trim()));
             }
         }
     }
@@ -365,16 +396,21 @@ fn parse_skill_header(content: &str, fallback: &str) -> (String, String) {
     (name, description)
 }
 
-fn unquote(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
+fn unquote(value: &str) -> String {
+    if value.starts_with('"') && value.ends_with('"') {
+        return serde_json::from_str::<String>(value).unwrap_or_else(|_| {
             value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(value)
+                .to_owned()
+        });
+    }
+    value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
         .unwrap_or(value)
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -461,6 +497,35 @@ mod tests {
 
         assert!(context.render(OPERATOR_A).unwrap().contains("ring twice"));
         assert!(!context.render(OPERATOR_B).unwrap().contains("ring twice"));
+    }
+
+    #[test]
+    fn reports_exact_workspace_and_note_locations_for_the_authenticated_operator() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let context = AgentContext::new(data.path(), workspace.path()).unwrap();
+        let locations = context.locations(OPERATOR_A).unwrap();
+
+        assert_eq!(locations.workspace_root, workspace.path());
+        assert_eq!(
+            locations.workspace_memory,
+            workspace.path().join("MEMORY.md")
+        );
+        assert_eq!(locations.workspace_skills, workspace.path().join("skills"));
+        assert_eq!(
+            locations.protected_soul,
+            data.path().join("state/agent/SOUL.md")
+        );
+        assert_eq!(
+            locations.protected_memory,
+            data.path().join("state/agent/memories/MEMORY.md")
+        );
+        assert_eq!(
+            locations.protected_operator_profile,
+            data.path()
+                .join(format!("state/agent/operators/{OPERATOR_A}.md"))
+        );
+        assert_eq!(locations.retained_contacts, data.path().join("contacts"));
     }
 
     #[test]

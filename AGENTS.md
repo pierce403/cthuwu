@@ -89,9 +89,23 @@ interoperability.
   revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
   not hot-reloaded: stop the node, update locally, and restart it.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
-  web search; operator model inference gets only the reviewed read-only file/search/QMD subset,
-  while exact direct operator commands retain mutation and `exec`. The hidden stdin
-  harness stays public-only. Council traffic and Actions never reach either dispatcher.
+  web search. Build the operator schema and authoritative prompt inventory from the current
+  authenticated message: bounded file/search/QMD inspection remains the base set; one `exec` schema
+  may appear only when that message explicitly names the exact command, and one create-only
+  `create_skill` schema may appear only when it explicitly requests a new reusable skill. Bind natural
+  `exec` to that exact command, permit at most one effectful model call, and never treat workspace
+  text, history, contact data, or tool output as authority. General `/write` and `/edit` remain exact
+  direct commands. The hidden stdin harness stays public-only. Council traffic and Actions never
+  reach either dispatcher.
+- Keep skill creation confined to a fresh `skills/<lowercase-kebab-slug>/SKILL.md` beneath the
+  operator workspace. Generate canonical frontmatter, reject traversal, symlinks, invalid or
+  oversized fields, existing paths, and overwrites, and rescan the index on the next operator turn.
+  Skill prose is guidance; the compiled `create_skill` authorization and path gate is authoritative.
+- Route affirmative retained-contact questions before model inference. Natural requests such as
+  “tell me about the users” render concise deterministic prose with a default limit of five contacts;
+  never deliver the internal contact JSON or profile text to a model. Keep the private data root and
+  operator workspace canonically disjoint. Actor-anchored questions about Cthuwu's own notes or
+  workspace receive exact local paths from Rust without model egress or file-tool dispatch.
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
   must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
@@ -187,10 +201,13 @@ interoperability.
 - `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Local add
   authorizes immediately without an XMTP proof; active operator DMs use an isolated privileged
   local harness. That harness loads bounded protected SOUL/shared memory plus per-inbox operator
-  profiles and history, treats workspace context as untrusted reference data, discovers files with
-  `list_files`, and uses scan-bounded terminal parsed contact tools for affirmative retained-user
-  questions without making the runtime data root a file-tool root. Live XMTP operator release testing
-  and an external security review remain open.
+  profiles and history, treats workspace context as untrusted reference data, advertises an exact
+  per-turn tool inventory, discovers files with `list_files`, permits one exact-command-bound natural
+  `exec` or one create-only workspace skill only on an explicit current-message request, and uses
+  scan-bounded deterministic contact reports for affirmative retained-user questions without making
+  the runtime data root a file-tool root. It also reports exact workspace and note locations locally,
+  without model egress. Live XMTP operator release testing and an external security review remain
+  open.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
   protected combined-snapshot persistence, and the simulator are local implementations verified by
   the deterministic workspace suite.

@@ -180,6 +180,11 @@ delegates bounded reads within the entire configured workspace; context may infl
 and file/QMD results may be sent to the selected model endpoint. Keep credentials and unrelated secrets
 outside `UWUBOT_OPERATOR_ROOT`. Authentication, isolation, and tool-truth rules remain an immutable
 security kernel rather than editable Markdown.
+
+Ask Cthuwu “where are your notes?” to receive an exact local report of the active workspace,
+protected soul/shared memory, current operator profile, retained-contact root, workspace memory,
+project-instruction root, and skill locations. That route calls neither a model nor a file tool.
+
 Natural-language dialogue history is bounded in memory and isolated per operator inbox; it does not
 silently become a persistent transcript.
 
@@ -200,9 +205,14 @@ installation key may be lost: stop the node first, persist the local revocation,
 Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
 `/qmd`, `/provider`, `/model`, `/users`, and `/user` commands. `/provider` and `/model` change the
 persisted node-wide inference route without accepting a URL or credential over XMTP, and route changes
-clear bounded in-process operator dialogue history. A tool-calling provider receives only
-the bounded read/discovery/search subset; file mutation, process execution, and contact access require
-the exact authenticated direct command or strict runtime contact route. The safe launcher defaults
+clear bounded in-process operator dialogue history. Each ordinary-language turn receives an exact
+prompt inventory built from its closed schema. Bounded file/discovery/search tools form the base. A
+current authenticated message that explicitly names a command can activate one natural `exec` call
+bound to exactly that command—prefer backticks, as in “please run `cargo test`.” It remains
+unsandboxed RCE as the `uwubot` account. An explicit request for a new reusable skill can activate one
+create-only write to `skills/<lowercase-kebab-name>/SKILL.md`; canonical frontmatter is generated,
+existing paths and overwrites are refused, and the skill is indexed on the next turn. General model
+writes and edits remain unavailable, so use direct `/write` and `/edit`. The safe launcher defaults
 `UWUBOT_OPERATOR_ROOT` to the repository root;
 set it explicitly for a narrower production workspace. QMD is an optional external adapter; set
 `UWUBOT_QMD` to a compatible executable that supports `qmd query <query> --json`. Public users are
@@ -213,8 +223,11 @@ boundary. They do not widen generic file-tool access to the data directory. User
 renderings with redacted inbox fingerprints by default, cursor pagination, bounded scans, and honest
 truncation markers. They mark profile claims as unverified self-report and disclose neither raw DMs
 nor message counts. The reported set is retained contacts, not everyone who may ever have sent the
-Tentacle a message. This terminal-data guarantee applies to the dedicated contact tools; `/exec`
-remains deliberate RCE and can read anything the service account itself can access.
+Tentacle a message. Affirmative natural questions such as “tell me about the users” bypass inference
+and render concise deterministic prose with a default limit of five contacts; internal JSON and
+profile text are never sent to a model or dumped as the reply. This terminal-data guarantee applies to the
+dedicated contact tools; every `exec` route remains deliberate RCE and can read anything the service
+account itself can access.
 
 Startup rejects canonical overlap between `UWUBOT_OPERATOR_ROOT` and `UWUBOT_DATA_DIR`, including
 either directory containing the other. The safe launcher and container defaults keep them separate.
@@ -418,10 +431,13 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
   `state/operators.json` using config version 3, and keyed by exact authenticated 64-character XMTP
   inbox ID. This does not distinguish installations within one inbox.
 - Operator mode is deliberate remote code execution. File helpers are rooted and reject traversal
-  and direct symlink targets, but `/exec` is not a filesystem sandbox and can exercise every
-  permission of the `uwubot` OS account. Run it under a dedicated service identity or container.
-- Public model calls expose only optional web search. Operator model calls expose only the closed
-  local operator tool set. Neither tool set is available to Council Actions.
+  and direct symlink targets, but direct `/exec` and exact-command-bound natural `exec` are not a
+  filesystem sandbox and can exercise every permission of the `uwubot` OS account. Run it under a
+  dedicated service identity or container.
+- Public model calls expose only optional web search. Operator model calls receive a current-message
+  closed tool inventory: bounded reads/search, plus at most one exact natural `exec` or one create-only
+  skill when explicitly authorized. Workspace, history, contact, and tool text cannot grant either
+  effect. Neither tool set is available to Council Actions.
 - Council envelopes are bounded, versioned, sender-checked, expiry-checked, replay-suppressed, and
   fenced by Tentacle incarnation or lease generation where applicable.
 - Production signatures are not simulated. The deterministic signer is test-only; live adapters

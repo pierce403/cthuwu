@@ -179,11 +179,16 @@ independently.
 Active operator text enters a separate harness with an all-caps, ominous, reluctantly submissive,
 truthful Cthuwu persona and light readable uwu phrasing. The underlying model is explicitly an
 implementation detail; provider-style self-identification receives one repair attempt and then a
-fixed Cthuwu fallback. The model may call only read-only `list_files`, `read_file`, `search_files`,
-and `qmd_search`. A model-selected tool phase is capped at 30 seconds and must preserve enough of the
-authenticated deadline for a final local model completion. Exact direct operator commands reach the
-same bounded dispatcher for file mutation and `exec`; strict runtime routing or `/users` and `/user`
-reaches contact handlers. Original prose is
+fixed Cthuwu fallback. Each inference turn derives both the function schema and the authoritative
+prompt inventory from the current authenticated message. The base schema contains bounded
+`list_files`, `read_file`, `search_files`, and `qmd_search`; Rust still requires current-message
+inspection or project-work intent before dispatch. If the same message explicitly names a shell
+command, the schema adds `exec` with that command as its only accepted value. If it explicitly asks
+for a new reusable skill, the schema instead adds create-only `create_skill`. At most one of those
+effectful calls may execute for one message. A model-selected tool phase is capped at 30 seconds and
+must preserve enough of the authenticated deadline for a final local model completion. Exact direct
+operator commands continue to reach the bounded dispatcher for `/write`, `/edit`, and `/exec`;
+strict runtime routing or `/users` and `/user` reaches contact handlers. Original prose is
 uppercased, while code and bounded runtime-provided tool
 renderings are not uppercased. Process bytes are truncated to a fixed bound and decoded with lossy
 UTF-8 replacement; the result is not a verbatim or byte-exact capture. Tool results are structured,
@@ -200,9 +205,26 @@ isolation, and tool-truth kernel. A current-message project-inspection request i
 for bounded reads anywhere under the operator root; context may influence selected paths, and results
 may reach the selected model endpoint. Optional malformed workspace metadata is skipped. Contact notes and
 raw public DMs are not bulk-injected. A bounded in-process dialogue history is also keyed by operator
-inbox and cleared on restart; persistent Markdown remains deliberately host-curated. Effectful tools
-are absent from model inference, so workspace prompt injection cannot choose mutation or process
-arguments; an authenticated operator must supply the exact direct command.
+inbox and cleared on restart; persistent protected Markdown remains deliberately host-curated. An
+actor-anchored question such as “where are your notes?” takes a deterministic local route that reports
+the exact canonical workspace, protected soul/shared memory, authenticated-operator profile,
+contact-note root, workspace memory, and workspace skill locations without calling a model or file
+tool. It also identifies the workspace root where the first supported project-instruction file is
+loaded. The protected/data roots stay outside the workspace.
+
+Natural `exec` authority comes only from the current authenticated operator message and is bound to
+the command that message names; backticks are the least ambiguous form. The model cannot substitute,
+append, or repeat a command, and negated, explanatory, capability-only, historical, workspace, or
+tool-output text cannot authorize execution. This narrow gate does not make `exec` safe: it still runs
+as the unsandboxed `uwubot` OS account. General model-selected writes and edits remain unavailable.
+
+An explicit current-message request to create a skill can create exactly one fresh
+`skills/<lowercase-kebab-name>/SKILL.md`. Rust validates bounded name, one-line description, and
+Markdown instructions, generates canonical YAML frontmatter, creates a fresh directory, atomically
+creates the file with restrictive permissions where supported, and rejects traversal, symlinks,
+existing paths, and overwrites. The compact skill index is rebuilt on the next operator turn, when
+the new `SKILL.md` must be read before use. Skill content cannot enlarge this compiled create-only
+authority.
 
 File tools are confined to `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
 targets, bound directory listings, page UTF-8 reads at no more than 12 KiB, cap writes and edits at
@@ -222,9 +244,11 @@ retained `ContactStore` notes even when the data directory and operator workspac
 result is a terminal local rendering, cannot follow or mix with another tool call, redacts inbox IDs
 by default, exposes a numeric continuation cursor, bounds note size and directory scanning, labels
 user-authored profile fields as unverified self-report, and includes no raw DM body or message count.
-This keeps values returned by the dedicated contact tools away from model invocation entirely. It
-does not change the separate fact that direct `/exec` is RCE with all
-service-account filesystem permissions.
+Affirmative natural forms such as “tell me about the users” are recognized before inference and
+render concise deterministic prose for at most five contacts by default. The internal JSON receipt
+and contact profile text are never returned to a model or dumped to the operator; malformed receipt
+shapes fail closed. This does not change the separate fact that `/exec` and authorized natural
+`exec` are RCE with all service-account filesystem permissions.
 
 Public and operator-class requests use separate one-permit authority lanes. The role is pinned
 and the message ID is durably claimed before lane selection. A second same-lane request receives a
@@ -352,8 +376,8 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
-| Operator model → runtime | Generated text or local tool call | Separate closed tool schema, bounded agent loop, structured receipts, no role changes |
-| Operator tools → OS | Authenticated direct effects or model-selected reads | Rooted file helpers, read-only model schema, limits/timeouts, secret-stripped environment; OS isolation required for direct `/exec` |
+| Operator model → runtime | Generated text or local tool call | Current-message-derived closed schema/prompt inventory, exact-command or create-only effect binding, one effectful call, bounded agent loop, structured receipts, no role changes |
+| Operator tools → OS | Authenticated direct effects, model-selected reads, one explicitly authorized natural effect | Rooted file helpers, create-only skill path, exact natural-exec command binding, limits/timeouts, secret-stripped environment; OS isolation required for every `exec` path |
 | Rust ↔ XMTP subprocess | `inbound_text`, empty-text `reject_inbound`, or metadata-only `reject_oversized` JSONL; authenticated metadata, `sentAtNs`, local deadline, and admitted text only | Node-side byte check, allowlisted environment, bounded frames/handshake, pinned role snapshot, durable claim before admission, first-claim `Reply`/duplicate `Ignore`, no rejection-path dispatch, no-queue authority lanes, deadline cancellation |
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |

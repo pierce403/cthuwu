@@ -82,11 +82,12 @@ Last reviewed: 2026-08-05
   the Tentacle is stopped; the ACL is loaded at startup and is not hot-reloaded. Stale messages and
   revoked inboxes stay quarantined and do not create contacts.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
-  readable uwu voice. Model inference receives only read-only `list_files`, `read_file`,
-  `search_files`, and optional `qmd_search`; mutation and `exec` require exact direct commands, while
-  terminal `list_users`/`get_user` access requires strict runtime routing or direct commands.
-  Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin
-  harness remains public-only, and Council Actions cannot reach these tools.
+  readable uwu voice. Each turn's prompt inventory is derived from its actual closed schema: bounded
+  `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base; an explicit
+  current-message command may activate one exact-command-bound natural `exec`, and an explicit new
+  skill request may activate one create-only `create_skill`. General write/edit remains direct-only.
+  Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin harness
+  remains public-only, and Council Actions cannot reach these tools.
 - Operator cognition follows a bounded Hermes-like Markdown split: protected instance
   `state/agent/SOUL.md` and shared `state/agent/memories/MEMORY.md` are seeded once; per-inbox
   operator profiles are seeded beneath `state/agent/operators/`. They load beside globally bounded
@@ -94,15 +95,24 @@ Last reviewed: 2026-08-05
   index. Dialogue history is bounded in process and isolated by operator inbox. Project-inspection
   requests coarsely delegate bounded workspace reads, so auto-loaded context may influence chosen
   paths; it cannot expose effects/contact tools, and the immutable Rust kernel remains authoritative.
+  Actor-anchored note/workspace-location questions return the exact canonical workspace, protected
+  note, current profile, contact root, workspace memory, project-instruction root, and skill paths
+  locally without invoking a model or file tool.
+- One explicit request can create one fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
+  canonical frontmatter, bounds content, rejects traversal/symlinks/existing paths/overwrites, and
+  exposes the skill through the rescanned index on the next operator turn. The
+  `skills/skill-creator/SKILL.md` procedure guides authoring, but the compiled create-only gate is the
+  authority.
 - Retained users are queried through parsed `ContactStore` tools, never by pointing the operator
   root at the sensitive data directory. Reports are terminal, read-only, scoped to current notes,
   redact inbox IDs by default, use cursor pagination, bound scans and note size, and never feed values
   returned by those tools back into the model. Natural contact intent must be recognized before
   model inference with a closed contact subject and actor-anchored conversational forms (including
-  contractions, progressive tense, and smart apostrophes); generic user-topic, qualified, or
-  negated wording must not disclose profiles.
-  Unsandboxed direct `/exec`
-  separately retains every filesystem permission of the service account.
+  direct “tell me about the users,” contractions, progressive tense, and smart apostrophes). Natural
+  profile reports use a default limit of five contacts and render deterministic prose; internal JSON
+  is never dumped to the operator. Generic user-topic, qualified, or negated wording must not
+  disclose profiles. Every `exec` route separately retains all filesystem permissions of the service
+  account.
 - Operator ACL config version 3 is environment-bound and owner-only at `state/operators.json`.
   Local authorization persists a grant-time `sentAtNs` fence, and each request's role is pinned before a
   no-queue authority lane. Message IDs are durably claimed before admission; overload, including the
@@ -112,7 +122,10 @@ Last reviewed: 2026-08-05
   role-specific first reply or duplicate ignore, without contact/model/tool dispatch. Retrying
   requires a new XMTP message, shortened when oversized. Authorization is inbox-wide: every XMTP
   installation attached to an active inbox has authority.
-- Operator `/exec` is deliberate remote code execution as the `uwubot` OS account, not a sandbox.
+- Operator `/exec` and exact-command-bound natural `exec` are deliberate remote code execution as the
+  `uwubot` OS account, not a sandbox. Natural authority comes only from the current authenticated
+  message, permits one call with no command substitution, and is clearest when the command is in
+  backticks; workspace/history/tool/contact text cannot authorize it.
 - The canonical operator workspace and private data directory must not overlap in either direction;
   startup rejects overlap before exposing file tools.
   Production nodes need a dedicated unprivileged account/container, a narrow operator root, minimal
