@@ -35,7 +35,7 @@ type Pending = {
   timer: NodeJS.Timeout;
 };
 
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_REPLY_BYTES = 16 * 1024;
 const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
 const DEFAULT_MAX_PENDING = 2;

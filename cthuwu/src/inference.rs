@@ -1,4 +1,8 @@
 use crate::{
+    deadline::{
+        DETERMINISTIC_FALLBACK_RESERVE, InferenceDeadline, InferenceLane, LOCAL_MODEL_PHASE_LIMIT,
+        OPERATOR_MODEL_TOOL_PHASE_LIMIT,
+    },
     model::{DeterministicModel, Model, ModelRequest, OpenAiCompatibleModel, RawAssistantMessage},
     operator::{ControlReply, ModelControl, OperatorModel},
     storage::{ensure_private_directory, restrict_file, sync_directory},
@@ -19,17 +23,21 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::NamedTempFile;
+use tokio::time::timeout;
 use tracing::warn;
 
 pub const DEFAULT_VENICE_MODEL: &str = "e2ee-deepseek-v4-flash";
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen3:8b";
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
 pub const DEFAULT_OLLAMA_TIMEOUT_SECONDS: u64 = 75;
+pub const DEFAULT_VENICE_TIMEOUT_SECONDS: u64 = 120;
 const VENICE_ENDPOINT: &str = "https://api.venice.ai/api/v1";
 const INFERENCE_CONFIG_VERSION: u32 = 1;
 const MAX_INFERENCE_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_MODEL_ID_CHARS: usize = 128;
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+const PUBLIC_REMOTE_ATTEMPT_LIMIT: Duration = Duration::from_secs(30);
+const MIN_PROVIDER_ATTEMPT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +76,7 @@ pub struct InferenceConfig {
     pub startup_model: Option<String>,
     pub venice_api_key: Option<String>,
     pub venice_model: String,
+    pub venice_timeout: Duration,
     pub ollama_endpoint: String,
     pub ollama_model: String,
     pub ollama_timeout: Duration,
@@ -207,7 +216,7 @@ struct RouterState {
     selection: StoredInferenceConfig,
     models: ProviderModels,
     generation: u64,
-    unhealthy_until: HashMap<Provider, Instant>,
+    unhealthy_until: HashMap<(Provider, InferenceLane), Instant>,
     last_effective: Option<Provider>,
     last_failure: Option<Provider>,
 }
@@ -225,9 +234,19 @@ struct Candidate {
     generation: u64,
 }
 
+impl Candidate {
+    fn model_name(&self) -> &str {
+        match &self.model {
+            CandidateModel::Compatible(model) => model.model_name(),
+            CandidateModel::Deterministic => "built-in",
+        }
+    }
+}
+
 struct ProviderSettings {
     venice_endpoint: String,
     venice_api_key: Option<String>,
+    venice_timeout: Duration,
     ollama_endpoint: String,
     ollama_timeout: Duration,
     openai_endpoint: String,
@@ -256,8 +275,9 @@ impl InferenceRouter {
         let settings = ProviderSettings {
             venice_endpoint: VENICE_ENDPOINT.to_owned(),
             venice_api_key: normalized_secret(config.venice_api_key),
+            venice_timeout: validate_provider_timeout("Venice", config.venice_timeout)?,
             ollama_endpoint: config.ollama_endpoint,
-            ollama_timeout: config.ollama_timeout,
+            ollama_timeout: validate_provider_timeout("Ollama", config.ollama_timeout)?,
             openai_endpoint: config.openai_endpoint,
             openai_api_key: normalized_secret(config.openai_api_key),
             web_search: config.web_search,
@@ -293,7 +313,7 @@ impl InferenceRouter {
             .unwrap_or_else(|_| "inference router unavailable".to_owned())
     }
 
-    fn candidates(&self) -> Result<Vec<Candidate>> {
+    fn candidates(&self, lane: InferenceLane) -> Result<Vec<Candidate>> {
         let now = Instant::now();
         let state = self
             .state
@@ -311,7 +331,7 @@ impl InferenceRouter {
             if provider != Provider::Deterministic
                 && state
                     .unhealthy_until
-                    .get(&provider)
+                    .get(&(provider, lane))
                     .is_some_and(|until| *until > now)
             {
                 continue;
@@ -348,27 +368,34 @@ impl InferenceRouter {
         Ok(candidates)
     }
 
-    fn record_success(&self, provider: Provider, generation: u64) {
+    fn record_success(&self, provider: Provider, lane: InferenceLane, generation: u64) {
         if let Ok(mut state) = self.state.write() {
             if state.generation != generation {
                 return;
             }
-            state.unhealthy_until.remove(&provider);
+            let now = Instant::now();
+            state.unhealthy_until.retain(|_, until| *until > now);
+            state.unhealthy_until.remove(&(provider, lane));
             state.last_effective = Some(provider);
-            if state.last_failure == Some(provider) {
+            if state.last_failure == Some(provider)
+                && !state
+                    .unhealthy_until
+                    .keys()
+                    .any(|(failed_provider, _)| *failed_provider == provider)
+            {
                 state.last_failure = None;
             }
         }
     }
 
-    fn record_failure(&self, provider: Provider, generation: u64) {
+    fn record_failure(&self, provider: Provider, lane: InferenceLane, generation: u64) {
         if let Ok(mut state) = self.state.write() {
             if state.generation != generation {
                 return;
             }
             state
                 .unhealthy_until
-                .insert(provider, Instant::now() + FAILURE_COOLDOWN);
+                .insert((provider, lane), Instant::now() + FAILURE_COOLDOWN);
             state.last_failure = Some(provider);
         }
     }
@@ -396,8 +423,10 @@ impl InferenceRouter {
             .unwrap_or("NOT USED YET");
         let last_failure = state.last_failure.map(Provider::as_str).unwrap_or("NONE");
         Ok(format!(
-            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nVENICE PRIVACY MODE: TEE-ONLY WITH BASELINE NONCE ATTESTATION; FULL E2EE: NO\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
+            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nVENICE PRIVACY MODE: TEE-ONLY WITH BASELINE NONCE ATTESTATION; FULL E2EE: NO\nVENICE DEADLINE POLICY: PUBLIC CHAT <= {}S; OPERATOR <= {}S; BOTH ARE CLAMPED TO THE REMAINING AUTHENTICATED DEADLINE\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT WITH EXPLICIT TIME RESERVED BEFORE REMOTE INFERENCE\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
             selected.as_str(),
+            PUBLIC_REMOTE_ATTEMPT_LIMIT.as_secs(),
+            self.settings.venice_timeout.as_secs(),
             state.selection.ollama_model
         ))
     }
@@ -416,7 +445,9 @@ impl InferenceRouter {
                 .generation
                 .checked_add(1)
                 .context("inference route generation exhausted")?;
-            state.unhealthy_until.remove(&provider);
+            state
+                .unhealthy_until
+                .retain(|(failed_provider, _), _| *failed_provider != provider);
             if state.last_failure == Some(provider) {
                 state.last_failure = None;
             }
@@ -437,7 +468,9 @@ impl InferenceRouter {
             .generation
             .checked_add(1)
             .context("inference route generation exhausted")?;
-        state.unhealthy_until.remove(&provider);
+        state
+            .unhealthy_until
+            .retain(|(failed_provider, _), _| *failed_provider != provider);
         state.last_effective = None;
         state.last_failure = None;
         Ok(ControlReply {
@@ -487,7 +520,9 @@ impl InferenceRouter {
             .generation
             .checked_add(1)
             .context("inference route generation exhausted")?;
-        state.unhealthy_until.remove(&provider);
+        state
+            .unhealthy_until
+            .retain(|(failed_provider, _), _| *failed_provider != provider);
         state.last_effective = None;
         state.last_failure = None;
         Ok(ControlReply {
@@ -579,20 +614,146 @@ impl ModelControl for InferenceRouter {
     }
 }
 
+impl InferenceRouter {
+    fn attempt_deadline(
+        &self,
+        deadline: InferenceDeadline,
+        candidate: &Candidate,
+        remaining_candidates: &[Candidate],
+    ) -> Result<Option<(InferenceDeadline, Duration, Duration)>> {
+        if candidate.provider == Provider::Deterministic {
+            return Ok(Some((deadline, deadline.remaining(), Duration::ZERO)));
+        }
+
+        let remaining = deadline.remaining();
+        let reserve = self.fallback_reserve(deadline.lane(), remaining_candidates);
+        let available = remaining.saturating_sub(reserve);
+        let provider_limit = match (&candidate.model, candidate.provider, deadline.lane()) {
+            (CandidateModel::Compatible(_), Provider::Venice, InferenceLane::Public) => self
+                .settings
+                .venice_timeout
+                .min(PUBLIC_REMOTE_ATTEMPT_LIMIT),
+            (CandidateModel::Compatible(_), Provider::Venice, InferenceLane::Operator) => {
+                self.settings.venice_timeout
+            }
+            (CandidateModel::Compatible(model), Provider::Openai, InferenceLane::Public) => {
+                model.timeout_limit().min(PUBLIC_REMOTE_ATTEMPT_LIMIT)
+            }
+            (CandidateModel::Compatible(model), Provider::Openai, InferenceLane::Operator) => {
+                model.timeout_limit()
+            }
+            (CandidateModel::Compatible(model), Provider::Ollama, _) => {
+                model.timeout_limit().min(LOCAL_MODEL_PHASE_LIMIT)
+            }
+            (CandidateModel::Deterministic, Provider::Deterministic, _) => unreachable!(),
+            _ => bail!("inference candidate did not match its provider"),
+        };
+        if available < MIN_PROVIDER_ATTEMPT {
+            return Ok(None);
+        }
+        let attempt_budget = available.min(provider_limit);
+        Ok(Some((
+            deadline.capped(attempt_budget)?,
+            attempt_budget,
+            reserve,
+        )))
+    }
+
+    fn fallback_reserve(
+        &self,
+        lane: InferenceLane,
+        remaining_candidates: &[Candidate],
+    ) -> Duration {
+        let deterministic = if remaining_candidates
+            .iter()
+            .any(|candidate| candidate.provider == Provider::Deterministic)
+        {
+            DETERMINISTIC_FALLBACK_RESERVE
+        } else {
+            Duration::ZERO
+        };
+        let ollama = if remaining_candidates
+            .iter()
+            .any(|candidate| candidate.provider == Provider::Ollama)
+        {
+            let local_model_phase = self.settings.ollama_timeout.min(LOCAL_MODEL_PHASE_LIMIT);
+            match lane {
+                InferenceLane::Public => local_model_phase,
+                InferenceLane::Operator => local_model_phase
+                    .saturating_add(local_model_phase)
+                    .saturating_add(OPERATOR_MODEL_TOOL_PHASE_LIMIT),
+            }
+        } else {
+            Duration::ZERO
+        };
+        deterministic.saturating_add(ollama)
+    }
+}
+
+fn timeout_phase(error: &anyhow::Error) -> &'static str {
+    let rendered = format!("{error:#}");
+    [
+        "venice_model_catalog",
+        "venice_tee_validation_wait",
+        "venice_tee_attestation",
+        "policy_repair",
+        "tool_continuation",
+        "chat_completion",
+        "provider_attempt",
+    ]
+    .into_iter()
+    .find(|phase| rendered.contains(*phase))
+    .unwrap_or("provider_route")
+}
+
+fn is_timeout_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)
+            || cause.to_string().contains("timed out")
+    })
+}
+
 #[async_trait]
 impl Model for InferenceRouter {
     async fn respond(&self, request: ModelRequest<'_>) -> Result<String> {
-        let candidates = self.candidates()?;
+        let candidates = self.candidates(InferenceLane::Public)?;
+        let deadline = InferenceDeadline::current(InferenceLane::Public)?;
         let mut last_error = None;
-        for candidate in candidates {
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some((attempt_deadline, attempt_budget, reserve)) =
+                self.attempt_deadline(deadline, candidate, &candidates[index.saturating_add(1)..])?
+            else {
+                warn!(
+                    provider = candidate.provider.as_str(),
+                    model = candidate.model_name(),
+                    lane = deadline.lane().as_str(),
+                    remaining_ms = deadline.remaining().as_millis(),
+                    fallback_reserve_ms = self
+                        .fallback_reserve(deadline.lane(), &candidates[index.saturating_add(1)..],)
+                        .as_millis(),
+                    "skipped inference provider to preserve the local fallback deadline"
+                );
+                continue;
+            };
             let result = match &candidate.model {
                 CandidateModel::Compatible(model) => {
-                    model
-                        .respond(ModelRequest {
-                            profile: request.profile,
-                            message: request.message,
-                        })
-                        .await
+                    match timeout(
+                        attempt_budget,
+                        model.respond_with_deadline(
+                            ModelRequest {
+                                profile: request.profile,
+                                message: request.message,
+                            },
+                            attempt_deadline,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => Err(anyhow::anyhow!("model phase `provider_attempt` timed out")),
+                    }
                 }
                 CandidateModel::Deterministic => {
                     DeterministicModel
@@ -605,15 +766,30 @@ impl Model for InferenceRouter {
             };
             match result {
                 Ok(response) => {
-                    self.record_success(candidate.provider, candidate.generation);
+                    self.record_success(
+                        candidate.provider,
+                        InferenceLane::Public,
+                        candidate.generation,
+                    );
                     return Ok(response);
                 }
                 Err(error) => {
                     warn!(
                         provider = candidate.provider.as_str(),
+                        model = candidate.model_name(),
+                        lane = deadline.lane().as_str(),
+                        phase = timeout_phase(&error),
+                        timed_out = is_timeout_error(&error),
+                        attempt_budget_ms = attempt_budget.as_millis(),
+                        fallback_reserve_ms = reserve.as_millis(),
+                        remaining_ms = deadline.remaining().as_millis(),
                         "inference provider failed; trying the next local-safe fallback"
                     );
-                    self.record_failure(candidate.provider, candidate.generation);
+                    self.record_failure(
+                        candidate.provider,
+                        InferenceLane::Public,
+                        candidate.generation,
+                    );
                     last_error = Some(error);
                 }
             }
@@ -625,12 +801,44 @@ impl Model for InferenceRouter {
 #[async_trait]
 impl OperatorModel for InferenceRouter {
     async fn complete(&self, messages: &[Value], tools: &[Value]) -> Result<RawAssistantMessage> {
-        let candidates = self.candidates()?;
+        let candidates = self.candidates(InferenceLane::Operator)?;
+        let deadline = InferenceDeadline::current(InferenceLane::Operator)?;
         let mut last_error = None;
-        for candidate in candidates {
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some((attempt_deadline, attempt_budget, reserve)) =
+                self.attempt_deadline(deadline, candidate, &candidates[index.saturating_add(1)..])?
+            else {
+                warn!(
+                    provider = candidate.provider.as_str(),
+                    model = candidate.model_name(),
+                    lane = deadline.lane().as_str(),
+                    remaining_ms = deadline.remaining().as_millis(),
+                    fallback_reserve_ms = self
+                        .fallback_reserve(deadline.lane(), &candidates[index.saturating_add(1)..],)
+                        .as_millis(),
+                    "skipped operator inference provider to preserve the local fallback deadline"
+                );
+                continue;
+            };
             let result = match &candidate.model {
                 CandidateModel::Compatible(model) => {
-                    model.raw_completion(messages, tools, 1_000, 0.2).await
+                    match timeout(
+                        attempt_budget,
+                        model.raw_completion_with_deadline(
+                            messages,
+                            tools,
+                            1_000,
+                            0.2,
+                            attempt_deadline,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => Err(anyhow::anyhow!(
+                            "model phase `provider_attempt` timed out"
+                        )),
+                    }
                 }
                 CandidateModel::Deterministic => Ok(RawAssistantMessage {
                     content: Some(
@@ -642,15 +850,30 @@ impl OperatorModel for InferenceRouter {
             };
             match result {
                 Ok(response) => {
-                    self.record_success(candidate.provider, candidate.generation);
+                    self.record_success(
+                        candidate.provider,
+                        InferenceLane::Operator,
+                        candidate.generation,
+                    );
                     return Ok(response);
                 }
                 Err(error) => {
                     warn!(
                         provider = candidate.provider.as_str(),
+                        model = candidate.model_name(),
+                        lane = deadline.lane().as_str(),
+                        phase = timeout_phase(&error),
+                        timed_out = is_timeout_error(&error),
+                        attempt_budget_ms = attempt_budget.as_millis(),
+                        fallback_reserve_ms = reserve.as_millis(),
+                        remaining_ms = deadline.remaining().as_millis(),
                         "operator inference provider failed; trying the next local-safe fallback"
                     );
-                    self.record_failure(candidate.provider, candidate.generation);
+                    self.record_failure(
+                        candidate.provider,
+                        InferenceLane::Operator,
+                        candidate.generation,
+                    );
                     last_error = Some(error);
                 }
             }
@@ -664,6 +887,13 @@ impl OperatorModel for InferenceRouter {
 
     fn implementation_description(&self) -> String {
         self.status_line()
+    }
+
+    fn continuation_reserve(&self) -> Duration {
+        self.settings
+            .ollama_timeout
+            .min(LOCAL_MODEL_PHASE_LIMIT)
+            .saturating_add(DETERMINISTIC_FALLBACK_RESERVE)
     }
 }
 
@@ -691,6 +921,7 @@ fn build_one_model(
                 return Ok(None);
             };
             OpenAiCompatibleModel::new(&settings.venice_endpoint, Some(api_key), model)?
+                .with_timeout(settings.venice_timeout)?
                 .with_venice_tee()?
         }
         Provider::Ollama => OpenAiCompatibleModel::new(&settings.ollama_endpoint, None, model)?
@@ -717,6 +948,13 @@ fn normalized_secret(value: Option<String>) -> Option<String> {
         let value = value.trim().to_owned();
         (!value.is_empty()).then_some(value)
     })
+}
+
+fn validate_provider_timeout(name: &str, timeout: Duration) -> Result<Duration> {
+    if timeout.is_zero() || timeout > Duration::from_secs(300) {
+        bail!("{name} timeout must be greater than zero and no more than 300 seconds");
+    }
+    Ok(timeout)
 }
 
 fn validate_model_id(value: &str) -> Result<String> {
@@ -786,6 +1024,7 @@ fn assert_owner_only(_metadata: &fs::Metadata) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deadline::scope_authenticated_deadline;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -801,6 +1040,7 @@ mod tests {
             startup_model: None,
             venice_api_key: None,
             venice_model: DEFAULT_VENICE_MODEL.to_owned(),
+            venice_timeout: Duration::from_secs(DEFAULT_VENICE_TIMEOUT_SECONDS),
             ollama_endpoint: DEFAULT_OLLAMA_ENDPOINT.to_owned(),
             ollama_model: DEFAULT_OLLAMA_MODEL.to_owned(),
             ollama_timeout: Duration::from_secs(DEFAULT_OLLAMA_TIMEOUT_SECONDS),
@@ -821,6 +1061,179 @@ mod tests {
         assert!(status.contains("TEE-ONLY"));
         assert!(status.contains("`qwen3:8b`"));
         assert!(status.contains("VENICE CREDENTIAL CONFIGURED: NO"));
+        assert!(status.contains("PUBLIC CHAT <= 30S"));
+        assert!(status.contains("OPERATOR <= 120S"));
+    }
+
+    #[test]
+    fn provider_timeouts_are_bounded_even_without_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let mut zero = config(root.path());
+        zero.venice_timeout = Duration::ZERO;
+        assert!(InferenceRouter::new(zero).is_err());
+
+        let other = tempfile::tempdir().unwrap();
+        let mut oversized = config(other.path());
+        oversized.venice_timeout = Duration::from_secs(301);
+        assert!(InferenceRouter::new(oversized).is_err());
+    }
+
+    #[tokio::test]
+    async fn lane_policies_reserve_local_fallback_before_remote_inference() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("test-key".to_owned());
+        let router = InferenceRouter::new(settings).unwrap();
+        let candidates = router.candidates(InferenceLane::Public).unwrap();
+        assert_eq!(candidates[0].provider, Provider::Venice);
+
+        let (public_budget, public_reserve) =
+            scope_authenticated_deadline(InferenceLane::Public, Duration::from_secs(120), async {
+                let deadline = InferenceDeadline::current(InferenceLane::Public).unwrap();
+                let (_, budget, reserve) = router
+                    .attempt_deadline(deadline, &candidates[0], &candidates[1..])
+                    .unwrap()
+                    .unwrap();
+                (budget, reserve)
+            })
+            .await
+            .unwrap();
+        assert!(public_budget <= PUBLIC_REMOTE_ATTEMPT_LIMIT);
+        assert!(public_budget >= PUBLIC_REMOTE_ATTEMPT_LIMIT - Duration::from_millis(10));
+        assert_eq!(
+            public_reserve,
+            Duration::from_secs(DEFAULT_OLLAMA_TIMEOUT_SECONDS + 1)
+        );
+
+        let (operator_budget, operator_reserve) = scope_authenticated_deadline(
+            InferenceLane::Operator,
+            Duration::from_secs(299),
+            async {
+                let deadline = InferenceDeadline::current(InferenceLane::Operator).unwrap();
+                let (_, budget, reserve) = router
+                    .attempt_deadline(deadline, &candidates[0], &candidates[1..])
+                    .unwrap()
+                    .unwrap();
+                (budget, reserve)
+            },
+        )
+        .await
+        .unwrap();
+        let expected_operator_reserve = Duration::from_secs(
+            DEFAULT_OLLAMA_TIMEOUT_SECONDS * 2
+                + OPERATOR_MODEL_TOOL_PHASE_LIMIT.as_secs()
+                + DETERMINISTIC_FALLBACK_RESERVE.as_secs(),
+        );
+        assert_eq!(operator_reserve, expected_operator_reserve);
+        let expected_operator_budget = Duration::from_secs(299) - expected_operator_reserve;
+        assert!(operator_budget <= expected_operator_budget);
+        assert!(operator_budget >= expected_operator_budget - Duration::from_millis(10));
+    }
+
+    #[tokio::test]
+    async fn oversized_ollama_configuration_cannot_consume_the_reserved_continuation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config(root.path());
+        settings.startup_provider = Some(Provider::Ollama);
+        settings.ollama_timeout = Duration::from_secs(300);
+        let router = InferenceRouter::new(settings).unwrap();
+        let candidates = router.candidates(InferenceLane::Operator).unwrap();
+
+        let (attempt_budget, continuation_reserve) = scope_authenticated_deadline(
+            InferenceLane::Operator,
+            Duration::from_secs(299),
+            async {
+                let deadline = InferenceDeadline::current(InferenceLane::Operator).unwrap();
+                let (_, attempt_budget, _) = router
+                    .attempt_deadline(deadline, &candidates[0], &candidates[1..])
+                    .unwrap()
+                    .unwrap();
+                (attempt_budget, router.continuation_reserve())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(attempt_budget <= LOCAL_MODEL_PHASE_LIMIT);
+        assert_eq!(
+            continuation_reserve,
+            LOCAL_MODEL_PHASE_LIMIT + DETERMINISTIC_FALLBACK_RESERVE
+        );
+    }
+
+    #[tokio::test]
+    async fn insufficient_remote_budget_skips_without_starting_cooldown() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("test-key".to_owned());
+        let router = InferenceRouter::new(settings).unwrap();
+        let candidates = router.candidates(InferenceLane::Public).unwrap();
+
+        let plan = scope_authenticated_deadline(
+            InferenceLane::Public,
+            Duration::from_millis(76_500),
+            async {
+                let deadline = InferenceDeadline::current(InferenceLane::Public).unwrap();
+                router
+                    .attempt_deadline(deadline, &candidates[0], &candidates[1..])
+                    .unwrap()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(plan.is_none());
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Venice
+        );
+    }
+
+    #[test]
+    fn public_cooldown_does_not_suppress_the_longer_operator_lane() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("test-key".to_owned());
+        let router = InferenceRouter::new(settings).unwrap();
+        let venice = router.candidates(InferenceLane::Public).unwrap().remove(0);
+
+        router.record_failure(Provider::Venice, InferenceLane::Public, venice.generation);
+
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Ollama
+        );
+        assert_eq!(
+            router.candidates(InferenceLane::Operator).unwrap()[0].provider,
+            Provider::Venice
+        );
+
+        router.record_success(Provider::Venice, InferenceLane::Public, venice.generation);
+        router.record_failure(Provider::Venice, InferenceLane::Operator, venice.generation);
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Venice
+        );
+        assert_eq!(
+            router.candidates(InferenceLane::Operator).unwrap()[0].provider,
+            Provider::Ollama
+        );
+
+        router.state.write().unwrap().unhealthy_until.insert(
+            (Provider::Venice, InferenceLane::Operator),
+            Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        router.record_success(Provider::Venice, InferenceLane::Public, venice.generation);
+        assert_eq!(router.state.read().unwrap().last_failure, None);
+
+        assert!(!router.provider_command("venice").unwrap().changed);
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Venice
+        );
+        assert_eq!(
+            router.candidates(InferenceLane::Operator).unwrap()[0].provider,
+            Provider::Venice
+        );
     }
 
     #[test]
@@ -962,6 +1375,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_venice_catalog_falls_back_before_local_reserve_is_spent() {
+        let root = tempfile::tempdir().unwrap();
+        let model_id = DEFAULT_VENICE_MODEL.to_owned();
+        let (venice_endpoint, venice_requests, venice_server) = http_server_with(1, move |_, _| {
+            thread::sleep(Duration::from_millis(100));
+            (
+                "200 OK",
+                serde_json::json!({
+                    "data": [{
+                        "id": model_id,
+                        "type": "text",
+                        "model_spec": {"capabilities": {
+                            "supportsTeeAttestation": true,
+                            "supportsFunctionCalling": true
+                        }}
+                    }]
+                })
+                .to_string(),
+            )
+        });
+        let (ollama_endpoint, ollama_requests, ollama_server) = http_server(
+            1,
+            "200 OK",
+            r#"{"choices":[{"message":{"content":"hewwo local rescue, uwu :3"}}]}"#,
+        );
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("test-venice-key".to_owned());
+        settings.venice_timeout = Duration::from_millis(25);
+        settings.ollama_endpoint = ollama_endpoint;
+        let mut router = InferenceRouter::new(settings).unwrap();
+        router
+            .set_venice_endpoint_for_test(venice_endpoint)
+            .unwrap();
+
+        let started = Instant::now();
+        let response = router
+            .respond(ModelRequest {
+                profile: "nothing retained",
+                message: "timeout fallback prompt",
+            })
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        venice_server.join().unwrap();
+        ollama_server.join().unwrap();
+
+        assert!(response.contains("local rescue"));
+        assert!(elapsed < Duration::from_secs(1));
+        let venice_requests = venice_requests.lock().unwrap();
+        assert_eq!(venice_requests.len(), 1);
+        assert!(!venice_requests[0].contains("timeout fallback prompt"));
+        let ollama_requests = ollama_requests.lock().unwrap();
+        assert_eq!(ollama_requests.len(), 1);
+        assert!(ollama_requests[0].contains("timeout fallback prompt"));
+    }
+
+    #[tokio::test]
     async fn venice_chat_balance_exhaustion_falls_back_to_local_ollama() {
         let root = tempfile::tempdir().unwrap();
         let model_id = DEFAULT_VENICE_MODEL.to_owned();
@@ -1061,26 +1531,64 @@ mod tests {
         assert!(status.contains("LAST FAILED PROVIDER: `ollama`"));
     }
 
+    #[tokio::test]
+    async fn stalled_ollama_reaches_deterministic_fallback_at_its_candidate_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let (ollama_endpoint, ollama_requests, ollama_server) = http_server_with(1, |_, _| {
+            thread::sleep(Duration::from_millis(100));
+            (
+                "200 OK",
+                r#"{"choices":[{"message":{"content":"too late, uwu"}}]}"#.to_owned(),
+            )
+        });
+        let mut settings = config(root.path());
+        settings.startup_provider = Some(Provider::Ollama);
+        settings.ollama_endpoint = ollama_endpoint;
+        settings.ollama_timeout = Duration::from_millis(25);
+        let router = InferenceRouter::new(settings).unwrap();
+
+        let started = Instant::now();
+        let response = router
+            .respond(ModelRequest {
+                profile: "nothing retained",
+                message: "stay bounded locally",
+            })
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        ollama_server.join().unwrap();
+
+        assert!(response.contains("warm void"));
+        assert!(elapsed < Duration::from_secs(1));
+        assert_eq!(ollama_requests.lock().unwrap().len(), 1);
+    }
+
     #[test]
     fn retrying_a_provider_clears_cooldown_and_fences_old_completions() {
         let root = tempfile::tempdir().unwrap();
         let mut settings = config(root.path());
         settings.startup_provider = Some(Provider::Ollama);
         let router = InferenceRouter::new(settings).unwrap();
-        let old = router.candidates().unwrap().remove(0);
-        router.record_failure(old.provider, old.generation);
+        let old = router.candidates(InferenceLane::Public).unwrap().remove(0);
+        router.record_failure(old.provider, InferenceLane::Public, old.generation);
         assert_eq!(
-            router.candidates().unwrap()[0].provider,
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
             Provider::Deterministic
         );
 
         let reply = router.provider_command("ollama").unwrap();
         assert!(!reply.changed);
         assert!(reply.response.contains("CLEARED ITS FAILURE COOLDOWN"));
-        assert_eq!(router.candidates().unwrap()[0].provider, Provider::Ollama);
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Ollama
+        );
 
-        router.record_failure(old.provider, old.generation);
-        assert_eq!(router.candidates().unwrap()[0].provider, Provider::Ollama);
+        router.record_failure(old.provider, InferenceLane::Public, old.generation);
+        assert_eq!(
+            router.candidates(InferenceLane::Public).unwrap()[0].provider,
+            Provider::Ollama
+        );
     }
 
     #[test]
@@ -1091,7 +1599,7 @@ mod tests {
         settings.venice_api_key = Some("configured-but-not-selected".to_owned());
         let router = InferenceRouter::new(settings).unwrap();
         let providers = router
-            .candidates()
+            .candidates(InferenceLane::Public)
             .unwrap()
             .into_iter()
             .map(|candidate| candidate.provider)
@@ -1154,7 +1662,7 @@ mod tests {
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
                     response_body.len()
                 );
-                stream.write_all(response.as_bytes()).unwrap();
+                let _ = stream.write_all(response.as_bytes());
             }
         });
         (format!("http://{address}/api/v1"), requests, server)

@@ -1,6 +1,10 @@
 use crate::{
     agent_context::AgentContext,
     contact::{Contact, ContactStore, normalize_inbox_id},
+    deadline::{
+        DEFAULT_OPERATOR_CONTINUATION_RESERVE, DETERMINISTIC_FALLBACK_RESERVE, InferenceDeadline,
+        InferenceLane, OPERATOR_MODEL_TOOL_PHASE_LIMIT,
+    },
     model::{OpenAiCompatibleModel, RawAssistantMessage, violates_public_identity},
 };
 use anyhow::{Context, Result, bail};
@@ -23,6 +27,7 @@ use tokio::{
     process::Command,
     time::timeout,
 };
+use tracing::warn;
 
 const MAX_OPERATOR_AGENT_STEPS: usize = 8;
 const MAX_OPERATOR_TOOL_CALLS: usize = 8;
@@ -83,6 +88,10 @@ pub trait OperatorModel: Send + Sync {
     fn implementation_description(&self) -> String {
         self.implementation_name().to_owned()
     }
+
+    fn continuation_reserve(&self) -> Duration {
+        DEFAULT_OPERATOR_CONTINUATION_RESERVE
+    }
 }
 
 pub struct ControlReply {
@@ -125,6 +134,11 @@ impl OperatorModel for OpenAiCompatibleModel {
 
     fn implementation_name(&self) -> &str {
         self.model_name()
+    }
+
+    fn continuation_reserve(&self) -> Duration {
+        self.timeout_limit()
+            .saturating_add(DETERMINISTIC_FALLBACK_RESERVE)
     }
 }
 
@@ -185,6 +199,8 @@ impl OperatorHarness {
             let receipt = self.tools.execute("list_users", arguments).await;
             return Ok(render_contact_receipt(&receipt));
         }
+
+        let inference_deadline = InferenceDeadline::current(InferenceLane::Operator)?;
 
         let runtime_facts = format!(
             "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nMODEL_TOOLS=list_files,read_file,search_files,qmd_search\nDIRECT_EFFECT_COMMANDS=/write,/edit,/exec\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
@@ -301,10 +317,42 @@ impl OperatorHarness {
                     ));
                 }
                 tool_calls += 1;
-                let receipt = self
-                    .tools
-                    .execute(&call.function.name, &call.function.arguments)
-                    .await;
+                let continuation_reserve = self.model.continuation_reserve();
+                let tool_budget = inference_deadline
+                    .remaining()
+                    .saturating_sub(continuation_reserve)
+                    .min(OPERATOR_MODEL_TOOL_PHASE_LIMIT);
+                let receipt = if tool_budget.is_zero() {
+                    warn!(
+                        phase = "operator_model_tool",
+                        tool = %call.function.name,
+                        lane = InferenceLane::Operator.as_str(),
+                        continuation_reserve_ms = continuation_reserve.as_millis(),
+                        "skipped model-selected operator tool to preserve a final local completion"
+                    );
+                    ToolReceipt::deadline_skipped(&call.function.name)
+                } else {
+                    match timeout(
+                        tool_budget,
+                        self.tools
+                            .execute(&call.function.name, &call.function.arguments),
+                    )
+                    .await
+                    {
+                        Ok(receipt) => receipt,
+                        Err(_) => {
+                            warn!(
+                                phase = "operator_model_tool",
+                                tool = %call.function.name,
+                                lane = InferenceLane::Operator.as_str(),
+                                timeout_ms = tool_budget.as_millis(),
+                                continuation_reserve_ms = continuation_reserve.as_millis(),
+                                "model-selected operator tool timed out before the final completion reserve"
+                            );
+                            ToolReceipt::deadline_timed_out(&call.function.name, tool_budget)
+                        }
+                    }
+                };
                 if is_contact_tool(&call.function.name) {
                     return Ok(render_contact_receipt(&receipt));
                 }
@@ -500,6 +548,28 @@ impl ToolReceipt {
             output: String::new(),
             exit_code: None,
             timed_out: false,
+            truncated: false,
+        }
+    }
+
+    fn deadline_skipped(tool: &str) -> Self {
+        Self::error(
+            tool,
+            "skipped before dispatch to preserve the authenticated final-completion reserve",
+        )
+    }
+
+    fn deadline_timed_out(tool: &str, limit: Duration) -> Self {
+        Self {
+            tool: tool.to_owned(),
+            ok: false,
+            summary: format!(
+                "timed out after {} milliseconds to preserve the authenticated final-completion reserve",
+                limit.as_millis()
+            ),
+            output: String::new(),
+            exit_code: None,
+            timed_out: true,
             truncated: false,
         }
     }
@@ -2034,7 +2104,7 @@ fn tool_schema(name: &str, description: &str, parameters: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RawToolCall;
+    use crate::{deadline::scope_authenticated_deadline, model::RawToolCall};
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -2049,6 +2119,18 @@ mod tests {
 
     struct FakeModelControl {
         calls: Mutex<Vec<(String, String)>>,
+    }
+
+    struct PendingTools {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OperatorToolRuntime for PendingTools {
+        async fn execute(&self, _name: &str, _arguments: &str) -> ToolReceipt {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            std::future::pending::<ToolReceipt>().await
+        }
     }
 
     impl ModelControl for FakeModelControl {
@@ -2104,6 +2186,37 @@ mod tests {
 
     struct ToolThenFailureModel {
         calls: AtomicUsize,
+    }
+
+    struct ToolThenFinalModel {
+        calls: AtomicUsize,
+        messages: Mutex<Vec<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl OperatorModel for ToolThenFinalModel {
+        async fn complete(
+            &self,
+            messages: &[Value],
+            _tools: &[Value],
+        ) -> Result<RawAssistantMessage> {
+            self.messages.lock().unwrap().push(messages.to_vec());
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(tool_call_message("read_file", r#"{"path":"note.md"}"#))
+            } else {
+                Ok(RawAssistantMessage {
+                    content: Some(
+                        "hewwo, operator. Cthuwu preserved the final local completion, uwu."
+                            .to_owned(),
+                    ),
+                    tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        fn implementation_name(&self) -> &str {
+            "tool-deadline-test"
+        }
     }
 
     #[async_trait]
@@ -2504,6 +2617,42 @@ mod tests {
         assert!(response.contains("read_file"));
         assert!(response.contains("completed truthfully"));
         assert_eq!(fake.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn model_selected_tool_timeout_preserves_the_final_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(ToolThenFinalModel {
+            calls: AtomicUsize::new(0),
+            messages: Mutex::new(Vec::new()),
+        });
+        let tools = Arc::new(PendingTools {
+            calls: AtomicUsize::new(0),
+        });
+        let harness = OperatorHarness::new(
+            model.clone(),
+            tools.clone(),
+            AgentContext::new(root.path(), root.path()).unwrap(),
+        );
+        let started = tokio::time::Instant::now();
+
+        let response = scope_authenticated_deadline(
+            InferenceLane::Operator,
+            DEFAULT_OPERATOR_CONTINUATION_RESERVE + Duration::from_millis(100),
+            harness.respond(TEST_OPERATOR_ID, "please read note.md"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(response.contains("PRESERVED THE FINAL LOCAL COMPLETION"));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        let messages = model.messages.lock().unwrap();
+        let continuation = serde_json::to_string(&messages[1]).unwrap();
+        assert!(continuation.contains(r#"\"timed_out\":true"#));
+        assert!(continuation.contains("final-completion reserve"));
     }
 
     #[tokio::test]

@@ -21,10 +21,22 @@ Last reviewed: 2026-08-05
 - Model access: adapter boundary; local models should be first-class.
 - Inference defaults to Venice `e2ee-deepseek-v4-flash` in TEE-only mode when a Venice key is
   configured. The runtime validates live capabilities and a baseline nonce attestation before first
-  prompt egress, caches success for at most five minutes, and explicitly disables Venice-native
-  search and supplemental system prompting. It then falls back to proxy-bypassing loopback Ollama
-  and deterministic behavior on any failure. It does not implement or claim full E2EE or independent
-  quote verification.
+  prompt egress, caches catalog capabilities for four hours and attestation for five minutes, and
+  explicitly disables Venice-native search and supplemental system prompting. It then falls back to
+  proxy-bypassing loopback Ollama and deterministic behavior on any failure. It does not implement or
+  claim full E2EE or independent quote verification.
+- The bridge's default end-to-end envelope is 300 seconds. Rust preserves one second for the XMTP
+  response, then applies role-specific inference budgets only after authenticating the sender: public
+  work is capped at 120 seconds and public remote inference at 30 seconds, while operator work can
+  use at most 299 seconds. An operator remote route reserves two capped local model phases (up to the
+  75-second safety cap, or a smaller configured Ollama timeout, each), one model-selected tool phase
+  (up to 30 seconds), and one deterministic second. The default 181-second reserve makes Venice's
+  effective maximum about 118 seconds despite its
+  configurable 120-second cap. Model-selected tools preserve a final local completion; budget skips
+  do not trigger provider cooldown, and failure cooldown is isolated by lane.
+- Public Brave search is exposed at runtime only when the current message explicitly asks for
+  current or web-verifiable information; ordinary chatter, stable facts, and repair completions get
+  no search schema.
 - Authenticated `/provider` and `/model` commands persist only the node-wide provider/model names in
   protected `state/inference.json`; they cannot accept an endpoint or credential. Route changes
   clear in-process operator dialogue history.

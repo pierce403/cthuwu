@@ -139,8 +139,18 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     opens a contact or dispatches content, a model, or a tool. Clients retry with a shorter, newly
     authored XMTP message rather than replaying the old ID.
   - The bridge supplies a locally generated 2–300 second end-to-end deadline. Rust validates it,
-    reserves one second for the response, and cancels work when the remaining budget closes.
-  - Model calls time out after 45 seconds and output is bounded to 4,000 characters before the final transport bound.
+    reserves one second for the response, caps authenticated public work at 120 seconds, and cancels
+    work when the applicable lane budget closes. The default bridge envelope is 300 seconds, leaving
+    at most 299 seconds of authenticated operator work.
+  - Each provider candidate is bounded by the remaining authenticated deadline after an explicit
+    local-fallback reserve. Public remote work is capped at 30 seconds; operator Venice defaults to a
+    configurable 120-second cap. Operator remote work first reserves two local model phases of up to
+    the 75-second safety cap, or a smaller configured Ollama timeout, each; one model-selected tool
+    phase of up to 30 seconds; and a one-second deterministic margin: 181 seconds by default, so
+    Venice can effectively use about 118 seconds. Individual
+    catalog, attestation, completion, continuation, repair, and search phases derive their timeout
+    from that candidate. Public completions request at most 300 output tokens and remain bounded to
+    4,000 characters before the final transport bound.
 - **Test Criteria**:
   - [x] Oversized text is rejected before contact onboarding.
   - [x] Sidecar tests prove the oversized control frame omits original content; Rust tests cover its
@@ -227,8 +237,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     credential is the explicit opt-in that permits remote prompt egress.
   - Before Venice first receives prompt content, the runtime requires the exact live model to
     advertise text, TEE-attestation, and function-calling capabilities and performs a fresh
-    nonce/model-bound baseline attestation, cached for at most five minutes. It rejects explicitly
-    reported debug mode but does not claim full E2EE or independent Intel/NVIDIA evidence validation.
+    nonce/model-bound baseline attestation. Capability validation is cached independently for four
+    hours; attestation is refreshed after five minutes, and an attestation failure does not discard a
+    fresh catalog result. It rejects explicitly reported debug mode but does not claim full E2EE or
+    independent Intel/NVIDIA evidence validation.
   - Venice-native system prompting, web search, scraping, citations, and X search are explicitly
     disabled; public web search remains the separate opt-in Brave tool.
   - Missing credentials, attestation/provider errors, exhausted balance, rate limits, and other
@@ -237,10 +249,14 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Authenticated direct `/provider` and `/model` commands switch the node-wide route using only a
     closed provider set and bounded model IDs. Only names persist; credentials and endpoints do not.
   - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code
-    changes. Loopback clients bypass ambient proxy settings, and Ollama's bounded whole-response
-    timeout is configurable.
+    changes. Loopback clients bypass ambient proxy settings. Ollama's configured timeout is bounded,
+    and routed local model phases have a 75-second safety cap so a larger setting cannot consume the
+    continuation reserve. `UWUBOT_VENICE_TIMEOUT_SECONDS` independently configures Venice's
+    1–300 second provider cap.
   - Profile text is labeled as untrusted user data, not injected as a system message.
-  - Public model output is UTF-8 safely bounded and can call only optional `web_search`; it cannot
+  - Public model output is UTF-8 safely bounded and requests at most 300 output tokens. The runtime
+    exposes optional `web_search` only when the current message explicitly asks for current or
+    web-verifiable information; a policy-repair completion exposes no tools. Public chat cannot
     execute local tools or mutate files.
   - Brave Search is opt-in, uses a separately configured API key, bounds query/response/result data,
     accepts only HTTP(S) result URLs, and returns results as untrusted context.
@@ -253,6 +269,11 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     public users, and clears in-process operator history after a route change.
   - [x] Remote failure falls through loopback Ollama to deterministic local behavior without a
     local-to-remote fallback path.
+  - [x] Tests cover public/operator remote budgets, the local fallback reserve, budget skips without
+    cooldown, lane-aware failure cooldown, stalled Venice and Ollama fallback, phase attribution,
+    runtime search-schema gating, and the 300-token public cap.
+  - [x] Tests prove catalog success survives attestation failure, attestation refresh does not repeat
+    a fresh catalog lookup, and waiting on the shared Venice validation refresh is deadline-bounded.
   - [x] Logs omit message bodies and credentials by default.
   - [x] Provider failure produces a useful response without losing contact state.
   - [x] Tests cover the reported Mistral self-identification failure, public prompt invariants, one
@@ -303,7 +324,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     external QMD search. Exact direct `/write`, `/edit`, and `/exec` commands retain the bounded shared
     dispatcher without exposing effectful schemas to workspace prompt injection. Terminal
     `list_users`/`get_user` access is likewise limited to strict runtime routing or direct commands.
-    Operator mode deliberately contains no web-search tool.
+    Operator mode deliberately contains no web-search tool. A model-selected tool phase may use at
+    most 30 seconds and preserves a final local-completion reserve from the authenticated deadline.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -335,7 +357,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     giving the sidecar authorization logic.
   - [x] Tool tests cover the closed schema, direct dispatch, traversal/symlink rejection, bounded
     reads/writes/edits, process status, timeout/output handling, and API-key removal from child
-    process environments.
+    process environments. Agent-loop tests prove a slow model-selected tool preserves the final local
+    completion phase.
   - [x] Tests cover protected Markdown seeding without overwrite, per-operator profile/history
     isolation, project memory/context and skill discovery, bounded file listing, and a workspace
     manifest.

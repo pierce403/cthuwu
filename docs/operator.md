@@ -188,7 +188,9 @@ report without feeding profile text back to the model. Natural count questions o
 affirmative profile questions such as “tell me about the users you've been talking to” return
 bounded records. Default reports redact inbox IDs and return a numeric continuation cursor. If both
 Venice and Ollama are unavailable, the deterministic fallback does not plan tool calls; direct
-commands remain available.
+commands remain available. A model-selected tool phase may use at most 30 seconds and is further
+shortened as needed to preserve enough of the authenticated deadline for a final local model
+completion.
 
 Treat everything under `UWUBOT_OPERATOR_ROOT` as readable by an operator-delegated model inspection
 and potentially sent to the configured model endpoint. Do not place credentials, private XMTP state,
@@ -211,7 +213,16 @@ UWUBOT_OPERATOR_TOOL_TIMEOUT_SECONDS=120 \
 ```
 
 The configured tool timeout must be between 1 and 300 seconds, but the sidecar's 2–300 second
-end-to-end reply deadline always wins and reserves one second for the response. File helpers
+end-to-end reply deadline always wins and reserves one second for the response. Its default envelope
+is 300 seconds, leaving at most 299 seconds for authenticated operator work. Before Venice starts,
+the route reserves two capped local model phases (up to the 75-second safety cap, or a smaller
+configured Ollama timeout, each), one model-selected tool phase of up to 30 seconds, and a one-second
+deterministic margin. That is 181
+seconds under default settings, so Venice can effectively use about 118 seconds even though
+`UWUBOT_VENICE_TIMEOUT_SECONDS` defaults to a 120-second cap. Every catalog, attestation,
+completion, continuation, and repair request is clamped to the remaining operator candidate
+deadline. Provider failure cooldown is lane-aware, so a public-lane failure does not suppress an
+operator attempt. File helpers
 canonicalize paths below the workspace root, reject `..` traversal and direct symlink targets,
 bound directory listings, cap writes and edits at 1 MiB, page UTF-8 reads at 12 KiB, and use atomic
 writes. Contact notes, contact-directory scans, auto-loaded context, skill indexes, tool arguments,

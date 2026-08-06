@@ -41,7 +41,7 @@ The sidecar measures the UTF-8 byte length before admitting an inbound one-to-on
 message of at most 16 KiB admitted to the bridge's normal pending set, it writes:
 
 ```json
-{"type":"inbound_text","id":"request-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000090000,"conversationId":"conversation-id","text":"hello"}
+{"type":"inbound_text","id":"request-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000300000,"conversationId":"conversation-id","text":"hello"}
 ```
 
 For a message larger than 16 KiB, the sidecar does not place the original message text on the JSONL
@@ -49,7 +49,7 @@ boundary. With a normal pending slot available, it sends this metadata-only cont
 shared schema's `text` field is present but empty):
 
 ```json
-{"type":"reject_oversized","id":"rejection-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000090000,"conversationId":"conversation-id","text":""}
+{"type":"reject_oversized","id":"rejection-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000300000,"conversationId":"conversation-id","text":""}
 ```
 
 Rust validates the frame, classifies the authenticated sender, and attempts the durable
@@ -62,7 +62,7 @@ instead of silently dropping or locally answering the XMTP message. This control
 no message text:
 
 ```json
-{"type":"reject_inbound","id":"rejection-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000090000,"conversationId":"conversation-id","text":""}
+{"type":"reject_inbound","id":"rejection-id","messageId":"xmtp-message-id","senderInboxId":"sender-inbox-id","sentAtNs":"1750000000000000000","deadlineUnixMs":1750000300000,"conversationId":"conversation-id","text":""}
 ```
 
 Rust validates the metadata, pins the authenticated role, and attempts the same durable
@@ -80,7 +80,7 @@ rejection path makes the claim an at-most-once tombstone: replaying the same XMT
 message**, with a new message ID, after capacity becomes available; an oversized message must also be
 shortened.
 
-`uwubot` must answer within 90 seconds (configurable from 2–300 seconds with
+`uwubot` must answer within 300 seconds (configurable from 2–300 seconds with
 `UWUBOT_REPLY_TIMEOUT_MS`) using exactly one of:
 
 ```jsonl
@@ -91,5 +91,7 @@ shortened.
 Unknown, late, and malformed lines are ignored. A matching malformed or
 oversized reply fails its request immediately instead of waiting for the
 timeout. `deadlineUnixMs` is created locally by the bridge from that same timeout; Rust reserves
-time to return a deadline result and cancels active work before the bridge drops the pending ID.
-Group messages and non-text content never cross this boundary.
+time to return a deadline result, authenticates the role, caps public work at 120 seconds, and
+cancels active work before the bridge drops the pending ID. Provider attempts derive their own
+smaller budgets from that authenticated deadline. Group messages and non-text content never cross
+this boundary.

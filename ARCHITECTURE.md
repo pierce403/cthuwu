@@ -115,7 +115,8 @@ The core owns message policy:
 A model adapter receives a structured request and returns text. Implemented adapters:
 
 - Venice TEE-only chat completions, defaulting to `e2ee-deepseek-v4-flash` after bounded catalog
-  validation and baseline nonce attestation cached for up to five minutes;
+  validation cached for four hours and an independently cached baseline nonce attestation refreshed
+  after five minutes;
 - OpenAI-compatible HTTP APIs;
 - Ollama/local HTTP;
 - deterministic local adapter for tests and bring-up.
@@ -125,6 +126,17 @@ Ollama, then deterministic; a locally selected route never falls forward to a re
 Loopback model clients bypass ambient proxy settings, and route generations prevent late results
 from an older selection from changing the health state of the newer route. Route changes affect
 subsequent requests; an already-running request finishes under its original route.
+The Node bridge supplies one role-agnostic 300-second envelope because it does not own authenticated
+role classification. Rust keeps one second for returning the XMTP response, so operator work may use
+at most 299 seconds; public work is capped at 120 seconds after Rust pins the role. The router derives
+each whole-candidate deadline from that remaining time. Public remote providers receive at most 30
+seconds. Before operator Venice, the router reserves two capped local model phases (up to the
+75-second safety cap, or a smaller configured Ollama timeout, each), one model-selected tool phase
+of up to 30 seconds, and a one-second deterministic margin. That default 181-second reserve makes Venice's effective maximum
+about 118 seconds despite its configured 120-second cap. Catalog, attestation, completion, tool
+continuation, policy repair, and public search all consume the same candidate budget; every HTTP
+request is clamped to what remains. Budget-skipped providers do not enter failure cooldown, and
+failure cooldown is keyed by provider and lane so public failure does not suppress operator work.
 Authenticated direct `/provider` and `/model` commands persist only names in protected state and
 never accept endpoints or credentials. Venice is explicitly TEE-only rather than full E2EE so the
 closed function-calling tool loops continue to work. Current attestation is Venice's baseline
@@ -137,9 +149,12 @@ optional personal questions, truthful capability statements, and ordinary-langua
 controls. Responses matching common provider self-identification boilerplate receive one repair
 attempt and then a fixed Cthuwu fallback.
 
-Public model calls have either no tools or exactly one `web_search` function. The optional Brave
-adapter sends a model-selected bounded query and returns at most five bounded HTTP(S) results as
-untrusted context. Public chat has no shell or local filesystem tool.
+Public model calls request at most 300 output tokens and have either no tools or exactly one
+`web_search` function. The runtime exposes that function schema only when the current message
+explicitly asks for current or web-verifiable information; ordinary chatter and stable facts receive
+no tool schema. Policy-repair completions expose no tools. The optional Brave adapter sends a
+model-selected bounded query and returns at most five bounded HTTP(S) results as untrusted context.
+Public chat has no shell or local filesystem tool.
 
 ### Authenticated operator path
 
@@ -165,8 +180,10 @@ Active operator text enters a separate harness with an all-caps, ominous, reluct
 truthful Cthuwu persona and light readable uwu phrasing. The underlying model is explicitly an
 implementation detail; provider-style self-identification receives one repair attempt and then a
 fixed Cthuwu fallback. The model may call only read-only `list_files`, `read_file`, `search_files`,
-and `qmd_search`. Exact direct operator commands reach the same bounded dispatcher for file mutation
-and `exec`; strict runtime routing or `/users` and `/user` reaches contact handlers. Original prose is
+and `qmd_search`. A model-selected tool phase is capped at 30 seconds and must preserve enough of the
+authenticated deadline for a final local model completion. Exact direct operator commands reach the
+same bounded dispatcher for file mutation and `exec`; strict runtime routing or `/users` and `/user`
+reaches contact handlers. Original prose is
 uppercased, while code and bounded runtime-provided tool
 renderings are not uppercased. Process bytes are truncated to a fixed bound and decoded with lossy
 UTF-8 replacement; the result is not a verbatim or byte-exact capture. Tool results are structured,

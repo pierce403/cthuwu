@@ -100,9 +100,16 @@ interoperability.
   validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
   Never open a contact or dispatch a model/tool on that path. Retry requires a new XMTP message,
   shortened when oversized. Enforce the 2–300 second bridge deadline above the 1–300 second tool
-  limit and preserve the response reserve. File reads are strict UTF-8 pages capped at 12 KiB;
-  write/edit inputs are capped at 1 MiB. Process output is a bounded, potentially lossy UTF-8
-  rendering, never a verbatim byte capture.
+  limit and preserve the response reserve. Derive role-specific inference and provider deadlines
+  only after authenticated role classification in Rust. The default 300-second bridge envelope leaves
+  299 seconds for operator work; cap public work at 120 seconds and its remote phase at 30 seconds.
+  Before operator remote inference, reserve two capped local model phases, one 30-second
+  model-selected tool phase, and the deterministic margin; model-selected tools must preserve the
+  final local completion. Clamp every catalog, attestation, completion, tool, and repair phase to the
+  remaining candidate budget, and isolate provider failure cooldown by lane. Expose public search at
+  runtime only for explicit current or web-verifiable intent. File reads are strict UTF-8 pages
+  capped at 12 KiB; write/edit inputs are capped at 1 MiB. Process output is a bounded, potentially
+  lossy UTF-8 rendering, never a verbatim byte capture.
 - Avoid logging message bodies by default; log identifiers only when operationally necessary.
 
 ## Council security rules

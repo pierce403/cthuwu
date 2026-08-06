@@ -49,9 +49,11 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
 - The default inference preference is Venice's TEE-backed `e2ee-deepseek-v4-flash` when a Venice
   credential is configured, with loopback Ollama and then deterministic local behavior as automatic
-  fallbacks. An optional Brave Search adapter gives the public model one closed `web_search` tool and
-  no local file or process tools. Supplying a remote credential is the explicit opt-in that permits
-  message content to leave the node.
+  fallbacks. Public and operator routes use different authenticated work budgets, and every provider
+  attempt is capped from the remaining deadline after reserving time for local fallback. An optional
+  Brave Search adapter gives the public model one closed `web_search` tool and no local file or
+  process tools. Supplying a remote credential is the explicit opt-in that permits message content
+  to leave the node.
 - A node operator can authorize an exact XMTP inbox immediately with a local CLI command.
   Active operator DMs enter a separate all-caps operator harness with bounded file/search tools and
   intentionally privileged shell execution; public, stale, and revoked messages cannot reach it.
@@ -271,20 +273,25 @@ adapter work.
 ## Model modes
 
 The compiled preference is Venice's TEE-backed DeepSeek V4 Flash model. Configure either
-`VENICE_API_KEY` or `UWUBOT_VENICE_API_KEY` in the runtime environment:
+`VENICE_API_KEY` or `UWUBOT_VENICE_API_KEY` in the runtime environment. The optional Venice timeout
+is a 1–300 second cap for operator routes and defaults to 120 seconds:
 
 ```bash
-VENICE_API_KEY='...' ./uwu.sh
+VENICE_API_KEY='...' \
+UWUBOT_VENICE_TIMEOUT_SECONDS=120 \
+./uwu.sh
 ```
 
 Before the first prompt content is sent, Cthuwu requires the live Venice catalog to report the exact
 `e2ee-deepseek-v4-flash` model as text, TEE-attestable, and function-calling, then performs a fresh
-nonce-bound baseline attestation. A successful validation is cached for at most five minutes before
-it must be refreshed. Requests explicitly set `enable_e2ee=false`, so this is TEE-only inference
-with ordinary TLS—not Venice's separate full E2EE streaming protocol. Cthuwu checks Venice's server
-verification and nonce/model binding, rejects explicitly reported debug mode, and requires bounded
-nonempty provider and signing-address fields. It does not yet independently parse Intel/NVIDIA
-evidence or verify response signatures.
+nonce-bound baseline attestation. Catalog capabilities and attestation freshness are cached
+independently: a successful catalog check remains valid for four hours, while attestation must be
+renewed after five minutes. A failed attestation does not discard a fresh catalog result. Requests
+explicitly set `enable_e2ee=false`, so this is TEE-only inference with ordinary TLS—not Venice's
+separate full E2EE streaming protocol. Cthuwu checks Venice's server verification and nonce/model
+binding, rejects explicitly reported debug mode, and requires bounded nonempty provider and
+signing-address fields. It does not yet independently parse Intel/NVIDIA evidence or verify response
+signatures.
 
 Venice's supplemental system prompt and provider-native web, scraping, citation, and X-search
 features are explicitly disabled. Public web search remains the separate opt-in Brave tool described
@@ -293,8 +300,25 @@ below.
 If the Venice key is absent, exhausted, rejected, rate-limited, or the provider/attestation fails,
 Cthuwu tries the configured loopback Ollama model and then its deterministic local response. It never
 silently substitutes the non-TEE `deepseek-v4-flash` model, and a locally selected provider never
-falls forward to a remote provider. A provider failure enters a short cooldown so every message does
-not repeatedly hit the same failed endpoint.
+falls forward to a remote provider. A provider failure enters a short lane-aware cooldown so public
+failures do not suppress longer operator attempts and neither lane repeatedly hits the same failed
+endpoint.
+
+The bridge's default authenticated envelope is 300 seconds and keeps one second for returning the
+XMTP response. Rust applies a 120-second work ceiling to public chat while operator requests may use
+at most 299 seconds. Public remote inference gets at most 30 seconds. Before starting operator
+Venice, Cthuwu reserves two capped local model phases (up to the 75-second safety cap, or a smaller
+configured Ollama timeout, each), one model-selected tool phase of up to 30 seconds, and a one-second
+deterministic margin. The default 181-second reserve makes Venice's effective maximum about 118
+seconds even though its
+configured cap defaults to 120 seconds. Model-selected operator tools also preserve enough remaining
+time for a final local completion.
+
+The provider cap applies to the whole candidate route—catalog, attestation, completion, optional
+public search/continuation, and policy repair—not independently to every call. Each HTTP phase is
+additionally clamped to the time remaining in that candidate. Public completions request at most 300
+output tokens; operator completions retain their 1,000-token limit. Timeout logs identify the
+provider, lane, and phase but never include prompt text.
 
 For Ollama's OpenAI-compatible endpoint:
 
@@ -306,8 +330,10 @@ UWUBOT_OLLAMA_TIMEOUT_SECONDS=75 \
 ./uwu.sh
 ```
 
-Automatic Ollama fallback is restricted to a credential-free loopback HTTP endpoint, bypasses
-ambient HTTP proxy settings, and uses a configurable 1–300 second whole-response timeout. The legacy
+Automatic Ollama fallback is restricted to a credential-free loopback HTTP endpoint and bypasses
+ambient HTTP proxy settings. The configured timeout accepts 1–300 seconds, but routed local model
+phases are capped at 75 seconds so a larger setting cannot consume time reserved for continuation;
+each Ollama HTTP request is clamped again to the candidate's remaining authenticated time. The legacy
 `UWUBOT_MODEL_ENDPOINT` and `UWUBOT_MODEL_NAME` values still override Ollama when
 `UWUBOT_MODEL=ollama` is explicitly selected. That legacy startup override wins for the running
 process; remove it on later launches if `/model` should use the persisted slot instead.
@@ -336,11 +362,13 @@ UWUBOT_WEB_SEARCH_API_KEY='...' \
 ./uwu.sh
 ```
 
-This is opt-in and requires the effective provider to support standard tool calls.
-When the model invokes `web_search`, its bounded query is sent to Brave and up to five bounded
-HTTP(S) results return as untrusted context. The public tool schema contains no shell or filesystem
-capability. Search credentials, like model credentials, are rejected on the command line and stripped
-from build and transport subprocesses.
+This is opt-in and requires the effective provider to support standard tool calls. The runtime
+exposes `web_search` only when the current public message explicitly asks for current or
+web-verifiable information; ordinary chatter, stable facts, and policy repair receive no search tool
+schema. When the model invokes it, its bounded query is sent to Brave and up to five bounded HTTP(S)
+results return as untrusted context. The public tool schema contains no shell or filesystem
+capability. Search credentials, like model credentials, are rejected on the command line and
+stripped from build and transport subprocesses.
 
 ## Container
 

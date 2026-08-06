@@ -1,6 +1,7 @@
 mod agent_context;
 mod bot;
 mod contact;
+mod deadline;
 mod dedupe;
 mod inference;
 mod matching;
@@ -20,7 +21,8 @@ use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
 use inference::{
     DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
-    DEFAULT_VENICE_MODEL, InferenceConfig, InferenceRouter, Provider,
+    DEFAULT_VENICE_MODEL, DEFAULT_VENICE_TIMEOUT_SECONDS, InferenceConfig, InferenceRouter,
+    Provider,
 };
 use model::Model;
 use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
@@ -74,6 +76,13 @@ struct Cli {
         default_value = DEFAULT_VENICE_MODEL
     )]
     venice_model: String,
+
+    #[arg(
+        long,
+        env = "UWUBOT_VENICE_TIMEOUT_SECONDS",
+        default_value_t = DEFAULT_VENICE_TIMEOUT_SECONDS
+    )]
+    venice_timeout_seconds: u64,
 
     #[arg(
         long,
@@ -354,6 +363,7 @@ fn build_inference_config(
         },
         venice_api_key: official_venice_key.or(namespaced_venice_key),
         venice_model: cli.venice_model.clone(),
+        venice_timeout: Duration::from_secs(cli.venice_timeout_seconds),
         ollama_endpoint,
         ollama_model,
         ollama_timeout: Duration::from_secs(cli.ollama_timeout_seconds),
@@ -476,6 +486,10 @@ mod tests {
         assert!(standalone.command.is_none());
         assert!(standalone.model.is_none());
         assert_eq!(standalone.venice_model, DEFAULT_VENICE_MODEL);
+        assert_eq!(
+            standalone.venice_timeout_seconds,
+            DEFAULT_VENICE_TIMEOUT_SECONDS
+        );
         assert_eq!(standalone.ollama_endpoint, DEFAULT_OLLAMA_ENDPOINT);
         assert_eq!(standalone.ollama_model, DEFAULT_OLLAMA_MODEL);
         assert_eq!(

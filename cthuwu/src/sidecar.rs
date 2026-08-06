@@ -1,4 +1,9 @@
-use crate::{bot::UwUBot, contact::normalize_inbox_id, principal::PrincipalRole};
+use crate::{
+    bot::UwUBot,
+    contact::normalize_inbox_id,
+    deadline::{DEFAULT_PUBLIC_WORK_BUDGET, InferenceLane, scope_authenticated_deadline},
+    principal::PrincipalRole,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -190,16 +195,25 @@ pub async fn run_xmtp_sidecar(
         let stdin = stdin.clone();
         tasks.spawn(async move {
             let _permit = permit;
-            let response = match processing_budget(request.deadline_unix_ms) {
+            let inference_lane = match role {
+                PrincipalRole::User => InferenceLane::Public,
+                PrincipalRole::Operator
+                | PrincipalRole::StaleOperator
+                | PrincipalRole::RevokedOperator => InferenceLane::Operator,
+            };
+            let response = match processing_budget(request.deadline_unix_ms, role) {
                 Some(budget) => match timeout(budget, async {
-                    bot.receive_authenticated_claimed(
-                        &request.message_id,
-                        &request.sender_inbox_id,
-                        &request.sent_at_ns,
-                        &request.text,
-                        role,
-                    )
-                    .await
+                    scope_authenticated_deadline(inference_lane, budget, async {
+                        bot.receive_authenticated_claimed(
+                            &request.message_id,
+                            &request.sender_inbox_id,
+                            &request.sent_at_ns,
+                            &request.text,
+                            role,
+                        )
+                        .await
+                    })
+                    .await?
                 })
                 .await
                 {
@@ -226,6 +240,8 @@ pub async fn run_xmtp_sidecar(
                         error!(
                             request_id = %request.id,
                             conversation_id = %request.conversation_id,
+                            lane = inference_lane.as_str(),
+                            phase = "authenticated_route",
                             "cancelled XMTP work at its authenticated request deadline"
                         );
                         SidecarResponse::Reply {
@@ -234,10 +250,19 @@ pub async fn run_xmtp_sidecar(
                         }
                     }
                 },
-                None => SidecarResponse::Reply {
-                    id: request.id.clone(),
-                    text: deadline_response(role),
-                },
+                None => {
+                    error!(
+                        request_id = %request.id,
+                        conversation_id = %request.conversation_id,
+                        lane = inference_lane.as_str(),
+                        phase = "authenticated_route_admission",
+                        "rejected XMTP work without enough authenticated request budget"
+                    );
+                    SidecarResponse::Reply {
+                        id: request.id.clone(),
+                        text: deadline_response(role),
+                    }
+                }
             };
             if let Err(cause) = send_response(&stdin, response).await {
                 error!(error = %cause, "could not write XMTP sidecar response");
@@ -294,16 +319,26 @@ fn current_unix_ms() -> Result<u64> {
     u64::try_from(milliseconds).context("system clock exceeds the supported range")
 }
 
-fn processing_budget(deadline_unix_ms: u64) -> Option<Duration> {
-    processing_budget_at(deadline_unix_ms, current_unix_ms().ok()?)
+fn processing_budget(deadline_unix_ms: u64, role: PrincipalRole) -> Option<Duration> {
+    processing_budget_at(deadline_unix_ms, current_unix_ms().ok()?, role)
 }
 
-fn processing_budget_at(deadline_unix_ms: u64, now_unix_ms: u64) -> Option<Duration> {
+fn processing_budget_at(
+    deadline_unix_ms: u64,
+    now_unix_ms: u64,
+    role: PrincipalRole,
+) -> Option<Duration> {
     let remaining = deadline_unix_ms.checked_sub(now_unix_ms)?;
     if remaining <= RESPONSE_RESERVE_MS || remaining > MAX_REQUEST_DEADLINE_MS {
         return None;
     }
-    Some(Duration::from_millis(remaining - RESPONSE_RESERVE_MS))
+    let authenticated_budget = Duration::from_millis(remaining - RESPONSE_RESERVE_MS);
+    Some(match role {
+        PrincipalRole::User => authenticated_budget.min(DEFAULT_PUBLIC_WORK_BUDGET),
+        PrincipalRole::Operator | PrincipalRole::StaleOperator | PrincipalRole::RevokedOperator => {
+            authenticated_budget
+        }
+    })
 }
 
 fn failure_response(role: PrincipalRole) -> String {
@@ -655,13 +690,41 @@ mod tests {
     #[test]
     fn request_deadline_reserves_time_for_the_transport_reply() {
         assert_eq!(
-            processing_budget_at(12_000, 10_000),
+            processing_budget_at(12_000, 10_000, PrincipalRole::Operator),
             Some(Duration::from_millis(1_000))
         );
-        assert_eq!(processing_budget_at(11_000, 10_000), None);
-        assert_eq!(processing_budget_at(10_000, 10_000), None);
         assert_eq!(
-            processing_budget_at(10_000 + MAX_REQUEST_DEADLINE_MS + 1, 10_000),
+            processing_budget_at(
+                10_000 + MAX_REQUEST_DEADLINE_MS,
+                10_000,
+                PrincipalRole::User,
+            ),
+            Some(DEFAULT_PUBLIC_WORK_BUDGET)
+        );
+        assert_eq!(
+            processing_budget_at(
+                10_000 + MAX_REQUEST_DEADLINE_MS,
+                10_000,
+                PrincipalRole::Operator,
+            ),
+            Some(Duration::from_millis(
+                MAX_REQUEST_DEADLINE_MS - RESPONSE_RESERVE_MS
+            ))
+        );
+        assert_eq!(
+            processing_budget_at(11_000, 10_000, PrincipalRole::User),
+            None
+        );
+        assert_eq!(
+            processing_budget_at(10_000, 10_000, PrincipalRole::Operator),
+            None
+        );
+        assert_eq!(
+            processing_budget_at(
+                10_000 + MAX_REQUEST_DEADLINE_MS + 1,
+                10_000,
+                PrincipalRole::Operator,
+            ),
             None
         );
     }
