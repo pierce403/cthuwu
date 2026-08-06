@@ -608,12 +608,7 @@ mod tests {
                 .unwrap_err(),
             LeaseError::StaleGeneration
         );
-        assert!(
-            serde_json::to_string(&second)
-                .unwrap()
-                .find("message")
-                .is_none()
-        );
+        assert!(!serde_json::to_string(&second).unwrap().contains("message"));
     }
 
     #[test]
