@@ -4,8 +4,8 @@ Skills are reusable procedures, not general project notes.
 
 ## Index
 
-- [Bounded skill creation](skills/skill-creator/SKILL.md): create one new reusable workspace skill
-  only when the current authenticated operator message explicitly requests it.
+- [Bounded skill creation](skills/skill-creator/SKILL.md): autonomously create a new reusable
+  workspace skill when doing so advances the authenticated operator's request.
 - [XMTP end-to-end verification](skills/xmtp-e2e/SKILL.md): validate a browser-to-local-runtime message exchange without leaking secrets.
 
 ## Skill maintenance

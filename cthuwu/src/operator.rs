@@ -26,7 +26,7 @@ use tempfile::NamedTempFile;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
-    time::timeout,
+    time::{Instant, timeout},
 };
 use tracing::warn;
 
@@ -38,6 +38,7 @@ const MAX_OPERATOR_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 16 * 1024;
 const MAX_FILE_BYTES: usize = 1024 * 1024;
 const MAX_TOOL_OUTPUT_BYTES: usize = 12 * 1024;
+const MAX_OPERATOR_TOOL_TRANSCRIPT_BYTES: usize = 32 * 1024;
 const MAX_PATH_CHARS: usize = 2_048;
 const MAX_QUERY_CHARS: usize = 1_024;
 const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 120;
@@ -153,6 +154,10 @@ impl OperatorModel for OpenAiCompatibleModel {
 #[async_trait]
 pub trait OperatorToolRuntime: Send + Sync {
     async fn execute(&self, name: &str, arguments: &str) -> ToolReceipt;
+
+    fn maximum_timeout_seconds(&self) -> u64 {
+        300
+    }
 }
 
 pub struct OperatorHarness {
@@ -161,6 +166,7 @@ pub struct OperatorHarness {
     tools: Arc<dyn OperatorToolRuntime>,
     context: AgentContext,
     history: Mutex<HashMap<String, VecDeque<Value>>>,
+    tool_phase_limit: Duration,
 }
 
 impl OperatorHarness {
@@ -175,7 +181,14 @@ impl OperatorHarness {
             tools,
             context,
             history: Mutex::new(HashMap::new()),
+            tool_phase_limit: OPERATOR_MODEL_TOOL_PHASE_LIMIT,
         }
+    }
+
+    #[cfg(test)]
+    fn with_tool_phase_limit(mut self, limit: Duration) -> Self {
+        self.tool_phase_limit = limit;
+        self
     }
 
     pub fn with_model_control(mut self, model_control: Arc<dyn ModelControl>) -> Self {
@@ -217,7 +230,7 @@ impl OperatorHarness {
         }
 
         let inference_deadline = InferenceDeadline::current(InferenceLane::Operator)?;
-        let schemas = operator_tool_schemas();
+        let schemas = operator_tool_schemas(self.tools.maximum_timeout_seconds());
         let active_model_tools = schemas
             .iter()
             .filter_map(|schema| schema["function"]["name"].as_str())
@@ -225,12 +238,13 @@ impl OperatorHarness {
             .join(",");
 
         let runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nAUTONOMOUS_OPERATOR_AUTHORITY=authenticated operator model may choose and chain every ACTIVE_MODEL_TOOLS entry without an exact slash command; exec is unsandboxed authority as the uwubot OS account\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nAUTONOMOUS_OPERATOR_AUTHORITY=authenticated operator model may choose and chain every ACTIVE_MODEL_TOOLS entry without an exact slash command; exec is unsandboxed authority as the uwubot OS account\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model\nTOOL_OUTPUT_LIMIT_BYTES_PER_CALL={}\nTOOL_TRANSCRIPT_LIMIT_BYTES_PER_TURN={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
             active_model_tools,
-            MAX_TOOL_OUTPUT_BYTES
+            MAX_TOOL_OUTPUT_BYTES,
+            MAX_OPERATOR_TOOL_TRANSCRIPT_BYTES
         );
         let loaded_context = self.context.render(&operator_inbox_id)?;
         let mut messages = vec![
@@ -242,6 +256,8 @@ impl OperatorHarness {
         messages.push(json!({"role": "user", "content": text}));
         let mut receipts = Vec::new();
         let mut tool_calls = 0_usize;
+        let mut tool_phase_deadline = None;
+        let mut tool_transcript_bytes = 0_usize;
         let mut repaired_policy_once = false;
 
         for _ in 0..MAX_OPERATOR_AGENT_STEPS {
@@ -331,7 +347,18 @@ impl OperatorHarness {
                 return Ok("I REFUSED A MODEL TOOL CALL OUTSIDE THE CLOSED AUTONOMOUS OPERATOR SET. NO TOOL IN THAT BATCH WAS EXECUTED, UWU."
                     .to_owned());
             }
-            messages.push(completion.as_history_value());
+            let completion_history = completion.as_history_value();
+            let completion_bytes = serde_json::to_vec(&completion_history)?.len();
+            if tool_transcript_bytes.saturating_add(completion_bytes)
+                > MAX_OPERATOR_TOOL_TRANSCRIPT_BYTES
+            {
+                return Ok(partial_execution_report(
+                    "THE CUMULATIVE PER-TURN TOOL TRANSCRIPT LIMIT REFUSED ANOTHER TOOL BATCH.",
+                    &receipts,
+                ));
+            }
+            tool_transcript_bytes += completion_bytes;
+            messages.push(completion_history);
             for call in completion.tool_calls {
                 if tool_calls >= MAX_OPERATOR_TOOL_CALLS {
                     return Ok(partial_execution_report(
@@ -341,11 +368,13 @@ impl OperatorHarness {
                 }
                 tool_calls += 1;
                 let continuation_reserve = self.model.continuation_reserve();
+                let phase_deadline = *tool_phase_deadline
+                    .get_or_insert_with(|| Instant::now() + self.tool_phase_limit);
                 let tool_budget = inference_deadline
                     .remaining()
                     .saturating_sub(continuation_reserve)
-                    .min(OPERATOR_MODEL_TOOL_PHASE_LIMIT);
-                let receipt = if tool_budget.is_zero() {
+                    .min(phase_deadline.saturating_duration_since(Instant::now()));
+                let mut receipt = if tool_budget.is_zero() {
                     warn!(
                         phase = "operator_model_tool",
                         tool = %call.function.name,
@@ -379,12 +408,43 @@ impl OperatorHarness {
                 if is_contact_tool(&call.function.name) {
                     return Ok(render_contact_receipt(&receipt));
                 }
-                messages.push(json!({
+                let mut serialized_receipt = serde_json::to_string(&receipt)?;
+                let mut tool_history = json!({
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": serde_json::to_string(&receipt)?,
-                }));
+                    "content": serialized_receipt,
+                });
+                let mut tool_message_bytes = serde_json::to_vec(&tool_history)?.len();
+                let transcript_limit_reached = tool_transcript_bytes
+                    .saturating_add(tool_message_bytes)
+                    > MAX_OPERATOR_TOOL_TRANSCRIPT_BYTES;
+                if transcript_limit_reached {
+                    receipt.output.clear();
+                    receipt.truncated = true;
+                    receipt.summary.push_str(
+                        "; output omitted because the cumulative per-turn tool transcript limit was reached",
+                    );
+                    serialized_receipt = serde_json::to_string(&receipt)?;
+                    tool_history = json!({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": serialized_receipt,
+                    });
+                    tool_message_bytes = serde_json::to_vec(&tool_history)?.len();
+                }
+                if tool_transcript_bytes.saturating_add(tool_message_bytes)
+                    <= MAX_OPERATOR_TOOL_TRANSCRIPT_BYTES
+                {
+                    tool_transcript_bytes += tool_message_bytes;
+                    messages.push(tool_history);
+                }
                 receipts.push(receipt);
+                if transcript_limit_reached {
+                    return Ok(partial_execution_report(
+                        "THE CUMULATIVE PER-TURN TOOL TRANSCRIPT LIMIT STOPPED THE AGENT LOOP.",
+                        &receipts,
+                    ));
+                }
             }
         }
 
@@ -546,8 +606,8 @@ fn operator_help() -> String {
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
-        "ORDINARY LANGUAGE MAY DRIVE `/files`, `/read`, `/search`, AND `/qmd` WHEN THE MODEL SUPPORTS TOOL CALLING. AN EXPLICIT CURRENT-MESSAGE REQUEST THAT NAMES THE EXACT SHELL COMMAND—PREFERABLY IN BACKTICKS, SUCH AS \"please run `cargo test`\"—ACTIVATES ONE UNSANDBOXED `exec` MODEL CALL BOUND TO THAT COMMAND; `/exec` REMAINS THE EXACT DIRECT FORM.",
-        "AN EXPLICIT REQUEST TO CREATE OR GENERATE A REUSABLE SKILL ACTIVATES A CREATE-ONLY TOOL FOR `skills/<kebab-name>/SKILL.md`. IT NEVER OVERWRITES. GENERAL FILE WRITES AND EDITS STILL REQUIRE `/write` OR `/edit`.",
+        "ORDINARY AUTHENTICATED OPERATOR LANGUAGE MAY AUTONOMOUSLY DRIVE BOUNDED WORKSPACE LIST/READ/SEARCH/WRITE/EDIT, CREATE-ONLY SKILL CREATION, AND UNSANDBOXED `exec` AS THE `uwubot` OS ACCOUNT. THE MODEL MAY CHOOSE ARGUMENTS AND CHAIN EFFECTS WITHIN THE SHARED TOOL-PHASE, CALL, TRANSCRIPT, OUTPUT, AND DEADLINE LIMITS.",
+        "DIRECT COMMANDS REMAIN THE EXACT DETERMINISTIC FORM. `create_skill` NEVER OVERWRITES OR WRITES OUTSIDE `skills/<kebab-name>/SKILL.md`; FILE HELPERS REMAIN WORKSPACE-ROOTED, BUT `exec` CAN EXERCISE EVERY PERMISSION OF THE SERVICE ACCOUNT.",
         "ASK WHERE MY NOTES ARE FOR AN EXACT LOCAL REPORT OF THE WORKSPACE, PROTECTED MEMORY, OPERATOR PROFILE, CONTACT-NOTE ROOT, AND SKILLS ROOT. CONTACT REPORTS REMAIN A STRICT PARSED RUNTIME ROUTE.",
     ]
     .join("\n")
@@ -1160,6 +1220,10 @@ impl OperatorToolRuntime for LocalOperatorTools {
             }
         };
         result.unwrap_or_else(|error| ToolReceipt::error(name, error.to_string()))
+    }
+
+    fn maximum_timeout_seconds(&self) -> u64 {
+        self.maximum_timeout.as_secs()
     }
 }
 
@@ -2525,7 +2589,7 @@ fn uppercase_preserving_sensitive_tokens(value: &str, output: &mut String) {
     }
 }
 
-fn operator_tool_schemas() -> Vec<Value> {
+fn operator_tool_schemas(maximum_timeout_seconds: u64) -> Vec<Value> {
     vec![
         tool_schema(
             "list_files",
@@ -2608,7 +2672,7 @@ fn operator_tool_schemas() -> Vec<Value> {
                 "type":"object","additionalProperties":false,
                 "properties":{
                     "command":{"type":"string","minLength":1,"maxLength":MAX_TOOL_ARGUMENT_BYTES},
-                    "timeout_seconds":{"type":"integer","minimum":1,"maximum":300}
+                    "timeout_seconds":{"type":"integer","minimum":1,"maximum":maximum_timeout_seconds}
                 },
                 "required":["command"]
             }),
@@ -2647,11 +2711,31 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    struct LargeOutputTools {
+        calls: AtomicUsize,
+    }
+
     #[async_trait]
     impl OperatorToolRuntime for PendingTools {
         async fn execute(&self, _name: &str, _arguments: &str) -> ToolReceipt {
             self.calls.fetch_add(1, Ordering::SeqCst);
             std::future::pending::<ToolReceipt>().await
+        }
+    }
+
+    #[async_trait]
+    impl OperatorToolRuntime for LargeOutputTools {
+        async fn execute(&self, name: &str, _arguments: &str) -> ToolReceipt {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ToolReceipt {
+                tool: name.to_owned(),
+                ok: true,
+                summary: "returned a bounded large output".into(),
+                output: "x".repeat(MAX_TOOL_OUTPUT_BYTES),
+                exit_code: Some(0),
+                timed_out: false,
+                truncated: false,
+            }
         }
     }
 
@@ -3222,6 +3306,60 @@ mod tests {
         assert!(response.contains("COMPLETED ALL EIGHT TOOL CALLS TRUTHFULLY"));
         assert_eq!(fake.calls.lock().unwrap().len(), MAX_OPERATOR_TOOL_CALLS);
         assert_eq!(model.calls.load(Ordering::SeqCst), MAX_OPERATOR_AGENT_STEPS);
+    }
+
+    #[tokio::test]
+    async fn autonomous_tools_share_one_phase_deadline_across_all_calls() {
+        let root = tempfile::tempdir().unwrap();
+        let pending = Arc::new(PendingTools {
+            calls: AtomicUsize::new(0),
+        });
+        let model = Arc::new(RepeatedExecModel {
+            calls: AtomicUsize::new(0),
+        });
+        let harness = OperatorHarness::new(
+            model,
+            pending.clone(),
+            AgentContext::new(root.path(), root.path()).unwrap(),
+        )
+        .with_tool_phase_limit(Duration::from_millis(20));
+        let started = Instant::now();
+
+        let response = harness
+            .respond(
+                TEST_OPERATOR_ID,
+                "finish without monopolizing the operator lane",
+            )
+            .await
+            .unwrap();
+
+        assert!(response.contains("COMPLETED ALL EIGHT TOOL CALLS TRUTHFULLY"));
+        assert_eq!(pending.calls.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < Duration::from_millis(150));
+    }
+
+    #[tokio::test]
+    async fn autonomous_tools_enforce_one_cumulative_transcript_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let large = Arc::new(LargeOutputTools {
+            calls: AtomicUsize::new(0),
+        });
+        let model = Arc::new(RepeatedExecModel {
+            calls: AtomicUsize::new(0),
+        });
+        let harness = OperatorHarness::new(
+            model,
+            large.clone(),
+            AgentContext::new(root.path(), root.path()).unwrap(),
+        );
+
+        let response = harness
+            .respond(TEST_OPERATOR_ID, "inspect bounded large outputs")
+            .await
+            .unwrap();
+
+        assert!(response.contains("CUMULATIVE PER-TURN TOOL TRANSCRIPT LIMIT"));
+        assert!(large.calls.load(Ordering::SeqCst) < MAX_OPERATOR_TOOL_CALLS);
     }
 
     #[tokio::test]
@@ -4189,7 +4327,8 @@ mod tests {
 
     #[test]
     fn operator_tool_set_is_fully_autonomous_closed_and_excludes_contacts() {
-        let names = operator_tool_schemas()
+        let schemas = operator_tool_schemas(2);
+        let names = schemas
             .iter()
             .map(|schema| schema["function"]["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
@@ -4212,6 +4351,34 @@ mod tests {
         for forbidden in ["web_search", "list_users", "get_user", "provider", "model"] {
             assert!(!model_tool_call_is_authorized(forbidden), "{forbidden}");
             assert!(!names.contains(&forbidden.to_owned()), "{forbidden}");
+        }
+        let exec = schemas
+            .iter()
+            .find(|schema| schema["function"]["name"] == "exec")
+            .unwrap();
+        assert_eq!(
+            exec["function"]["parameters"]["properties"]["timeout_seconds"]["maximum"],
+            2
+        );
+    }
+
+    #[test]
+    fn operator_help_discloses_autonomous_effects_without_obsolete_exact_command_claims() {
+        let help = operator_help();
+        for required in [
+            "AUTONOMOUSLY DRIVE",
+            "WRITE/EDIT",
+            "UNSANDBOXED `exec`",
+            "CHAIN EFFECTS",
+        ] {
+            assert!(help.contains(required), "{required}");
+        }
+        for obsolete in [
+            "EXACT SHELL COMMAND",
+            "ACTIVATES ONE",
+            "GENERAL FILE WRITES AND EDITS STILL REQUIRE",
+        ] {
+            assert!(!help.contains(obsolete), "{obsolete}");
         }
     }
 

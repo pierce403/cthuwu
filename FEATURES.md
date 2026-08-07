@@ -333,8 +333,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     canonical frontmatter, bounds the one-line description and Markdown instructions, and rejects
     traversal, symlinks, existing paths, and overwrites. The next operator turn rescans the skill
     index. The compiled creation path and size gates outrank skill prose.
-  - A model-selected tool phase may use at most 30 seconds and preserves a final local-completion
-    reserve from the authenticated deadline; hard agent-step and total-call limits bound chaining.
+  - All model-selected calls share one tool phase of at most 30 seconds and preserve a final
+    local-completion reserve from the authenticated deadline. Assistant tool-call messages and
+    serialized receipts share a 32 KiB per-turn transcript budget; hard agent-step, total-call, and
+    12 KiB per-receipt output limits also bound chaining.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -366,20 +368,19 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] The hidden stdin harness remains public even when given an active operator inbox ID.
   - [x] The JSONL protocol rejects a caller-supplied role and preserves `senderInboxId` without
     giving the sidecar authorization logic.
-  - [x] Tool tests cover the request-scoped closed schema and prompt inventory, direct dispatch,
+  - [x] Tool tests cover the autonomous closed schema and prompt inventory, direct dispatch,
     traversal/symlink rejection, bounded reads/writes/edits, process status, timeout/output handling,
-    and API-key removal from child process environments. Natural-exec tests bind one call to the exact
-    current-message command, reject substitutions, repeats, negation, capability questions, and stale
-    or workspace-derived authority. Agent-loop tests prove a slow model-selected tool preserves the
-    final local completion phase.
+    API-key removal from child process environments, the shared tool-phase deadline, and cumulative
+    transcript cap. Agent-loop tests prove autonomous repeated calls preserve the final local
+    completion phase.
   - [x] Tests cover protected Markdown seeding without overwrite, per-operator profile/history
     isolation, project memory/context and skill discovery, bounded file listing, and a workspace
     manifest.
   - [x] A local note-location question returns exact workspace, protected-note, operator-profile,
     retained-contact, and skill paths without invoking the model or a tool.
-  - [x] Explicit natural skill creation produces one canonical `skills/<slug>/SKILL.md`, becomes
+  - [x] Autonomous skill creation produces one canonical `skills/<slug>/SKILL.md`, becomes
     discoverable on the next rendered context, and rejects malformed names, duplicate paths,
-    traversal, symlinked skill roots, overwrites, and a second effectful call.
+    traversal, symlinked skill roots, and overwrites.
   - [x] A natural operator request for users returns retained contacts from a disjoint data root,
     redacts inbox IDs, labels provenance/scope, provides cursor pagination, reports truncation, and
     cannot turn hostile contact text into an exec. Negated, policy, and count-only requests do not

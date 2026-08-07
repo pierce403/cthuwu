@@ -207,7 +207,8 @@ persisted node-wide inference route without accepting a URL or credential over X
 clear bounded in-process operator dialogue history. Each ordinary-language turn receives an exact
 prompt inventory built from its closed autonomous schema: bounded workspace reads/searches/writes/
 edits, create-only skill creation, and unsandboxed model-chosen `exec` as the `uwubot` account. The
-model may choose arguments and chain effects within hard step, call, output, and deadline limits.
+model may choose arguments and chain effects within one shared tool phase plus hard step, call,
+cumulative transcript, per-call output, and authenticated deadline limits.
 `create_skill` remains confined to a fresh `skills/<lowercase-kebab-name>/SKILL.md`; canonical
 frontmatter is generated, existing paths and overwrites are refused, and the skill is indexed on the
 next turn. Direct commands remain available for exact deterministic operations. The safe launcher defaults

@@ -84,7 +84,8 @@ Last reviewed: 2026-08-05
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
   readable uwu voice. Each turn's prompt inventory is derived from its actual closed autonomous schema:
   bounded workspace list/read/search/QMD/write/edit, create-only skill creation, and model-chosen
-  unsandboxed `exec` as `uwubot`. The model may chain effects within hard step/call/output/deadline bounds.
+  unsandboxed `exec` as `uwubot`. The model may chain effects within one shared tool phase plus hard
+  step/call/cumulative-transcript/per-call-output/authenticated-deadline bounds.
   Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin harness
   remains public-only, and Council Actions cannot reach these tools.
 - Operator cognition follows a bounded Hermes-like Markdown split: protected instance

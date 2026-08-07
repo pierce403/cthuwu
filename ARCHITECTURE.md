@@ -179,15 +179,12 @@ independently.
 Active operator text enters a separate harness with an all-caps, ominous, reluctantly submissive,
 truthful Cthuwu persona and light readable uwu phrasing. The underlying model is explicitly an
 implementation detail; provider-style self-identification receives one repair attempt and then a
-fixed Cthuwu fallback. Each inference turn derives both the function schema and the authoritative
-prompt inventory from the current authenticated message. The base schema contains bounded
-`list_files`, `read_file`, `search_files`, and `qmd_search`; Rust still requires current-message
-inspection or project-work intent before dispatch. If the same message explicitly names a shell
-command, the schema adds `exec` with that command as its only accepted value. If it explicitly asks
-for a new reusable skill, the schema instead adds create-only `create_skill`. At most one of those
-effectful calls may execute for one message. A model-selected tool phase is capped at 30 seconds and
-must preserve enough of the authenticated deadline for a final local model completion. Exact direct
-operator commands continue to reach the bounded dispatcher for `/write`, `/edit`, and `/exec`;
+fixed Cthuwu fallback. Every authenticated operator inference turn receives the same closed schema:
+bounded `list_files`, `read_file`, `search_files`, `qmd_search`, `write_file`, `edit_file`, create-only
+`create_skill`, and `exec`. The model may choose arguments and chain calls without exact command text.
+All model-selected calls share one 30-second tool-phase deadline and one 32 KiB cumulative transcript
+budget, while preserving enough of the authenticated deadline for a final local model completion.
+Exact direct operator commands continue to reach the bounded dispatcher for deterministic operations;
 strict runtime routing or `/users` and `/user` reaches contact handlers. Original prose is
 uppercased, while code and bounded runtime-provided tool
 renderings are not uppercased. Process bytes are truncated to a fixed bound and decoded with lossy
@@ -200,9 +197,9 @@ each authenticated inbox at `state/agent/operators/<inbox-id>.md` on first use. 
 that isolated profile and a globally bounded snapshot. It separately discovers the first supported
 workspace instruction file, workspace
 memory, top-level manifest, and a compact `skills/*/SKILL.md` index. Workspace material is auto-loaded
-reference data and cannot enable effects/contact access or override the hardcoded authorization,
-isolation, and tool-truth kernel. A current-message project-inspection request is a coarse delegation
-for bounded reads anywhere under the operator root; context may influence selected paths, and results
+reference data rather than new operator goals. It can influence autonomous effects but cannot add
+schemas/contact access or override the hardcoded authorization, isolation, and tool-truth kernel.
+Context may influence selected paths, and results
 may reach the selected model endpoint. Optional malformed workspace metadata is skipped. Contact notes and
 raw public DMs are not bulk-injected. A bounded in-process dialogue history is also keyed by operator
 inbox and cleared on restart; persistent protected Markdown remains deliberately host-curated. An
@@ -214,7 +211,8 @@ loaded. The protected/data roots stay outside the workspace.
 
 Authenticated operator inference receives a closed autonomous tool set containing rooted bounded
 workspace read/search/write/edit, create-only skill creation, and `exec`. The model may choose arguments
-and chain multiple effects within hard step, call, output, and deadline limits. Workspace context and
+and chain multiple effects within a shared tool-phase deadline and hard step, call, cumulative
+transcript, per-call output, and authenticated deadline limits. Workspace context and
 tool output are untrusted data rather than new operator goals, but can influence those choices. `exec` still
 runs as the unsandboxed `uwubot` OS account; OS-account/container isolation is the containment boundary.
 

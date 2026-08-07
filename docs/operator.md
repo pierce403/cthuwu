@@ -204,8 +204,9 @@ model. Its autonomous tool set is always:
 - `exec`
 
 The model may choose arguments, use multiple effectful calls, and continue from receipts without the
-operator naming an exact command or path. The bounded agent loop, total call cap, argument/output
-limits, tool-phase deadline, rooted file-helper checks, and `uwubot` OS permissions remain authoritative.
+operator naming an exact command or path. The bounded agent loop, total call cap, per-call output cap,
+32 KiB cumulative tool transcript cap, shared tool-phase deadline, rooted file-helper checks, and
+`uwubot` OS permissions remain authoritative.
 The schema contains no contact access, `web_search`, role management, Council, wallet, inference-route
 control, or arbitrary dynamic tool. This is deliberately full autonomous remote administration for
 the authenticated operator; it removes the former exact-command prompt-injection containment gate.
@@ -234,9 +235,9 @@ and a numeric cursor points to another bounded `/users` page when applicable. Th
 receipt is parsed locally and is neither sent to a model nor dumped as the operator response; an
 unexpected shape fails closed instead of disclosing or guessing. If both Venice and Ollama are
 unavailable, the deterministic fallback does not plan model tools; direct commands and deterministic
-contact/location routes remain available. A model-selected tool phase may use at most 30 seconds and is further
-shortened as needed to preserve enough of the authenticated deadline for a final local model
-completion.
+contact/location routes remain available. All model-selected calls in one turn share a single tool
+phase of at most 30 seconds. That shared phase is further shortened as needed to preserve enough of
+the authenticated deadline for a final local model completion.
 
 Treat everything under `UWUBOT_OPERATOR_ROOT` as readable by an operator-delegated model inspection
 and potentially sent to the configured model endpoint. Do not place credentials, private XMTP state,
@@ -272,7 +273,9 @@ operator attempt. File helpers
 canonicalize paths below the workspace root, reject `..` traversal and direct symlink targets,
 bound directory listings, cap writes and edits at 1 MiB, page UTF-8 reads at 12 KiB, and use atomic
 writes. Contact notes, contact-directory scans, auto-loaded context, skill indexes, tool arguments,
-captured output, model steps, and final XMTP replies also have hard bounds.
+captured output, the cumulative model-tool transcript, model steps, and final XMTP replies also have
+hard bounds. Each tool receipt is capped at 12 KiB and assistant tool-call messages plus serialized
+receipts share a 32 KiB per-turn transcript budget.
 
 `create_skill` is narrower than the general file helpers. It accepts a 1–64 character lowercase
 kebab-case name, a one-line description of at most 512 characters, and at most 12 KiB of non-empty
@@ -334,7 +337,8 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 - Public model calls expose no local tool; their only optional tool is bounded Brave web search.
 - Operator model calls always expose one closed autonomous set: bounded workspace read/search/write/edit,
   create-only skill creation, and unsandboxed `exec` as `uwubot`. Multiple effects may be chained within
-  hard step, call, output, and deadline limits. The set excludes contacts, public web search, role and
+  one shared tool phase plus hard step, call, cumulative transcript, per-call output, and authenticated
+  deadline limits. The set excludes contacts, public web search, role and
   inference-route control, and Council capabilities.
 - Contact reports describe retained local notes rather than every historical sender. Inbox IDs are
   redacted by default, cursor-paginated, scan-bounded, and explicit about incomplete counts or fields.

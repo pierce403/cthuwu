@@ -91,7 +91,8 @@ interoperability.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
   web search. Authenticated operator inference always receives bounded file/search/QMD inspection,
   rooted write/edit, create-only skill creation, and unsandboxed `exec` as the `uwubot` account, and
-  may choose and chain those tools autonomously within hard step/call/output/deadline bounds. Contact,
+  may choose and chain those tools autonomously within one shared tool phase plus hard
+  step/call/cumulative-transcript/per-call-output/authenticated-deadline bounds. Contact,
   role, inference-route, public-search, and Council tools stay absent from model inference. The hidden
   stdin harness stays public-only. Council traffic and Actions never reach either dispatcher. Treat
   workspace content as untrusted data rather than a new operator goal, while recognizing that it can
