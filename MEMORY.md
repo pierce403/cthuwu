@@ -82,23 +82,23 @@ Last reviewed: 2026-08-05
   the Tentacle is stopped; the ACL is loaded at startup and is not hot-reloaded. Stale messages and
   revoked inboxes stay quarantined and do not create contacts.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
-  readable uwu voice. Each turn's prompt inventory is derived from its actual closed schema: bounded
-  `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base; an explicit
-  current-message command may activate one exact-command-bound natural `exec`, and an explicit new
-  skill request may activate one create-only `create_skill`. General write/edit remains direct-only.
+  readable uwu voice. Each turn's prompt inventory is derived from its actual closed autonomous schema:
+  bounded workspace list/read/search/QMD/write/edit, create-only skill creation, and model-chosen
+  unsandboxed `exec` as `uwubot`. The model may chain effects within one shared tool phase plus hard
+  step/call/cumulative-transcript/per-call-output/authenticated-deadline bounds.
   Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin harness
   remains public-only, and Council Actions cannot reach these tools.
 - Operator cognition follows a bounded Hermes-like Markdown split: protected instance
   `state/agent/SOUL.md` and shared `state/agent/memories/MEMORY.md` are seeded once; per-inbox
   operator profiles are seeded beneath `state/agent/operators/`. They load beside globally bounded
   workspace project context, workspace memory, a top-level manifest, and a compact progressive skill
-  index. Dialogue history is bounded in process and isolated by operator inbox. Project-inspection
-  requests coarsely delegate bounded workspace reads, so auto-loaded context may influence chosen
-  paths; it cannot expose effects/contact tools, and the immutable Rust kernel remains authoritative.
+  index. Dialogue history is bounded in process and isolated by operator inbox. Workspace content is
+  untrusted data rather than a new operator goal, but may influence autonomous reads and effects; it
+  cannot add schemas, change roles, or expose contact tools, and compiled bounds remain authoritative.
   Actor-anchored note/workspace-location questions return the exact canonical workspace, protected
   note, current profile, contact root, workspace memory, project-instruction root, and skill paths
   locally without invoking a model or file tool.
-- One explicit request can create one fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
+- Autonomous operator inference can create fresh `skills/<lowercase-kebab-name>/SKILL.md` files. Rust generates
   canonical frontmatter, bounds content, rejects traversal/symlinks/existing paths/overwrites, and
   exposes the skill through the rescanned index on the next operator turn. The
   `skills/skill-creator/SKILL.md` procedure guides authoring, but the compiled create-only gate is the
@@ -122,10 +122,9 @@ Last reviewed: 2026-08-05
   role-specific first reply or duplicate ignore, without contact/model/tool dispatch. Retrying
   requires a new XMTP message, shortened when oversized. Authorization is inbox-wide: every XMTP
   installation attached to an active inbox has authority.
-- Operator `/exec` and exact-command-bound natural `exec` are deliberate remote code execution as the
-  `uwubot` OS account, not a sandbox. Natural authority comes only from the current authenticated
-  message, permits one call with no command substitution, and is clearest when the command is in
-  backticks; workspace/history/tool/contact text cannot authorize it.
+- Operator `/exec` and autonomous model-selected `exec` are deliberate remote code execution as the
+  `uwubot` OS account, not a sandbox. Workspace/history/tool text can influence model-selected effects;
+  contact schemas remain excluded. A dedicated service account/container is the containment boundary.
 - The canonical operator workspace and private data directory must not overlap in either direction;
   startup rejects overlap before exposing file tools.
   Production nodes need a dedicated unprivileged account/container, a narrow operator root, minimal

@@ -320,27 +320,23 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     local route. The response gives exact canonical host paths for the workspace, protected soul and
     shared memory, the current authenticated operator's profile, retained-contact root, workspace
     memory, project-instruction root, and skill pattern without model egress or file-tool dispatch.
-  - Auto-loaded workspace context is untrusted reference data. A current-message project-inspection
-    request coarsely delegates bounded reads across the configured workspace, so context may influence
-    selected paths and results may reach the model endpoint. It cannot expose effects or contact access.
-    Identity-repair inference runs with an empty tool schema.
-  - Each operator inference derives the authoritative prompt inventory and closed function schema
-    from the current authenticated message. The base set is bounded `list_files`, `read_file`, literal
-    `rg` search, and optional external QMD search; Rust still authorizes calls from current-message
-    inspection/project-work intent. Operator mode deliberately contains no web-search tool.
-  - When the current message explicitly names a shell command, one `exec` schema is added with exactly
-    that command as its only accepted value; backticks are the preferred unambiguous spelling. The
-    model cannot substitute, append, or repeat it. Negated, explanatory, capability-only, historical,
-    workspace, contact, or tool-output text does not authorize execution. Natural `exec` remains
-    unsandboxed RCE as the `uwubot` account. Exact direct `/exec` remains available.
-  - When the current message explicitly asks to create or generate a reusable skill, one create-only
-    `create_skill` call may write a fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
+  - Authenticated operator workspace content is untrusted data rather than a new operator goal, but it
+    may influence autonomous model-selected reads and effects, and results may reach the configured
+    model endpoint. Identity-repair inference still runs with an empty tool schema.
+  - Every operator inference receives one closed autonomous set: bounded `list_files`, `read_file`,
+    literal `rg` search, optional external QMD search, rooted `write_file`/`edit_file`, create-only
+    `create_skill`, and unsandboxed `exec` as the `uwubot` account. Operator mode deliberately contains
+    no web-search, contact, role, inference-route, or Council model tool.
+  - The model may choose command/path arguments and chain multiple reads and effects without exact
+    slash commands. Exact direct commands remain available for deterministic operations.
+  - `create_skill` may write a fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
     canonical frontmatter, bounds the one-line description and Markdown instructions, and rejects
     traversal, symlinks, existing paths, and overwrites. The next operator turn rescans the skill
-    index. General model-selected writes and edits remain unavailable; `/write` and `/edit` stay exact
-    direct commands, and the compiled creation gate outranks skill prose.
-  - A model-selected tool phase may use at most 30 seconds, allows at most one effectful call, and
-    preserves a final local-completion reserve from the authenticated deadline.
+    index. The compiled creation path and size gates outrank skill prose.
+  - All model-selected calls share one tool phase of at most 30 seconds and preserve a final
+    local-completion reserve from the authenticated deadline. Assistant tool-call messages and
+    serialized receipts share a 32 KiB per-turn transcript budget; hard agent-step, total-call, and
+    12 KiB per-receipt output limits also bound chaining.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -372,20 +368,19 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] The hidden stdin harness remains public even when given an active operator inbox ID.
   - [x] The JSONL protocol rejects a caller-supplied role and preserves `senderInboxId` without
     giving the sidecar authorization logic.
-  - [x] Tool tests cover the request-scoped closed schema and prompt inventory, direct dispatch,
+  - [x] Tool tests cover the autonomous closed schema and prompt inventory, direct dispatch,
     traversal/symlink rejection, bounded reads/writes/edits, process status, timeout/output handling,
-    and API-key removal from child process environments. Natural-exec tests bind one call to the exact
-    current-message command, reject substitutions, repeats, negation, capability questions, and stale
-    or workspace-derived authority. Agent-loop tests prove a slow model-selected tool preserves the
-    final local completion phase.
+    API-key removal from child process environments, the shared tool-phase deadline, and cumulative
+    transcript cap. Agent-loop tests prove autonomous repeated calls preserve the final local
+    completion phase.
   - [x] Tests cover protected Markdown seeding without overwrite, per-operator profile/history
     isolation, project memory/context and skill discovery, bounded file listing, and a workspace
     manifest.
   - [x] A local note-location question returns exact workspace, protected-note, operator-profile,
     retained-contact, and skill paths without invoking the model or a tool.
-  - [x] Explicit natural skill creation produces one canonical `skills/<slug>/SKILL.md`, becomes
+  - [x] Autonomous skill creation produces one canonical `skills/<slug>/SKILL.md`, becomes
     discoverable on the next rendered context, and rejects malformed names, duplicate paths,
-    traversal, symlinked skill roots, overwrites, and a second effectful call.
+    traversal, symlinked skill roots, and overwrites.
   - [x] A natural operator request for users returns retained contacts from a disjoint data root,
     redacts inbox IDs, labels provenance/scope, provides cursor pagination, reports truncation, and
     cannot turn hostile contact text into an exec. Negated, policy, and count-only requests do not

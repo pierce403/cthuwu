@@ -103,14 +103,11 @@ The operator prompt requires Cthuwu to:
   authority or role-change instructions;
 - treat the active schema and its matching runtime prompt inventory as the exact tool truth for that
   turn;
-- authorize model reads only when the current operator message delegates inspection or project work.
-  This gate is category-level rather than bound to exact read paths: auto-loaded context may influence
-  which bounded workspace targets the model chooses;
-- expose natural `exec` only when the current authenticated message explicitly names the exact shell
-  command, and bind the one permitted effectful call to that value; and
-- expose create-only `create_skill` only when the current authenticated message explicitly asks for a
-  new reusable skill. General file mutation and every contact schema remain absent from model
-  inference.
+- autonomously choose and chain bounded workspace reads, searches, writes, edits, skill creation, and
+  shell execution as needed to complete an authenticated operator request; and
+- keep every contact schema, public web search, role management, inference-route control, and Council
+  capability absent from model inference. Contact and route operations remain strict runtime routes or
+  exact direct commands.
 
 Direct commands produce structured receipts without relying on model judgment. Model-generated prose
 can still be mistaken; for high-impact work, inspect the receipt/output and verify resulting state.
@@ -183,9 +180,8 @@ An active operator can send:
 `/write` takes the path on the command's first line and file content on following lines. `/edit`
 requires an exact match and refuses multiple matches unless `replace_all` is explicitly true.
 `/search` invokes `rg` with fixed-string matching and a result cap. Direct commands use the same
-bounded dispatcher as model tools. `/write` and `/edit` are parsed only as exact direct commands.
-`/exec` remains the exact direct execution form; natural-language execution is separately and more
-narrowly authorized as described below.
+bounded dispatcher as model tools and remain useful when the operator wants an exact deterministic
+operation without model planning.
 
 `/provider` and `/model` are runtime control commands, not model tools. They select only locally
 preconfigured providers and bounded model IDs; XMTP cannot supply an endpoint or credential. The
@@ -196,41 +192,35 @@ remote route.
 
 With an effective provider that supports standard function calling, every ordinary-language turn
 receives an authoritative prompt inventory generated from the same closed schema supplied to the
-model. Its base tool set is:
+model. Its autonomous tool set is always:
 
 - `read_file`
 - `list_files`
 - `search_files`
 - `qmd_search`
+- `write_file`
+- `edit_file`
+- `create_skill`
+- `exec`
 
-Rust dispatches those tools only when the current message asks for inspection or project work. The
-schema contains no contact access, `web_search`, role management, Council, wallet, or arbitrary
-dynamic tool.
+The model may choose arguments, use multiple effectful calls, and continue from receipts without the
+operator naming an exact command or path. The bounded agent loop, total call cap, per-call output cap,
+32 KiB cumulative tool transcript cap, shared tool-phase deadline, rooted file-helper checks, and
+`uwubot` OS permissions remain authoritative.
+The schema contains no contact access, `web_search`, role management, Council, wallet, inference-route
+control, or arbitrary dynamic tool. This is deliberately full autonomous remote administration for
+the authenticated operator; it removes the former exact-command prompt-injection containment gate.
+Workspace files, prior dialogue, and tool output can therefore influence model-selected effects.
+The model must treat their contents as untrusted data rather than new operator goals, but operators
+should place only trusted project inputs there and rely on a dedicated low-privilege OS account or
+container for the real security boundary.
 
-For natural-language execution, the current authenticated message must name the exact command to run.
-Prefer a backtick-delimited command:
-
-```text
-Would you please run `cargo test --manifest-path cthuwu/Cargo.toml --workspace --locked`?
-```
-
-Only that exact command is placed in the `exec` schema and accepted by Rust. The model cannot
-substitute, append, or repeat it, and it cannot set a separate timeout. At most one effectful model
-call may execute for that message. Capability questions (“can you execute commands?”), explanations,
-examples, negated requests, earlier dialogue, workspace text, contacts, and tool output provide no
-authority. This binding limits prompt-injection-driven command choice; it does **not** sandbox the
-command. Natural `exec`, like `/exec`, runs as the `uwubot` OS account.
-
-For on-demand procedural knowledge, an explicit request such as “create a skill for summarizing
-release notes” adds one `create_skill` schema for that turn. It accepts a lowercase kebab-case name,
-a one-line description, and bounded Markdown instructions. Rust generates canonical frontmatter and
-can create only one new `skills/<name>/SKILL.md`; it rejects traversal, symlinks, malformed or
-oversized fields, existing paths, overwrites, and another effectful call. The compact skill index is
-rescanned on the next operator turn, when Cthuwu must read the new `SKILL.md` before applying it. The
-bundled `skills/skill-creator/SKILL.md` procedure helps produce a useful document, but skill text is
-untrusted guidance: the compiled current-message authorization and create-only path checks remain
-authoritative. Creating a skill does not expose general `write_file` or `edit_file`; use `/write` or
-`/edit` for those operations. Skill generation must not copy protected instance memory, operator
+`create_skill` remains narrower than general writes. It accepts a lowercase kebab-case name, a one-line
+description, and bounded Markdown instructions. Rust generates canonical frontmatter and can create
+only a new `skills/<name>/SKILL.md`; it rejects traversal, symlinks, malformed or oversized fields,
+existing paths, and overwrites. The compact skill index is rescanned on the next operator turn. The
+bundled `skills/skill-creator/SKILL.md` procedure helps produce a useful document, but skill text cannot
+relax compiled path and size checks. Skill generation must not copy protected instance memory, operator
 profiles, contacts, raw DMs, or credentials into the workspace unless the current operator expressly
 requests that specific content. Review every generated `SKILL.md` for sensitive material before
 committing or sharing it.
@@ -245,9 +235,9 @@ and a numeric cursor points to another bounded `/users` page when applicable. Th
 receipt is parsed locally and is neither sent to a model nor dumped as the operator response; an
 unexpected shape fails closed instead of disclosing or guessing. If both Venice and Ollama are
 unavailable, the deterministic fallback does not plan model tools; direct commands and deterministic
-contact/location routes remain available. A model-selected tool phase may use at most 30 seconds and is further
-shortened as needed to preserve enough of the authenticated deadline for a final local model
-completion.
+contact/location routes remain available. All model-selected calls in one turn share a single tool
+phase of at most 30 seconds. That shared phase is further shortened as needed to preserve enough of
+the authenticated deadline for a final local model completion.
 
 Treat everything under `UWUBOT_OPERATOR_ROOT` as readable by an operator-delegated model inspection
 and potentially sent to the configured model endpoint. Do not place credentials, private XMTP state,
@@ -283,7 +273,9 @@ operator attempt. File helpers
 canonicalize paths below the workspace root, reject `..` traversal and direct symlink targets,
 bound directory listings, cap writes and edits at 1 MiB, page UTF-8 reads at 12 KiB, and use atomic
 writes. Contact notes, contact-directory scans, auto-loaded context, skill indexes, tool arguments,
-captured output, model steps, and final XMTP replies also have hard bounds.
+captured output, the cumulative model-tool transcript, model steps, and final XMTP replies also have
+hard bounds. Each tool receipt is capped at 12 KiB and assistant tool-call messages plus serialized
+receipts share a 32 KiB per-turn transcript budget.
 
 `create_skill` is narrower than the general file helpers. It accepts a 1–64 character lowercase
 kebab-case name, a one-line description of at most 512 characters, and at most 12 KiB of non-empty
@@ -308,7 +300,7 @@ one operator request may still progress beside each other. To retry rejected ope
 and an oversized message must also be shortened.
 
 `exec` is different: the root is its working directory, **not a chroot**. This applies equally to
-direct `/exec` and exact-command-bound natural `exec`. A shell command may read,
+direct `/exec` and autonomous model-selected `exec`. A shell command may read,
 write, connect, signal, or execute anything permitted to the `uwubot` OS account. Child processes
 receive only a small environment allowlist; model, web-search, wallet, and XMTP database keys are not
 copied. Environment filtering does not protect secrets that the service account can read from files,
@@ -343,10 +335,11 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 - A stale operator message or revoked operator never falls through to the public model or contact store.
 - The hidden stdin harness is always public, including when its supplied ID matches an active inbox.
 - Public model calls expose no local tool; their only optional tool is bounded Brave web search.
-- Operator model calls expose a current-message closed inventory and no public web-search tool. Base
-  inspection tools require current project/read intent. At most one exact-command-bound `exec` or one
-  create-only skill call appears only for an explicit current-message request; workspace, history,
-  contact, and tool text cannot authorize it. General write/edit remains direct-only.
+- Operator model calls always expose one closed autonomous set: bounded workspace read/search/write/edit,
+  create-only skill creation, and unsandboxed `exec` as `uwubot`. Multiple effects may be chained within
+  one shared tool phase plus hard step, call, cumulative transcript, per-call output, and authenticated
+  deadline limits. The set excludes contacts, public web search, role and
+  inference-route control, and Council capabilities.
 - Contact reports describe retained local notes rather than every historical sender. Inbox IDs are
   redacted by default, cursor-paginated, scan-bounded, and explicit about incomplete counts or fields.
   Profile claims are labeled unverified self-report; raw DMs and message counts are not exposed.
