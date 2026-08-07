@@ -2414,16 +2414,16 @@ fn extract_explicit_command(value: &str) -> Option<String> {
             return None;
         }
         let mut command = command.trim();
-        if let Some((first_line, remainder)) = command.split_once('\n') {
-            if matches!(
+        if let Some((first_line, remainder)) = command.split_once('\n')
+            && matches!(
                 first_line
                     .trim_end_matches('\r')
                     .to_ascii_lowercase()
                     .as_str(),
                 "sh" | "bash" | "shell"
-            ) {
-                command = remainder.trim();
-            }
+            )
+        {
+            command = remainder.trim();
         }
         return (!command.is_empty()).then(|| command.to_owned());
     }
