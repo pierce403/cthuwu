@@ -212,13 +212,13 @@ contact-note root, workspace memory, and workspace skill locations without calli
 tool. It also identifies the workspace root where the first supported project-instruction file is
 loaded. The protected/data roots stay outside the workspace.
 
-Natural `exec` authority comes only from the current authenticated operator message and is bound to
-the command that message names; backticks are the least ambiguous form. The model cannot substitute,
-append, or repeat a command, and negated, explanatory, capability-only, historical, workspace, or
-tool-output text cannot authorize execution. This narrow gate does not make `exec` safe: it still runs
-as the unsandboxed `uwubot` OS account. General model-selected writes and edits remain unavailable.
+Authenticated operator inference receives a closed autonomous tool set containing rooted bounded
+workspace read/search/write/edit, create-only skill creation, and `exec`. The model may choose arguments
+and chain multiple effects within hard step, call, output, and deadline limits. Workspace context and
+tool output are untrusted data rather than new operator goals, but can influence those choices. `exec` still
+runs as the unsandboxed `uwubot` OS account; OS-account/container isolation is the containment boundary.
 
-An explicit current-message request to create a skill can create exactly one fresh
+Autonomous operator inference can create a fresh
 `skills/<lowercase-kebab-name>/SKILL.md`. Rust validates bounded name, one-line description, and
 Markdown instructions, generates canonical YAML frontmatter, creates a fresh directory, atomically
 creates the file with restrictive permissions where supported, and rejects traversal, symlinks,
@@ -376,8 +376,8 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
-| Operator model → runtime | Generated text or local tool call | Current-message-derived closed schema/prompt inventory, exact-command or create-only effect binding, one effectful call, bounded agent loop, structured receipts, no role changes |
-| Operator tools → OS | Authenticated direct effects, model-selected reads, one explicitly authorized natural effect | Rooted file helpers, create-only skill path, exact natural-exec command binding, limits/timeouts, secret-stripped environment; OS isolation required for every `exec` path |
+| Operator model → runtime | Generated text or local tool call | Closed autonomous workspace/process schema, bounded agent loop and total calls, structured receipts, no contact/role/route/Council tools |
+| Operator tools → OS | Authenticated direct or model-selected workspace/process effects | Rooted bounded file helpers, create-only skill path, limits/timeouts, secret-stripped environment; OS isolation required for every `exec` path |
 | Rust ↔ XMTP subprocess | `inbound_text`, empty-text `reject_inbound`, or metadata-only `reject_oversized` JSONL; authenticated metadata, `sentAtNs`, local deadline, and admitted text only | Node-side byte check, allowlisted environment, bounded frames/handshake, pinned role snapshot, durable claim before admission, first-claim `Reply`/duplicate `Ignore`, no rejection-path dispatch, no-queue authority lanes, deadline cancellation |
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |
