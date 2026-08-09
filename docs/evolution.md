@@ -8,8 +8,9 @@ the default data plane.
 
 The current implementation does **not** provide a live Hermes transport, peer discovery/handshake,
 peer-key provisioning, Council metrics publication, automatic process spawning/death/absorption, or
-the proposed token/economic Phase 5. Local deterministic gossip tests do not establish live network
-interoperability.
+token transaction execution. It does provide the local, read-only UWU observance and bounded
+Engagement input described in [token.md](token.md). Local deterministic gossip and token tests
+do not establish live network or deployed-contract interoperability.
 
 ## Components and authority
 
@@ -18,6 +19,8 @@ interoperability.
 | Nature | Seven bounded sliders, one Sacred Ban, random identity, generation, inheritance/mutation, rendering, local signed persistence | Policy data only; cannot authorize a role, tool, provider, or Council action |
 | Awakening | Signed, hash-chained epochs with restart recovery and active-operator actions | Existing authenticated XMTP operator classifier; the journal does not authenticate senders |
 | Scales | Bounded daily/weekly aggregate metrics, Nature/epoch/period bindings, stress, partial/final judgments, and logically append-only history | Outcomes are recommendations; authenticated operator confirmation remains required |
+| UWU observer/economics | Read-only Base `balanceOf`, local tier policy, and a bounded public-sender Engagement bonus averaged over all period conversations | No private keys, transfers, central registry, operator authority, Tentacle Wealth/starvation/stake/reward state, or automatic spending |
+| UWU governance core | Deterministic bounded address ballots, tier/holding weights, quorum, and approval for closed policy subjects | Library-only/advisory; no live Council, Nature mutation, persistence, RPC, process, or operator authority |
 | Lineage | Founder/child/family/absorption records, identity binding, cycle checks, atomic persistence | Records do not create, kill, route, or merge a process |
 | Hermes core | Closed knowledge types, HMAC author/relay provenance, per-peer anti-entropy, conflict resolution, pending retries, persistence | Requires an authenticated transport-to-key binding that is not implemented yet |
 
@@ -107,9 +110,11 @@ The Scales core can represent bounded aggregate engagement, growth, optional eco
 and influence measurements. Persisted metrics and judgments bind the Nature ID and fingerprint,
 awakening epoch, period bounds, and scored-scale availability. Nature appetites are normalized only
 across the active scales; unavailable scales keep zero outcome weight rather than depressing or
-inflating the result. The current runtime scores engagement only because trusted growth, economic,
-and influence adapters are unavailable. It keeps the economic layer disabled, and no token/revenue
-incentive layer is present.
+inflating the result. The current runtime scores Engagement only. A fresh or unexpired cached
+public-sender UWU balance adds one bounded Engagement bonus for that conversation. The period stores
+the sum and averages it across every conversation, including those without a usable wallet
+observation; ordering and last-writer state therefore cannot determine a lifecycle result. Public
+balances never activate Tentacle Wealth, starvation relief, stake, reward, Growth, or Influence.
 Post-confirmation Nature adjustments add the bounded, visible, audit-reconciled stress penalty.
 
 The deterministic `JudgmentPolicy` persists propagation evidence floors, and each `Judgment`
@@ -156,9 +161,50 @@ Startup also verifies every persisted spawn receipt: its judgment ID must resolv
 timestamp must fall within the immediately following period. An unverifiable lineage projection is
 rejected rather than trusted because its own schema is well formed.
 
-Recruitment is at most an aggregate local metric. It produces no money, token, stake, governance
-vote, ancestor reward, or Council contribution credit. Existing Council contribution credit remains
-non-financial, outcome-based, and direct-only.
+Recruitment is at most an aggregate local metric. It mints no token and produces no stake,
+governance vote, ancestor reward, or Council contribution credit. Existing Council contribution
+credit remains non-financial, outcome-based, and direct-only. UWU balance observation is independent
+of recruitment.
+
+## UWU observance boundary
+
+The sidecar obtains an optional EVM address from the SDK-authenticated XMTP sender inbox; it does not
+accept a wallet claim from message text. Each Tentacle validates Base chain ID `8453`, calls the
+configured transferable UWU ERC-20 with read-only `eth_call` `balanceOf(address)`, and ranks only its
+own in-process observations. Whale, Elder, Acolyte, Initiate, and Unproven are therefore local views,
+not identities or global reputation facts. The current integration observes public one-to-one DM
+senders; Council-member, sibling-lineage, and operator-acolyte enumeration awaits authenticated live
+address adapters.
+
+Holdings below one whole UWU are Initiates and do not enter percentile ranking. Default Whale top 1%
+requires at least 100 eligible local holders and Elder top 10% requires 10; otherwise holdings of at
+least one UWU remain Acolytes. Ties receive the same tier without address-order tie-breaking.
+
+Unknown and stale observations are neutral. They cannot gate a response, change its depth, or affect
+Scales, and an RPC outage does not stop ordinary conversation. A known tier changes bounded response
+depth/tone in proportion to `100 - Nature.cooperation` unless an operator sets an explicit 0–100
+intensity. The permissive minimum tier is `unproven`; no token or stake is required to start a
+Tentacle. Token tier never grants the XMTP operator role or tools.
+
+For current public messages, a fresh/cached balance affects only tier response/gating plus the
+period-averaged Engagement bonus. `RecordedTokenEconomics` remains an adapter-only library API for
+future node/operator Wealth, starvation, stake, reward, and emergency-spend evidence. Before such
+evidence can reach runtime state it must cryptographically bind holder role/address, chain ID,
+contract, block, observed time, decimals/supply, and configuration fingerprint, with idempotent
+history instead of last-writer state. No such source exists today; those dimensions remain inactive
+and emergency spending remains recommendation-only. See [token.md](token.md) for configuration and
+the requested one-billion supply versus current 100-billion Clanker v4 standard.
+
+The observer rejects the zero contract and revalidates Base chain ID before every balance call.
+Failed ordinary observations use a per-holder retry backoff bounded to 1–30 seconds without blocking
+unrelated holders. Disabling observation ignores stale token-only configuration rather than making
+it a startup requirement.
+
+The token-governance module is likewise local and advisory. It can deterministically tally one
+bounded ballot per address for closed Nature, Council, economic, and skill-propagation policy
+subjects, with Nature-scaled tier multipliers and bounded quorum/approval. Nothing currently feeds
+those results into a live Council or Nature transition, and the module has no storage, network,
+signer, process, command, or operator-authority surface.
 
 ## Hermes-inspired knowledge exchange
 
@@ -238,9 +284,15 @@ owner-only, and reject symlinks or inconsistent bindings. The judgment history p
 deterministic consistency validation, not cryptographic tamper evidence. A missing Evolution key
 beside signed state fails closed without rekeying.
 
+The balance/tier cache itself is local in-process state, not a durable global registry.
+`metrics.json` may contain the sum of bounded public-sender Engagement bonuses and the full
+conversation denominator. The current runtime leaves `token_economics` and Wealth absent; stale or
+unknown state contributes zero and cannot enable a Scale.
+
 The Rust suite covers generation/mutation ranges, Sacred Bans, signed Nature tamper detection,
 awakening parsing/provenance/audit/recovery, bounded Scales math and partial/final status, inference
-reservations, one-use spawn grants, lineage identity/cycle checks, and Hermes
+reservations, one-use spawn grants, lineage identity/cycle checks, ERC-20 ABI/RPC/chain validation,
+local tier/sample-floor/cache/backoff behavior, period-averaged Engagement persistence, and Hermes
 signatures/privacy/conflicts/partition convergence/persistence.
 Remaining release evidence is tracked in [FEATURES.md](../FEATURES.md), especially live XMTP
 awakening, cross-platform persistence, separately provisioned child lifecycle, operator-reviewed skill

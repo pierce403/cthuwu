@@ -552,8 +552,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     visible stress penalty. Metrics and judgments bind the exact Nature ID/fingerprint, awakening
     epoch, period bounds, and persisted scored-scale availability.
   - Nature appetites produce weights renormalized across active scales, while unavailable scales get
-    zero outcome weight. The current runtime scores engagement only because trusted growth,
-    economic, and influence adapters are unavailable; wealth remains disabled.
+    zero outcome weight. The current runtime scores Engagement only. A fresh/cached public-sender UWU
+    balance may add one bounded Engagement bonus; the period averages the sum over all conversations
+    so the final observation cannot win through last-writer state. Public balances never activate
+    Wealth, starvation relief, stake, Growth, Influence, propagation, or lifecycle authority.
   - `/judgment` during an open period returns a `PartialSnapshot` with
     `AdvisorySnapshotOnly`. Only evaluation at or after the period boundary is `Final`, and even its
     propagation, survival, starvation, or death outcome requires authenticated operator
@@ -586,13 +588,19 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Loaded spawn receipts are projections, not standalone authority. Each must resolve to its exact
     Final PropagationRights history record, match its parent Nature, and fall inside the immediately
     following-period timestamp window.
-  - Recruitment is only an aggregate local measurement. It does not create Council contribution
-    credit, money, tokens, governance votes, or ancestor rewards. The proposed economic/token Phase
-    5 is not part of this implementation.
+  - Recruitment is only an aggregate local measurement. It does not mint tokens, create Council
+    contribution credit or governance votes, or reward ancestors. The UWU balance observer is a
+    separate read-only input and does not convert recruitment into a financial reward.
 - **Test Criteria**:
   - [x] Tests cover normalized Nature weights, bounded/saturating metric updates, optional wealth,
     explicit threshold and evidence-floor edges, partial-versus-final evaluation, stress penalties,
     low-sample outcome capping, and randomized valid inputs.
+  - [x] Engagement integration tests prove bounded public-sender bonuses are averaged over all period
+    conversations, are order-independent, leave `token_economics`/Wealth absent, and provide no
+    starvation effect or direct/last-writer lifecycle grant.
+  - [x] Adapter-only token-economic tests cover trusted/untrusted snapshots, Nature-derived
+    sensitivities, optional stake/reward scale activation, and recommendation-only emergency spend;
+    no current runtime source invokes them.
   - [x] Metrics and logically append-only history round-trip and reject unsafe permissions,
     symlinks, corrupt or partial records, duplicate/conflicting judgment IDs, reordered/overlapping
     periods, non-final or off-boundary history, invalid Nature/epoch/period/scoring bindings, and
@@ -606,6 +614,85 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     processes without treating a lineage record as proof that either effect occurred.
   - [ ] Council metrics publication and propagation-rights governance remain unavailable until a
     live authenticated Council adapter and schema are designed and tested.
+
+### UWU ERC-20 observance and token-weighted behavior
+
+- **Stability**: in-progress
+- **Description**: Observe the transferable UWU ERC-20 independently from each Tentacle and use
+  fresh/cached local balances for configurable conversation tiers and a bounded, period-averaged
+  Engagement input.
+- **Properties**:
+  - UWU uses name `UWU`, symbol `UWU`, 18 decimals by default, and Base mainnet chain ID `8453`.
+    There is no minimum balance or stake to start a Tentacle. The contract address is configured
+    after launch and is never hard-coded.
+  - Token observation defaults on but remains inactive without a contract. The Agent SDK supplies
+    an optional EVM address resolved from the transport-authenticated XMTP sender inbox; message text
+    cannot claim or override the observed address.
+  - The current runtime observes public one-to-one DM senders. The observer API accepts any validated
+    address, but Council-member, sibling-lineage, and operator-acolyte enumeration await live
+    authenticated address-binding adapters.
+  - Each Tentacle owns its in-process balance, observation-time, and reputation-tier maps. It checks
+    `eth_chainId`, calls ERC-20 `balanceOf(address)` through read-only `eth_call`, and never uses a
+    central balance registry or global tier service.
+  - Holdings below one whole token are Initiate and do not enter percentile ranking. Among balances
+    of at least one whole token, default Whale is the top 1% only when at least 100 eligible holders
+    are known, and Elder is the top 10% only when at least 10 are known. Otherwise eligible holders
+    are Acolytes; observed zero is Unproven. Ties receive the same tier without address-order
+    tie-breaking.
+  - Fresh observations are cached for the configured interval. Unknown and stale results remain
+    neutral: they do not enforce the minimum tier, modify responses, or affect Scales. Chain failure
+    does not crash or block ordinary interaction.
+  - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
+    depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
+    optional 0–100 override. `unproven` is the permissive default minimum tier.
+  - Token tier never grants XMTP operator authority, local tools, or shell access.
+  - A fresh/cached public-sender balance is normalized using configured decimals and total supply and
+    contributes only a bounded per-conversation Engagement bonus. The period averages it over every
+    conversation, including missing/unusable observations, so it cannot create lifecycle rights via
+    last-writer state.
+  - `RecordedTokenEconomics` Wealth, starvation, stake, reward, and emergency-spend policy remains
+    adapter-only. A future node/operator adapter must cryptographically bind holder role/address,
+    chain ID, contract, block, observed time, decimals/supply, and configuration fingerprint and use
+    idempotent history. No current source is wired; no private key, signer, or transfer path exists.
+  - `token_gov.rs` provides deterministic local advisory ballots for a closed set of Nature,
+    Council, economic, and skill-propagation policy subjects. It bounds holding/tier weight, quorum,
+    and approval, but has no live Council, Nature-mutation, persistence, RPC, signer, process, or
+    operator-authority integration.
+  - `--rpc-endpoint`, `--token-contract`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
+    `--token-tier-intensity`, `--token-decimals`, and `--token-total-supply` have corresponding
+    `CTHUWU_*` environment variables. RPC endpoint values are hidden/sanitized because provider URLs
+    may contain credentials.
+  - The contract must be a nonzero valid address. The RPC adapter revalidates Base chain ID before
+    each balance call and uses a per-holder outage backoff bounded to 1–30 seconds. Disabling token
+    observation ignores stale token-only configuration instead of blocking startup.
+  - The requested one-billion supply is not current Clanker v4 standard. Clanker v4 currently uses
+    100 billion tokens with 18 decimals; launch must choose that standard or a reviewed
+    custom/nonstandard one-billion deployment. Standard Clanker fees are LP/swap creator rewards,
+    not an ERC-20 fee-on-transfer.
+- **Test Criteria**:
+  - [x] Unit tests cover strict Ethereum addresses and quantities, ABI `balanceOf` construction and
+    parsing, per-call Base chain-ID binding, response validation, one-token percentile eligibility,
+    100/10-holder Whale/Elder sample floors, ties, cache expiration, bounded retry backoff,
+    stale/unknown fallback, zero-contract rejection, and disabled-config bypass.
+  - [x] Model-policy tests prove tier-dependent bounded response depth, Nature intensity zero, and
+    that UWU facts explicitly deny operator authority.
+  - [x] Scales/runtime tests prove balance-only scale activation, inert untrusted observations,
+    Nature-policy binding, persistence/restart, and acceptance of token-enabled final judgments.
+  - [x] Token-governance tests cover proposal IDs, tier-weighted approval, cooperative-Nature
+    neutralization, duplicate ballots, permissive zero-weight Unproven voting, configured tier
+    floors, bounds, quorum, and abstention handling.
+  - [ ] A deployed UWU contract on Base passes live zero/sub-token/tier-boundary balance reads,
+    cache expiry, RPC outage, and wrong-chain tests.
+  - [ ] Live Council, sibling-lineage, and operator-acolyte adapters enumerate only
+    cryptographically bound addresses and preserve one local cache per Tentacle.
+  - [ ] A reviewed live governance adapter binds ballots to exact authenticated addresses and
+    trustworthy observations before any advisory result can influence Council or Nature state.
+  - [ ] The launch decision resolves requested one-billion supply versus current Clanker v4
+    100-billion standard and updates the configured normalization reference accordingly.
+
+See [docs/token.md](docs/token.md) for launch and activation and
+[docs/guardrail-audit.md](docs/guardrail-audit.md) for unrelated policy limits found during the
+phase.
 
 ### Hermes-inspired knowledge gossip core
 

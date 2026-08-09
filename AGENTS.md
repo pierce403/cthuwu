@@ -45,6 +45,8 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
 - `docs/operator.md`: privileged XMTP operator enrollment, tools, isolation, and deployment warning.
 - `docs/evolution.md`: Nature, awakening, Scales, lineage, Hermes gossip, and current non-goals.
+- `docs/token.md`: UWU launch parameters, Base balance observation, local tiers, Engagement input,
+  adapter-only economics, and post-launch activation.
 - `skills/`: reusable procedures specific to this repository.
 
 ## Build and verification
@@ -183,10 +185,12 @@ interoperability.
   absorption record, or spawn record must never terminate, route, merge private memory, provision a
   process, or launch a child automatically.
 - Preserve the exact Nature ID/fingerprint, awakening epoch, period, and scored-scale-availability
-  bindings on metrics and judgments. Renormalize weight only across available scales. The current
-  runtime may score engagement only until trusted growth, economic, and influence adapters exist.
-  Persist evidence floors and counts in policy/judgment, and cap a propagation-threshold result at
-  `Survival` when the sample is below its floor.
+  bindings on metrics and judgments. Renormalize weight only across available scales. The public
+  UWU sender observer may add only a bounded per-conversation Engagement bonus, summed and averaged
+  over every conversation in the period. It must never enable Wealth, starvation relief, stake,
+  reward, Growth, Influence, propagation, or lifecycle authority. Persist evidence floors and
+  counts in policy/judgment, and cap a propagation-threshold result at `Survival` when the sample is
+  below its floor.
 - Accept at most one relationship/Scales observation per retained contact per UTC day; count a
   return only after prior-day activity. Keep local loyalty and Nature-affinity signals out of remote
   model profiles. Reserve public inference against its Nature fingerprint, awakening epoch, and
@@ -220,9 +224,36 @@ interoperability.
 - Keep received skills inert and quarantined until a local authenticated operator explicitly reviews
   and activates them through the existing compiled skill boundary. A Hermes signature establishes
   only the configured key's provenance; it does not make instructions safe or authorize tools.
-- Do not add token, staking, slashing, revenue-sharing, or financial recruitment incentives as part
-  of the Evolution layer. Phase 5 of the proposal is intentionally out of scope; existing Council
-  contribution credit remains non-financial and never rewards raw recruitment.
+- Keep UWU observation read-only and local to each Tentacle. Accept the holder address only from the
+  SDK-authenticated XMTP sender metadata; never accept a message-claimed wallet as observed
+  identity. Validate the ERC-20 address and Base chain ID `8453`, issue only `eth_call`
+  `balanceOf(address)`, and never accept, store, or log a token private key.
+- Unknown or stale RPC state is neutral: never fabricate a zero balance, enforce a token tier, or
+  apply Scales effects from it. Do not log a credential-bearing RPC URL. Cache/rank observations
+  locally and never introduce a central balance or reputation registry.
+- UWU is transferable and no balance or stake is required to start a Tentacle. The default minimum
+  interaction tier is `unproven`, and per-Tentacle tier differences are scaled by Nature or an
+  explicit bounded override. Treat holdings below one whole token as Initiate; percentile ranks use
+  only holdings of at least one token, default Whale requires 100 eligible local holders, default
+  Elder requires 10, and tied balances receive the same tier. Token holdings never authorize an
+  XMTP operator, operator tool, Council action, or shell command.
+- Revalidate Base chain ID before every live balance call, use a bounded per-holder outage backoff,
+  and reject the zero contract address. Disabling observation must ignore stale token-only
+  configuration so it cannot block unrelated startup.
+- Keep `RecordedTokenEconomics` adapter-only. A future node/operator source for Wealth, starvation,
+  stake, reward, or emergency spending must cryptographically bind holder role/address, chain ID,
+  contract, block, observed time, decimals/supply, and a configuration fingerprint, and must use
+  history/idempotency rather than last-writer state. Until then these dimensions stay inactive and
+  emergency spending stays recommendation-only. Council contribution credit remains non-financial
+  and never rewards raw recruitment.
+- Keep token-weighted governance deterministic, bounded, and advisory. Ballots must bind to exact
+  authenticated addresses and trustworthy observations before a future adapter can use them. The
+  closed governance subjects may not expand into operator authorization, arbitrary commands,
+  credentials, process control, or tool access; the current library has no live Council/Nature
+  mutation path.
+- Do not describe the requested one-billion UWU supply as Clanker standard. Current Clanker v4 uses
+  a fixed 100-billion supply with 18 decimals; launching one billion requires a custom/nonstandard
+  deployment decision. Standard Clanker creator fees are LP/swap rewards, not fee-on-transfer.
 
 ## Coding conventions
 
@@ -282,3 +313,9 @@ interoperability.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.
+- The UWU phase implements a Base-8453, read-only local `balanceOf` observer, local percentile tiers,
+  Nature-scaled response differences, a period-averaged public-sender Engagement bonus, and a
+  deterministic local advisory token-governance library. Public balances never become Tentacle
+  Wealth/starvation/stake/reward state. Deployment, bound node/operator economics, live governance
+  integration, transaction signing, and autonomous spending remain absent; the requested
+  one-billion supply still requires resolution against Clanker's current 100-billion v4 standard.

@@ -21,6 +21,7 @@ function message(): Omit<InboundText, "type" | "id" | "deadlineUnixMs"> {
   return {
     messageId: "message-1",
     senderInboxId: "inbox-1",
+    senderAddress: "0x4200000000000000000000000000000000000006",
     sentAtNs: "1750000000000000000",
     conversationId: "conversation-1",
     text: "hello from the human realm",
@@ -87,6 +88,7 @@ describe("JSONL uwubot bridge", () => {
     const response = bridge.rejectOversized({
       messageId: "message-oversized",
       senderInboxId: "inbox-1",
+      senderAddress: "0x4200000000000000000000000000000000000006",
       sentAtNs: "1750000000000000000",
       conversationId: "conversation-1",
     });
@@ -95,6 +97,7 @@ describe("JSONL uwubot bridge", () => {
       id: "request-oversized",
       messageId: "message-oversized",
       senderInboxId: "inbox-1",
+      senderAddress: "0x4200000000000000000000000000000000000006",
       sentAtNs: "1750000000000000000",
       conversationId: "conversation-1",
       text: "",

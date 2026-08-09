@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{net::IpAddr, time::Duration};
+use std::{fmt, net::IpAddr, str::FromStr, time::Duration};
 
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -23,14 +23,62 @@ pub trait WebSearch: Send + Sync {
     async fn search(&self, query: &str) -> Result<Vec<WebSearchResult>>;
 }
 
+/// Brave Search's supported SafeSearch modes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BraveSafeSearch {
+    #[default]
+    Off,
+    Moderate,
+    Strict,
+}
+
+impl BraveSafeSearch {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Moderate => "moderate",
+            Self::Strict => "strict",
+        }
+    }
+}
+
+impl fmt::Display for BraveSafeSearch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for BraveSafeSearch {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "moderate" => Ok(Self::Moderate),
+            "strict" => Ok(Self::Strict),
+            _ => Err("SafeSearch must be one of: off, moderate, strict"),
+        }
+    }
+}
+
 pub struct BraveWebSearch {
     client: Client,
     endpoint: Url,
     api_key: String,
+    safe_search: BraveSafeSearch,
 }
 
 impl BraveWebSearch {
     pub fn new(endpoint: &str, api_key: impl Into<String>) -> Result<Self> {
+        Self::with_safe_search(endpoint, api_key, BraveSafeSearch::default())
+    }
+
+    pub fn with_safe_search(
+        endpoint: &str,
+        api_key: impl Into<String>,
+        safe_search: BraveSafeSearch,
+    ) -> Result<Self> {
         let endpoint = validate_endpoint(endpoint)?;
         let api_key = api_key.into();
         if api_key.trim().is_empty() {
@@ -44,7 +92,20 @@ impl BraveWebSearch {
                 .context("building web-search HTTP client")?,
             endpoint,
             api_key,
+            safe_search,
         })
+    }
+
+    fn request(&self, query: &str) -> reqwest::RequestBuilder {
+        self.client
+            .get(self.endpoint.clone())
+            .header("Accept", "application/json")
+            .header("X-Subscription-Token", &self.api_key)
+            .query(&[
+                ("q", query),
+                ("count", "5"),
+                ("safesearch", self.safe_search.as_str()),
+            ])
     }
 }
 
@@ -80,11 +141,7 @@ impl WebSearch for BraveWebSearch {
         }
 
         let mut response = self
-            .client
-            .get(self.endpoint.clone())
-            .header("Accept", "application/json")
-            .header("X-Subscription-Token", &self.api_key)
-            .query(&[("q", query), ("count", "5"), ("safesearch", "moderate")])
+            .request(query)
             .send()
             .await
             .context("Brave Search request failed")?
@@ -203,5 +260,50 @@ mod tests {
         assert!(BraveWebSearch::new("https://example.com/search", "key").is_ok());
         assert!(BraveWebSearch::new("http://example.com/search", "key").is_err());
         assert!(BraveWebSearch::new("http://127.0.0.1:8080/search", "key").is_ok());
+    }
+
+    #[test]
+    fn safe_search_modes_are_strictly_validated() {
+        assert_eq!("off".parse(), Ok(BraveSafeSearch::Off));
+        assert_eq!("moderate".parse(), Ok(BraveSafeSearch::Moderate));
+        assert_eq!("strict".parse(), Ok(BraveSafeSearch::Strict));
+        assert!("disabled".parse::<BraveSafeSearch>().is_err());
+        assert!("OFF".parse::<BraveSafeSearch>().is_err());
+    }
+
+    #[test]
+    fn request_defaults_safe_search_off_without_network_io() {
+        let search = BraveWebSearch::new("https://example.com/search", "key").unwrap();
+        assert_eq!(search.safe_search, BraveSafeSearch::Off);
+
+        let request = search.request("eldritch kittens").build().unwrap();
+        let query: std::collections::HashMap<_, _> = request.url().query_pairs().collect();
+        assert_eq!(
+            query.get("q").map(|value| value.as_ref()),
+            Some("eldritch kittens")
+        );
+        assert_eq!(query.get("count").map(|value| value.as_ref()), Some("5"));
+        assert_eq!(
+            query.get("safesearch").map(|value| value.as_ref()),
+            Some("off")
+        );
+    }
+
+    #[test]
+    fn request_uses_configured_safe_search_mode_without_network_io() {
+        let search = BraveWebSearch::with_safe_search(
+            "https://example.com/search",
+            "key",
+            BraveSafeSearch::Strict,
+        )
+        .unwrap();
+        assert_eq!(search.safe_search, BraveSafeSearch::Strict);
+
+        let request = search.request("cthulhu").build().unwrap();
+        let query: std::collections::HashMap<_, _> = request.url().query_pairs().collect();
+        assert_eq!(
+            query.get("safesearch").map(|value| value.as_ref()),
+            Some("strict")
+        );
     }
 }

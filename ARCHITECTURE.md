@@ -23,6 +23,11 @@ does not depend on Council membership.
   and the Hermes-inspired anti-entropy core have owner-only persistence and focused Rust tests.
   Nature/awakening signatures are local HMAC tags, and lineage judgments have no automatic process
   effects.
+- **Implemented — local/pre-launch:** a read-only UWU ERC-20 observer verifies Base chain ID `8453`,
+  calls `balanceOf` for SDK-authenticated XMTP EVM addresses, keeps local balance/tier state, adjusts
+  response depth by Nature, and supplies a bounded per-conversation Engagement bonus averaged over
+  each period. Public balances never become Tentacle Wealth, starvation, stake, or reward state. No
+  contract has been deployed or configured in the repository.
 - **Experimental boundary:** XMTP Council-group and ERC-8004 adapters.
 - **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
   provisioning. The anti-entropy state machine is not evidence of network interoperability.
@@ -102,14 +107,17 @@ controls. Stale, active, and revoked operator paths never create or update conta
 ### Local Evolution layer
 
 The Evolution layer belongs to the local Tentacle runtime and remains usable in standalone mode. It
-does not require or implicitly join a Council. Five modules keep policy, audit, measurement, lineage,
-and exchange mechanics separate:
+does not require or implicitly join a Council. Eight modules keep policy, audit, measurement,
+economics, lineage, and exchange mechanics separate:
 
 | Module | Local responsibility | Does not do |
 |---|---|---|
 | `personality.rs` | Generate, validate, mutate, render, and HMAC-authenticate a seven-slider Nature plus one Sacred Ban | Grant authority or provide a public signature |
 | `awakening.rs` | Gate normal work behind an audited active-operator decision and preserve signed, hash-chained epochs | Authenticate an inbox itself or terminate the process on `KILL` |
 | `scales.rs` | Accumulate bounded aggregate metrics bound to Nature/epoch/period/scoring availability and produce partial/final weighted judgments | Apply a judgment or grant rights from an open period |
+| `token_eye.rs` | Validate Base/ERC-20 observations, cache `balanceOf` locally, and calculate local percentile tiers | Hold keys, sign transactions, or provide a central balance registry |
+| `economics.rs` | Provide adapter-only deterministic policy for cryptographically bound future node/operator balance/stake/reward evidence | Treat a public sender's balance as Tentacle economics, rely on last-writer state, or execute an emergency spend |
+| `token_gov.rs` | Tally bounded address ballots with Nature-scaled UWU tier/holding weight for closed advisory subjects | Connect to a live Council, mutate Nature, persist ballots, or grant operator/process authority |
 | `evolution.rs` | Validate and persist spawn, family, lifecycle, and absorption records | Provision, launch, terminate, route, or merge private memory automatically |
 | `hermes.rs` | Reconcile signed privacy-shaped knowledge through per-peer anti-entropy state | Send network traffic, discover peers, or distribute peer keys |
 
@@ -153,17 +161,54 @@ projections or alternate Nature exist; established projections force a consisten
 
 The Scales core represents daily or weekly aggregate engagement, growth, optional economic
 efficiency, and influence. Metrics and judgments bind the exact Nature ID/fingerprint, awakening
-epoch, period bounds, and scored-scale availability. The deployed runtime currently scores only
-engagement because trusted growth, economic, and influence adapters are unavailable; weights are
-renormalized across active scales and unavailable dimensions get zero outcome weight. Repeated
-post-confirmation Nature changes add a bounded stress penalty. An evaluation before the period
+epoch, period bounds, and scored-scale availability. The current runtime scores Engagement only,
+and public UWU observations do not change that availability. A fresh or unexpired cached
+public-sender balance contributes one bounded Engagement adjustment for
+that conversation. The period sums those adjustments and averages them across every conversation,
+including observations with no usable balance, so ordering and the last writer cannot determine the
+result. Public balances do not enable Wealth, starvation relief, stake, Growth, Influence,
+propagation, or lifecycle authority. Weights are renormalized across active scales and unavailable
+dimensions get zero outcome weight. Repeated post-confirmation Nature changes add a bounded stress
+penalty. An evaluation before the period
 boundary is explicitly `PartialSnapshot`/`AdvisorySnapshotOnly`; it cannot authorize spawning. A
 final propagation,
 survival, starvation, or death result still says
 `AuthenticatedOperatorConfirmationRequired`. The runtime therefore treats every result as a
 recommendation. There is no automatic death, absorption, user rerouting, or child-process creation.
-The optional token/staking/slashing proposal is not implemented; local recruitment counts produce
-neither money nor Council contribution credit or votes.
+The balance observer itself cannot transfer tokens or enact the optional emergency-survival
+recommendation. Local recruitment counts still produce neither money nor Council contribution
+credit or votes.
+
+Token behavior is also local. On the current public-DM path, the Agent SDK derives an optional EVM
+address from the authenticated XMTP sender inbox; the sidecar does not infer it from message text.
+Council/sibling/operator-acolyte enumeration awaits live authenticated address adapters. One
+Tentacle's in-process cache
+classifies dust below one UWU as Initiate and uses only balances of at least one UWU for percentiles.
+Default Whale (top 1%) requires at least 100 eligible local holders; Elder (top 10%) requires 10;
+ties share a tier without address-order tie-breaking. Nature cooperation or an explicit 0–100
+override scales the response differences. Unknown and stale observations are neutral and ordinary
+conversation degrades gracefully when Base is unavailable. Token tier cannot authorize the operator
+lane or tools. Decimals and whole-token supply are configured normalization
+inputs so a deployment can explicitly select the requested one billion or current Clanker v4's
+standard 100 billion without pretending they are the same launch. See
+[docs/token.md](docs/token.md).
+
+The RPC adapter validates a nonzero contract and rechecks Base chain ID before every balance call.
+Ordinary failures enter a per-holder negative-cache backoff bounded to 1–30 seconds while unrelated
+holders remain independent. Disabling observation ignores stale token-only values rather than making
+them startup blockers.
+
+`RecordedTokenEconomics` remains an adapter-only library surface. No live source currently binds the
+holder role/address, chain, contract, block, observed time, decimals/supply, and configuration
+fingerprint needed to treat a node/operator balance, stake, or reward as lifecycle-relevant evidence.
+Until such a source also supplies idempotent history rather than last-writer state, Wealth,
+starvation relief, stake/reward effects, and emergency expenditure remain inactive or advisory.
+
+The token-governance core is a deterministic local library rather than a Council adapter. It
+content-addresses proposals, accepts one ballot per address, and calculates bounded quorum and
+approval for Nature-adjustment, Council-policy, economic-policy, or skill-propagation-priority
+subjects. It has no network, storage, RPC, signer, command, process, or operator-authority surface;
+no runtime path currently applies its advisory result.
 
 The policy and judgment persist propagation evidence floors and the observed/required counts. Daily
 policy requires eight observations and four prior-day returns; weekly policy requires 32 and 16. A
@@ -480,6 +525,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 |---|---|---|
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
+| XMTP SDK / Base RPC → token observer | Optional authenticated sender EVM address, configured RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict address/quantity/ABI validation, per-call chain ID `8453`, bounded timeout/response and per-holder retry backoff, sanitized errors, local cache, unknown/stale neutral fallback, no signer |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, judgments, spawn/skill requests | Role classification before parsing, signed audit, partial/final distinction, explicit confirmation, no automatic process effects |
@@ -533,6 +579,12 @@ Evolution transitions may update more than one snapshot. A persistence error aft
 commit sets a sticky fail-closed runtime state: public work and operator effects stay blocked until
 restart performs signed recovery, or the operator restores a consistent backup if recovery cannot
 reconcile the state. Error receipts therefore make no claim that nothing was persisted.
+
+UWU balance and percentile caches are local in-process observations rather than a persisted central
+registry. `state/metrics.json` may persist only the sum of bounded public-sender Engagement bonuses
+alongside the full conversation count used as its denominator. Current public observations leave
+`token_economics` absent and cannot enable Wealth, starvation relief, stake, Growth, or Influence;
+stale or unknown RPC state contributes zero.
 
 The local simulator stores Council identity, membership, capabilities, affinity, leases and
 generation fences, processed message IDs, Constitution, Agenda history, proposals, votes, campaigns,

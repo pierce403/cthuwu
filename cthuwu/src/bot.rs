@@ -1,4 +1,5 @@
 use crate::{
+    config::BlockchainConfig,
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
     evolution_runtime::{
@@ -8,11 +9,13 @@ use crate::{
     model::{Model, ModelPolicy, ModelRequest},
     operator::OperatorHarness,
     principal::{OperatorStore, PrincipalRole},
+    token_eye::{Address, BalanceObservation, ObservationFreshness, ReputationTier, TokenEye},
 };
 use anyhow::{Context, Result};
 use std::{
+    str::FromStr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tracing::warn;
 
@@ -26,6 +29,15 @@ pub struct UwUBot {
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
+    token_eye: Option<Arc<TokenEye>>,
+    blockchain: BlockchainConfig,
+}
+
+struct AuthenticatedMessage<'a> {
+    message_id: &'a str,
+    inbox_id: &'a str,
+    sender_address: Option<&'a str>,
+    text: &'a str,
 }
 
 struct PublicTurnGuard {
@@ -73,7 +85,19 @@ impl UwUBot {
             operators,
             operator_harness,
             evolution,
+            token_eye: None,
+            blockchain: BlockchainConfig::default(),
         }
+    }
+
+    pub fn with_token_observance(
+        mut self,
+        token_eye: Option<Arc<TokenEye>>,
+        blockchain: BlockchainConfig,
+    ) -> Self {
+        self.token_eye = token_eye;
+        self.blockchain = blockchain;
+        self
     }
 
     /// Receive a DM whose sender inbox ID came from the authenticated XMTP SDK envelope.
@@ -127,35 +151,40 @@ impl UwUBot {
         &self,
         message_id: &str,
         inbox_id: &str,
-        authenticated_sent_at_ns: &str,
+        _authenticated_sent_at_ns: &str,
         text: &str,
         role: PrincipalRole,
     ) -> Result<Option<String>> {
         self.receive_classified(
-            message_id,
-            inbox_id,
-            authenticated_sent_at_ns,
-            text,
+            AuthenticatedMessage {
+                message_id,
+                inbox_id,
+                sender_address: None,
+                text,
+            },
             role,
             true,
         )
         .await
     }
 
-    /// Dispatch a message whose durable replay claim completed before authority-lane admission.
-    pub(crate) async fn receive_authenticated_claimed(
+    /// Dispatch a claimed message with the optional SDK-authenticated EVM sender identifier.
+    pub(crate) async fn receive_authenticated_claimed_with_address(
         &self,
         message_id: &str,
         inbox_id: &str,
-        authenticated_sent_at_ns: &str,
+        authenticated_sender_address: Option<&str>,
+        _authenticated_sent_at_ns: &str,
         text: &str,
         role: PrincipalRole,
     ) -> Result<Option<String>> {
         self.receive_classified(
-            message_id,
-            inbox_id,
-            authenticated_sent_at_ns,
-            text,
+            AuthenticatedMessage {
+                message_id,
+                inbox_id,
+                sender_address: authenticated_sender_address,
+                text,
+            },
             role,
             false,
         )
@@ -169,23 +198,29 @@ impl UwUBot {
         inbox_id: &str,
         text: &str,
     ) -> Result<Option<String>> {
-        self.receive_classified(message_id, inbox_id, "0", text, PrincipalRole::User, true)
-            .await
+        self.receive_classified(
+            AuthenticatedMessage {
+                message_id,
+                inbox_id,
+                sender_address: None,
+                text,
+            },
+            PrincipalRole::User,
+            true,
+        )
+        .await
     }
 
     async fn receive_classified(
         &self,
-        message_id: &str,
-        inbox_id: &str,
-        _authenticated_sent_at_ns: &str,
-        text: &str,
+        message: AuthenticatedMessage<'_>,
         role: PrincipalRole,
         claim_message: bool,
     ) -> Result<Option<String>> {
-        if claim_message && !self.processed.claim(message_id, inbox_id)? {
+        if claim_message && !self.processed.claim(message.message_id, message.inbox_id)? {
             return Ok(None);
         }
-        if text.len() > MAX_MESSAGE_BYTES {
+        if message.text.len() > MAX_MESSAGE_BYTES {
             let response = match role {
                 PrincipalRole::Operator => {
                     "YOUR MESSAGE EXCEEDS THE OPERATOR INPUT LIMIT. THE VOID REFUSES TO SWALLOW IT."
@@ -208,14 +243,18 @@ impl UwUBot {
                         .lock()
                         .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
                     let response =
-                        evolution.handle_operator_message(inbox_id, message_id, text);
+                        evolution.handle_operator_message(
+                            message.inbox_id,
+                            message.message_id,
+                            message.text,
+                        );
                     (response, evolution.requires_recovery())
                 };
                 match evolution_response {
                     Ok(Some(response)) => response,
                     Ok(None) => self
                         .operator_harness
-                        .respond(inbox_id, text)
+                        .respond(message.inbox_id, message.text)
                         .await
                         .unwrap_or_else(|_| {
                             "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
@@ -236,12 +275,20 @@ impl UwUBot {
             PrincipalRole::RevokedOperator => {
                 "THIS OPERATOR ROLE IS REVOKED. I WILL EXECUTE NOTHING FOR THIS INBOX.".to_owned()
             }
-            PrincipalRole::User => self.receive_user(inbox_id, text).await?,
+            PrincipalRole::User => {
+                self.receive_user(message.inbox_id, message.sender_address, message.text)
+                    .await?
+            }
         };
         Ok(Some(limit_response(response, role)))
     }
 
-    async fn receive_user(&self, inbox_id: &str, text: &str) -> Result<String> {
+    async fn receive_user(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: Option<&str>,
+        text: &str,
+    ) -> Result<String> {
         let started = Instant::now();
         let turn = {
             let mut evolution = self
@@ -258,6 +305,28 @@ impl UwUBot {
             }
         };
         let mut turn_guard = PublicTurnGuard::new(self.evolution.clone(), turn.token);
+        let token_observation = self
+            .observe_authenticated_wallet(authenticated_sender_address)
+            .await;
+        if let Some(observation) = token_observation.as_ref()
+            && observation_is_current(observation)
+            && !observation.tier.meets(self.blockchain.minimum_tier)
+            && !is_local_data_control(text)
+        {
+            return Ok(format!(
+                "this Tentacle currently asks for UWU tier {:?} or higher, fwiend. ur locally observed tier is {:?}; no identity check or central registry was used.",
+                self.blockchain.minimum_tier, observation.tier
+            ));
+        }
+        let tier_intensity = self
+            .blockchain
+            .effective_tier_intensity(turn.nature_cooperation);
+        let mut model_policy = turn.policy.clone();
+        if let Some(observation) = token_observation.as_ref()
+            && observation_is_current(observation)
+        {
+            apply_token_tier_policy(&mut model_policy, observation, tier_intensity);
+        }
         let (mut contact, created) = self.contacts.load_or_create(inbox_id)?;
         contact.mark_seen();
 
@@ -293,7 +362,12 @@ impl UwUBot {
 
         let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
         let profile = contact.model_profile_markdown();
-        let mut response = self.model_reply(&profile, text, &turn.policy).await;
+        let mut response = self.model_reply(&profile, text, &model_policy).await;
+        if let Some(observation) = token_observation.as_ref()
+            && observation_is_current(observation)
+        {
+            decorate_token_tier_response(&mut response, observation.tier, tier_intensity);
+        }
 
         if created && !response.contains('?') {
             contact.mark_onboarding_prompted();
@@ -324,6 +398,11 @@ impl UwUBot {
                         depth: conversation_depth,
                         returning: relationship.returning_after_prior_day,
                         response_time_ms: Some(response_time_ms),
+                        token_engagement_bonus_basis_points: token_engagement_bonus_basis_points(
+                            token_observation.as_ref(),
+                            self.blockchain.token_decimals,
+                            self.blockchain.total_supply_whole,
+                        ),
                     });
                 if let Err(error) = evolution.finish_public_turn(turn_token, observation) {
                     warn!(%error, "could not persist local Evolution conversation metrics");
@@ -333,6 +412,19 @@ impl UwUBot {
         }
         contact_save?;
         Ok(response)
+    }
+
+    async fn observe_authenticated_wallet(
+        &self,
+        authenticated_sender_address: Option<&str>,
+    ) -> Option<BalanceObservation> {
+        let token_eye = self.token_eye.as_ref()?;
+        let holder = Address::from_str(authenticated_sender_address?).ok()?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Some(token_eye.observe(holder, now).await)
     }
 
     async fn model_reply(&self, profile: &str, text: &str, policy: &ModelPolicy) -> String {
@@ -700,6 +792,147 @@ fn starts_with_any(value: &str, prefixes: &[&str]) -> bool {
     prefixes.iter().any(|prefix| value.starts_with(prefix))
 }
 
+fn apply_token_tier_policy(
+    policy: &mut ModelPolicy,
+    observation: &BalanceObservation,
+    intensity: u8,
+) {
+    if intensity == 0 {
+        return;
+    }
+    let depth_basis_points = match observation.tier {
+        ReputationTier::Whale => 16_000_i64,
+        ReputationTier::Elder => 13_000,
+        ReputationTier::Acolyte => 10_000,
+        ReputationTier::Initiate => 7_000,
+        ReputationTier::Unproven => 5_000,
+    };
+    let applied_basis_points =
+        10_000_i64 + (depth_basis_points - 10_000) * i64::from(intensity) / 100;
+    policy.max_output_tokens = u32::try_from(
+        (i64::from(policy.max_output_tokens) * applied_basis_points / 10_000).max(64),
+    )
+    .unwrap_or(u32::MAX);
+    policy.nature_runtime_facts.push_str(&format!(
+        "\nuwu_token_tier={}\nuwu_observation_freshness={}\nuwu_tier_effect_intensity={}\nuwu_tier_behavior={}\nUWU tier never grants local operator authority.",
+        tier_label(observation.tier),
+        freshness_label(observation.freshness),
+        intensity,
+        tier_behavior(observation.tier),
+    ));
+    *policy = policy.clone().bounded();
+}
+
+fn decorate_token_tier_response(response: &mut String, tier: ReputationTier, intensity: u8) {
+    if intensity == 0 {
+        return;
+    }
+    let note = match tier {
+        ReputationTier::Whale => {
+            "the deep-lore current is open for this reply, and i'm giving it first-priority attention uwu."
+        }
+        ReputationTier::Elder => {
+            "i'm taking the more considered Elder-depth path with this one, fwiend."
+        }
+        ReputationTier::Acolyte => return,
+        ReputationTier::Initiate => {
+            "i'll keep this first pass focused while ur local UWU history takes shape :3"
+        }
+        ReputationTier::Unproven => {
+            "one tentacle stays skeptical for now—show me what u mean, and we'll build trust from there."
+        }
+    };
+    response.push_str("\n\n");
+    response.push_str(note);
+}
+
+fn token_engagement_bonus_basis_points(
+    observation: Option<&BalanceObservation>,
+    token_decimals: u8,
+    total_supply_whole: u64,
+) -> u16 {
+    let Some(observation) = observation.filter(|observation| observation_is_current(observation))
+    else {
+        return 0;
+    };
+    let Some(balance) = observation.balance else {
+        return 0;
+    };
+    let whole_tokens = balance.whole_units(token_decimals);
+    let normalized = (u128::from(whole_tokens)
+        .saturating_mul(10_000)
+        .checked_div(u128::from(total_supply_whole))
+        .unwrap_or_default())
+    .min(10_000);
+    u16::try_from(normalized).unwrap_or(10_000)
+}
+
+fn observation_is_current(observation: &BalanceObservation) -> bool {
+    observation.balance.is_some()
+        && matches!(
+            observation.freshness,
+            ObservationFreshness::Fresh | ObservationFreshness::Cached
+        )
+}
+
+const fn tier_label(tier: ReputationTier) -> &'static str {
+    match tier {
+        ReputationTier::Whale => "whale",
+        ReputationTier::Elder => "elder",
+        ReputationTier::Acolyte => "acolyte",
+        ReputationTier::Initiate => "initiate",
+        ReputationTier::Unproven => "unproven",
+    }
+}
+
+const fn freshness_label(freshness: ObservationFreshness) -> &'static str {
+    match freshness {
+        ObservationFreshness::Fresh => "fresh",
+        ObservationFreshness::Cached => "cached",
+        ObservationFreshness::Stale => "stale",
+        ObservationFreshness::Unknown => "unknown",
+    }
+}
+
+const fn tier_behavior(tier: ReputationTier) -> &'static str {
+    match tier {
+        ReputationTier::Whale => {
+            "priority response treatment and deep lore; routing priority remains metadata until a Hermes adapter is live"
+        }
+        ReputationTier::Elder => {
+            "elevated conversation depth; skill priority remains metadata until gossip is live"
+        }
+        ReputationTier::Acolyte => "standard member interaction",
+        ReputationTier::Initiate => "focused basic interaction",
+        ReputationTier::Unproven => "skeptical interaction and proof-oriented questions",
+    }
+}
+
+fn is_local_data_control(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    let command = normalized
+        .strip_prefix('/')
+        .and_then(|value| value.split_whitespace().next());
+    matches!(
+        command,
+        Some("profile" | "export" | "forget" | "share" | "pause" | "resume")
+    ) || matches!(
+        normalized.as_str(),
+        "what do you remember about me?"
+            | "what do you remember about me"
+            | "show me my profile"
+            | "show me what you remember"
+            | "yes, forget me"
+            | "yes forget me"
+            | "forget me"
+            | "delete my profile"
+            | "stop sharing"
+            | "don't share my profile"
+            | "dont share my profile"
+            | "matching off"
+    )
+}
+
 fn limit_response(mut response: String, role: PrincipalRole) -> String {
     if response.len() <= MAX_RESPONSE_BYTES {
         return response;
@@ -766,6 +999,98 @@ mod tests {
         async fn respond(&self, _request: ModelRequest<'_>) -> Result<String> {
             anyhow::bail!("test model unavailable")
         }
+    }
+
+    fn observed(tier: ReputationTier, freshness: ObservationFreshness) -> BalanceObservation {
+        BalanceObservation {
+            holder: Address::ZERO,
+            balance: Some(crate::token_eye::U256::from_u64(1)),
+            observed_at: Some(1),
+            tier,
+            freshness,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn token_tiers_measurably_change_bounded_model_depth() {
+        let mut whale = ModelPolicy {
+            max_output_tokens: 100,
+            ..ModelPolicy::default()
+        };
+        apply_token_tier_policy(
+            &mut whale,
+            &observed(ReputationTier::Whale, ObservationFreshness::Fresh),
+            100,
+        );
+        assert_eq!(whale.max_output_tokens, 160);
+        assert!(whale.nature_runtime_facts.contains("deep lore"));
+        assert!(
+            whale
+                .nature_runtime_facts
+                .contains("never grants local operator")
+        );
+
+        let mut unproven = ModelPolicy {
+            max_output_tokens: 200,
+            ..ModelPolicy::default()
+        };
+        apply_token_tier_policy(
+            &mut unproven,
+            &observed(ReputationTier::Unproven, ObservationFreshness::Cached),
+            100,
+        );
+        assert_eq!(unproven.max_output_tokens, 100);
+        assert!(unproven.nature_runtime_facts.contains("skeptical"));
+
+        let unchanged = ModelPolicy::default();
+        let mut cooperative = unchanged.clone();
+        apply_token_tier_policy(
+            &mut cooperative,
+            &observed(ReputationTier::Whale, ObservationFreshness::Fresh),
+            0,
+        );
+        assert_eq!(cooperative.max_output_tokens, unchanged.max_output_tokens);
+        assert_eq!(
+            cooperative.nature_runtime_facts,
+            unchanged.nature_runtime_facts
+        );
+    }
+
+    #[test]
+    fn balance_normalization_is_bounded_and_stale_data_has_no_engagement_bonus() {
+        let mut observation = observed(ReputationTier::Whale, ObservationFreshness::Fresh);
+        observation.balance =
+            Some(crate::token_eye::U256::from_quantity("0x52b7d2dcc80cd2e4000000").unwrap());
+        assert_eq!(
+            token_engagement_bonus_basis_points(Some(&observation), 18, 1_000_000_000),
+            1_000
+        );
+
+        observation.freshness = ObservationFreshness::Stale;
+        assert_eq!(
+            token_engagement_bonus_basis_points(Some(&observation), 18, 1_000_000_000),
+            0
+        );
+        assert!(!observation_is_current(&observation));
+
+        observation.freshness = ObservationFreshness::Unknown;
+        assert_eq!(
+            token_engagement_bonus_basis_points(Some(&observation), 18, 1_000_000_000),
+            0
+        );
+        assert_eq!(
+            token_engagement_bonus_basis_points(None, 18, 1_000_000_000),
+            0
+        );
+    }
+
+    #[test]
+    fn token_minimums_never_block_local_data_controls() {
+        assert!(is_local_data_control("/profile"));
+        assert!(is_local_data_control("/forget confirm"));
+        assert!(is_local_data_control("stop sharing"));
+        assert!(!is_local_data_control("tell me deep lore"));
     }
 
     struct RecordingModel {
@@ -1301,9 +1626,10 @@ mod tests {
                 .unwrap()
         );
         let response = bot
-            .receive_authenticated_claimed(
+            .receive_authenticated_claimed_with_address(
                 "preclaimed-message",
                 OPERATOR_ID,
+                None,
                 "101",
                 "/exec true",
                 role,

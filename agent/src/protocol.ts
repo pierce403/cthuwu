@@ -7,6 +7,7 @@ export type InboundText = {
   id: string;
   messageId: string;
   senderInboxId: string;
+  senderAddress?: string;
   sentAtNs: string;
   deadlineUnixMs: number;
   conversationId: string;

@@ -38,6 +38,8 @@ struct InboundText {
     message_id: String,
     #[serde(rename = "senderInboxId")]
     sender_inbox_id: String,
+    #[serde(rename = "senderAddress")]
+    sender_address: Option<String>,
     #[serde(rename = "sentAtNs")]
     sent_at_ns: String,
     #[serde(rename = "deadlineUnixMs")]
@@ -204,9 +206,10 @@ pub async fn run_xmtp_sidecar(
             let response = match processing_budget(request.deadline_unix_ms, role) {
                 Some(budget) => match timeout(budget, async {
                     scope_authenticated_deadline(inference_lane, budget, async {
-                        bot.receive_authenticated_claimed(
+                        bot.receive_authenticated_claimed_with_address(
                             &request.message_id,
                             &request.sender_inbox_id,
+                            request.sender_address.as_deref(),
                             &request.sent_at_ns,
                             &request.text,
                             role,
@@ -512,6 +515,13 @@ fn validate_request(request: &InboundText) -> Result<()> {
         bail!("invalid XMTP message ID");
     }
     normalize_inbox_id(&request.sender_inbox_id).context("invalid XMTP sender inbox ID")?;
+    if let Some(address) = &request.sender_address
+        && (address.len() != 42
+            || !address.starts_with("0x")
+            || !address[2..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        bail!("invalid authenticated XMTP sender address");
+    }
     if request.sent_at_ns.is_empty()
         || request.sent_at_ns.len() > 32
         || !request.sent_at_ns.bytes().all(|byte| byte.is_ascii_digit())
@@ -538,7 +548,7 @@ mod tests {
     #[test]
     fn parses_the_transport_contract() {
         let request: InboundText = serde_json::from_str(
-            &format!(r#"{{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","sentAtNs":"1750000000000000000","deadlineUnixMs":{},"conversationId":"dm-1","text":"hello"}}"#, current_unix_ms().unwrap() + 10_000),
+            &format!(r#"{{"type":"inbound_text","id":"request-1","messageId":"message-1","senderInboxId":"aabbcc","senderAddress":"0x4200000000000000000000000000000000000006","sentAtNs":"1750000000000000000","deadlineUnixMs":{},"conversationId":"dm-1","text":"hello"}}"#, current_unix_ms().unwrap() + 10_000),
         )
         .unwrap();
         validate_request(&request).unwrap();
@@ -598,6 +608,7 @@ mod tests {
             id: "request-oversized".to_owned(),
             message_id: "message-oversized".to_owned(),
             sender_inbox_id: "aabbcc".to_owned(),
+            sender_address: Some("0x4200000000000000000000000000000000000006".to_owned()),
             sent_at_ns: "1750000000000000000".to_owned(),
             deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
             conversation_id: "dm-1".to_owned(),
@@ -615,6 +626,7 @@ mod tests {
             id: "request-1".to_owned(),
             message_id: "message-1".to_owned(),
             sender_inbox_id: "aabbcc".to_owned(),
+            sender_address: None,
             sent_at_ns: "1750000000000000000".to_owned(),
             deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
             conversation_id: "dm-1".to_owned(),
@@ -679,6 +691,7 @@ mod tests {
             id: "request-1".to_owned(),
             message_id: "message-1".to_owned(),
             sender_inbox_id: "not-an-inbox".to_owned(),
+            sender_address: Some("not-an-address".to_owned()),
             sent_at_ns: "yesterday".to_owned(),
             deadline_unix_ms: current_unix_ms().unwrap() + 10_000,
             conversation_id: "dm-1".to_owned(),
@@ -740,6 +753,7 @@ mod tests {
             id: "request-1".to_owned(),
             message_id: "message-1".to_owned(),
             sender_inbox_id: "aabbcc".to_owned(),
+            sender_address: None,
             sent_at_ns: "1750000000000000000".to_owned(),
             deadline_unix_ms: now.saturating_sub(1),
             conversation_id: "dm-1".to_owned(),

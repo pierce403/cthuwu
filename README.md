@@ -19,6 +19,9 @@ The detailed product contract and remaining release gates live in [FEATURES.md](
 The Council protocol is documented in [docs/protocol/README.md](docs/protocol/README.md).
 The local Evolution layer and its current network boundary are documented in
 [docs/evolution.md](docs/evolution.md).
+The UWU launch choices, local ERC-20 observer, and post-launch activation steps are documented in
+[docs/token.md](docs/token.md). The broader policy limits found during this phase are tracked in
+[docs/guardrail-audit.md](docs/guardrail-audit.md).
 
 ## Council implementation status
 
@@ -42,7 +45,8 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
 | Scales and lineage | **Implemented — local**; bounded judgments and records, with no automatic process lifecycle effects |
 | Hermes-inspired anti-entropy | **Implemented — local core and persistence**; no live transport or peer-key provisioning |
 | Council metrics/lineage publication | **Not connected**; no live Council interoperability claim |
-| Token or financial incentive layer | **Out of scope**; the optional proposal phase was not implemented |
+| UWU token observance and Engagement input | **Implemented — local/pre-launch**; read-only Base `balanceOf`, local tiers, and a period-averaged Engagement bonus; contract deployment still pending |
+| UWU token-weighted governance core | **Implemented — local library only**; deterministic advisory ballots with no live Council or Nature-mutation adapter |
 
 Evolution state is per standalone Tentacle and does not require a Council. Its local HMAC tags are
 integrity checks under an owner-only symmetric key, not public signatures. A recorded child is not a
@@ -84,9 +88,21 @@ boundary.
   and are omitted from profiles sent to remote models.
 - The Scales core accumulates bounded aggregate metrics, distinguishes advisory open-period
   snapshots from final judgments, and requires an authenticated operator before any lifecycle
-  effect. The runtime currently scores only engagement, renormalizing active Nature weight, because
-  trusted growth, economic, and influence adapters are unavailable. Lineage persistence records
-  spawns and absorptions without launching, terminating, or routing processes.
+  effect. The runtime scores Engagement only. A fresh or unexpired cached public-sender UWU balance
+  can add one bounded Engagement bonus, averaged across every conversation in the period so message
+  order and last-writer state cannot grant an advantage. It does not represent Tentacle Wealth,
+  starvation relief, stake, rewards, Influence, Growth, propagation rights, or lifecycle authority.
+  Lineage persistence still records spawns and absorptions without launching, terminating, or
+  routing processes.
+- Each Tentacle can observe the transferable UWU ERC-20 independently through a read-only Base
+  mainnet RPC. It derives Whale, Elder, Acolyte, Initiate, and Unproven tiers from its own cache and
+  uses Nature cooperation to scale response differences. Percentile ranks consider only holdings of
+  at least one UWU; default Whale and Elder tiers require meaningful local samples of 100 and 10
+  eligible holders. Missing configuration, an unavailable RPC, or unknown/stale data degrades
+  neutrally; UWU never grants the XMTP operator role.
+- A deterministic token-governance library calculates bounded, Nature-scaled ballot weights for a
+  closed set of advisory subjects. It is not connected to live Council proposals, Nature mutation,
+  transaction signing, process control, or operator authorization.
 - The Hermes-inspired core signs and reconciles privacy-shaped knowledge between directly trusted
   peers in deterministic tests. It persists anti-entropy state locally, but no live gossip transport,
   discovery handshake, or peer-key provisioning exists yet.
@@ -246,6 +262,44 @@ because stdin cannot supply an authenticated operator awakening.
 
 The hidden stdin harness is deliberately public-only. It cannot simulate an operator, even when its
 inbox argument matches an active operator record.
+
+### UWU token observation
+
+UWU is planned as a transferable 18-decimal ERC-20 on Base mainnet (`8453`). No minimum token
+balance or stake is required to start a Tentacle. Observation defaults on but waits harmlessly for a
+contract address:
+
+```bash
+CTHUWU_RPC_ENDPOINT=https://mainnet.base.org \
+CTHUWU_TOKEN_CONTRACT=<verified-UWU-contract-address> \
+CTHUWU_TOKEN_DECIMALS=18 \
+CTHUWU_TOKEN_TOTAL_SUPPLY=100000000000 \
+./uwu.sh
+```
+
+The example is intentionally non-runnable; replace `<verified-UWU-contract-address>` with the
+verified deployed nonzero contract. The
+relevant options are `--rpc-endpoint`, `--token-contract`, `--observe-tokens`,
+`--observe-interval`, `--min-tier`, `--token-tier-intensity`, `--token-decimals`, and
+`--token-total-supply`; corresponding `CTHUWU_*` environment variables are listed in
+[the token guide](docs/token.md).
+
+The sidecar obtains an optional EVM address from the SDK-authenticated XMTP sender inbox. Rust checks
+Base chain ID before every read and performs only `eth_call` `balanceOf(address)`. Each Tentacle
+caches and ranks its own observations; there is no central holder registry. Failed refreshes use a
+bounded per-holder 1–30 second retry backoff. Unknown and stale results do not gate or modify a
+response and add no Engagement bonus. No RPC path accepts a private key or signs a transfer.
+
+`--observe-tokens false` ignores stale token-only configuration. With observation enabled, malformed
+and zero contract addresses fail startup. Public balances never activate the adapter-only
+`RecordedTokenEconomics` APIs for Tentacle Wealth, starvation, stake, or rewards; a future adapter
+needs cryptographically bound node/operator provenance before those can enter runtime state.
+
+The requested one-billion UWU supply remains a launch choice, not a Clanker standard: current
+Clanker v4 documentation specifies a fixed 100-billion-token supply with 18 decimals. Using one
+billion therefore requires a reviewed custom/nonstandard deployment, or the launch must adopt the
+current Clanker standard. Standard Clanker creator fees are LP/swap rewards rather than an ERC-20
+fee-on-transfer.
 
 ## XMTP operator role
 
@@ -591,8 +645,12 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
   credentials, and private memory. Tool-operation records cannot carry paths, shell commands, output,
   or arguments; bounded skill prose remains hostile input. There is no live gossip transport or
   peer-key provisioning, and persisted peer IDs are not proof of authentication.
-- Scales outcomes and lineage records are non-effectful until an authenticated operator acts. The
-  Evolution implementation contains no token, staking, slashing, or financial recruitment layer.
+- Scales outcomes and lineage records remain non-effectful until an authenticated operator acts.
+  The UWU observer is read-only: it holds no private key, signs no transfer, and cannot spend an
+  emergency-survival recommendation. Public balances contribute only a period-averaged Engagement
+  bonus, never Tentacle Wealth, starvation relief, stake, reward, or lifecycle authority. The latter
+  remain adapter-only APIs pending cryptographically bound node/operator evidence; Council
+  contribution credit remains non-financial.
 - Heartbeats, load, sessions, user references, contact memory, and conversation content do not go
   on-chain.
 - Council votes and propagated requests cannot override a Tentacle operator's local security policy.

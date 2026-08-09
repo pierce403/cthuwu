@@ -3,6 +3,7 @@ use crate::{
         AwakeningAction, AwakeningLog, AwakeningOutcome, AwakeningPhase, AwakeningProvenance,
         AwakeningRitual,
     },
+    economics::{TokenEconomicPolicy, TokenEconomicSnapshot},
     evolution::{Lineage, LineageStore, SpawnAuthorization},
     hermes::{
         HermesNode, HermesStore, KnowledgeItem, KnowledgePayload, MAX_GOSSIP_PEERS,
@@ -95,6 +96,7 @@ pub(crate) struct PublicTurnContext {
     pub token: PublicTurnToken,
     pub policy: ModelPolicy,
     pub nature_fingerprint: String,
+    pub nature_cooperation: u8,
     pub onboarding_prompt_cadence: u32,
 }
 
@@ -109,6 +111,8 @@ pub(crate) struct ConversationObservation {
     pub depth: u32,
     pub returning: bool,
     pub response_time_ms: Option<u64>,
+    /// Interaction-scoped holder balance bonus. This is not node wealth, stake, or rewards.
+    pub token_engagement_bonus_basis_points: u16,
 }
 
 impl EvolutionRuntime {
@@ -170,7 +174,7 @@ impl EvolutionRuntime {
         )?;
         let binding_changed =
             reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
-        let availability_changed = restrict_runtime_scales(&mut metrics)?;
+        let availability_changed = restrict_runtime_scales(&mut metrics, ritual.nature())?;
         let stress_changed = reconcile_adjustment_stress(&mut metrics, &awakening_log)?;
         if history_boundary_changed || binding_changed || availability_changed || stress_changed {
             scales_store.save_metrics(&metrics)?;
@@ -455,6 +459,7 @@ impl EvolutionRuntime {
             token: PublicTurnToken { id: turn_id },
             policy: self.model_policy(),
             nature_fingerprint: self.ritual.nature().fingerprint()?,
+            nature_cooperation: self.ritual.nature().cooperation,
             onboarding_prompt_cadence: self.onboarding_prompt_cadence(),
         }))
     }
@@ -498,10 +503,11 @@ impl EvolutionRuntime {
                 && self.metrics.period_ends_at_unix_seconds == binding.period_ends_at_unix_seconds,
             "public observation no longer matches its signed Nature and metrics-period binding"
         );
-        self.metrics.record_conversation(
+        self.metrics.record_conversation_with_token_bonus(
             observation.depth,
             observation.returning,
             observation.response_time_ms,
+            observation.token_engagement_bonus_basis_points,
         );
         self.scales_store.save_metrics(&self.metrics)
     }
@@ -1034,13 +1040,29 @@ fn is_accepted_propagation_grant(
     awakening_epoch: u64,
     now: i64,
 ) -> Result<bool> {
-    Ok(record.nature_id == nature.nature_id
+    if record.validate().is_err() || current_metrics.validate().is_err() {
+        return Ok(false);
+    }
+    let scoring_policy_is_accepted = match record.metrics.token_economics {
+        None => {
+            record.metrics.scored_scale_availability == RUNTIME_SCORED_SCALES
+                && record.judgment.scored_scale_availability == RUNTIME_SCORED_SCALES
+        }
+        Some(economics) => {
+            let expected_availability = token_runtime_scored_scales(economics.snapshot);
+            economics.snapshot.trustworthy
+                && economics.validate().is_ok()
+                && economics.policy == runtime_token_policy(nature)?
+                && record.metrics.scored_scale_availability == expected_availability
+                && record.judgment.scored_scale_availability == expected_availability
+        }
+    };
+    Ok(scoring_policy_is_accepted
+        && record.nature_id == nature.nature_id
         && record.nature_fingerprint == nature.fingerprint()?
         && record.awakening_epoch == awakening_epoch
         && record.judgment.evaluation_status == EvaluationStatus::Final
         && record.judgment.outcome == JudgmentOutcome::PropagationRights
-        && record.metrics.scored_scale_availability == RUNTIME_SCORED_SCALES
-        && record.judgment.scored_scale_availability == RUNTIME_SCORED_SCALES
         && record.judgment.policy == JudgmentPolicy::for_period(record.metrics.period)
         && record.metrics.engagement.conversations >= DAILY_PROPAGATION_MIN_CONVERSATIONS
         && record.metrics.engagement.returning_conversations
@@ -1051,6 +1073,24 @@ fn is_accepted_propagation_grant(
         && (current_metrics.period_started_at_unix_seconds
             ..current_metrics.period_ends_at_unix_seconds)
             .contains(&now))
+}
+
+fn runtime_token_policy(nature: &TentacleNature) -> Result<TokenEconomicPolicy> {
+    TokenEconomicPolicy::default().with_nature_appetites(
+        nature.engagement,
+        nature.growth,
+        nature.wealth,
+        nature.influence,
+    )
+}
+
+const fn token_runtime_scored_scales(snapshot: TokenEconomicSnapshot) -> ScoredScaleAvailability {
+    ScoredScaleAvailability {
+        engagement: true,
+        growth: snapshot.reward_basis_points > 0,
+        wealth: true,
+        influence: snapshot.stake_basis_points > 0,
+    }
 }
 
 fn new_runtime_metrics(
@@ -1157,10 +1197,24 @@ fn validate_lineage_spawn_authorizations(
     Ok(())
 }
 
-fn restrict_runtime_scales(metrics: &mut TentacleMetrics) -> Result<bool> {
-    if metrics.scored_scale_availability == RUNTIME_SCORED_SCALES {
+fn restrict_runtime_scales(metrics: &mut TentacleMetrics, nature: &TentacleNature) -> Result<bool> {
+    let expected = match metrics.token_economics {
+        Some(economics) if economics.snapshot.trustworthy => {
+            ensure!(
+                economics.policy == runtime_token_policy(nature)?,
+                "trusted token metrics use a policy that does not match their bound Nature"
+            );
+            token_runtime_scored_scales(economics.snapshot)
+        }
+        _ => RUNTIME_SCORED_SCALES,
+    };
+    if metrics.scored_scale_availability == expected {
         return Ok(false);
     }
+    ensure!(
+        expected == RUNTIME_SCORED_SCALES,
+        "trusted token metrics must use the exact token-enabled runtime scoring policy"
+    );
     metrics.restrict_scored_scales(RUNTIME_SCORED_SCALES)?;
     Ok(true)
 }
@@ -2128,6 +2182,7 @@ mod tests {
         let PublicTurnStart::Ready(turn) = runtime.begin_public_turn().unwrap() else {
             panic!("confirmed runtime should reserve a public turn");
         };
+        assert_eq!(turn.nature_cooperation, runtime.nature().cooperation);
         let value = if runtime.nature().growth == 100 {
             99
         } else {
@@ -2184,6 +2239,7 @@ mod tests {
                     depth: 2,
                     returning: false,
                     response_time_ms: Some(5),
+                    token_engagement_bonus_basis_points: 0,
                 }),
             )
             .unwrap();
@@ -2196,6 +2252,96 @@ mod tests {
         );
         assert!(runtime.metrics.period_started_at_unix_seconds >= original_end);
         assert_eq!(runtime.metrics.engagement.conversations, 0);
+    }
+
+    #[test]
+    fn public_token_observations_only_raise_engagement_and_survive_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let expected_fingerprint = runtime.nature().fingerprint().unwrap();
+        for bonus in [8_000, 0] {
+            let PublicTurnStart::Ready(turn) = runtime.begin_public_turn().unwrap() else {
+                panic!("confirmed runtime should reserve a public turn");
+            };
+            runtime
+                .finish_public_turn(
+                    turn.token,
+                    Some(ConversationObservation {
+                        depth: 0,
+                        returning: false,
+                        response_time_ms: None,
+                        token_engagement_bonus_basis_points: bonus,
+                    }),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            runtime.metrics.scored_scale_availability,
+            RUNTIME_SCORED_SCALES
+        );
+        assert!(runtime.metrics.token_economics.is_none());
+        assert!(runtime.metrics.wealth.is_none());
+        assert_eq!(runtime.metrics.nature_fingerprint, expected_fingerprint);
+        assert_eq!(runtime.metrics.engagement.conversations, 2);
+        assert_eq!(
+            runtime.metrics.engagement.token_bonus_basis_points_total,
+            8_000
+        );
+        let judgment = runtime
+            .metrics
+            .evaluate(
+                runtime.nature(),
+                runtime.metrics.period_ends_at_unix_seconds,
+            )
+            .unwrap();
+        assert_eq!(judgment.scores.engagement, 4_000);
+        assert!(!judgment.scored_scale_availability.growth);
+        assert!(!judgment.scored_scale_availability.wealth);
+        assert!(!judgment.scored_scale_availability.influence);
+        assert_eq!(judgment.economic_starvation_relief_basis_points, 0);
+        assert_eq!(
+            runtime.scales_store.load_metrics().unwrap(),
+            Some(runtime.metrics.clone())
+        );
+
+        let expected_metrics = runtime.metrics.clone();
+        drop(runtime);
+        let resumed =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        assert_eq!(resumed.metrics, expected_metrics);
+        assert!(resumed.metrics.token_economics.is_none());
+    }
+
+    #[test]
+    fn zero_public_token_bonus_contributes_to_the_period_denominator() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let PublicTurnStart::Ready(turn) = runtime.begin_public_turn().unwrap() else {
+            panic!("confirmed runtime should reserve a public turn");
+        };
+        runtime
+            .finish_public_turn(
+                turn.token,
+                Some(ConversationObservation {
+                    depth: 1,
+                    returning: false,
+                    response_time_ms: None,
+                    token_engagement_bonus_basis_points: 0,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.metrics.scored_scale_availability,
+            RUNTIME_SCORED_SCALES
+        );
+        assert!(runtime.metrics.token_economics.is_none());
+        assert_eq!(runtime.metrics.engagement.conversations, 1);
+        assert_eq!(runtime.metrics.engagement.token_bonus_basis_points_total, 0);
     }
 
     #[cfg(unix)]
@@ -2425,6 +2571,138 @@ mod tests {
                 &nature,
                 1,
                 current.period_started_at_unix_seconds + 1,
+            )
+            .unwrap()
+        );
+
+        let mut token_enabled =
+            new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, 1).unwrap();
+        let targets = JudgmentPolicy::for_period(EvaluationPeriod::Daily).targets;
+        for index in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
+            token_enabled.record_conversation(
+                targets.average_conversation_depth,
+                index < DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
+                Some(targets.response_time_full_credit_ms),
+            );
+        }
+        token_enabled
+            .record_token_economic_snapshot(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 8_000,
+                    stake_basis_points: 0,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                runtime_token_policy(&nature).unwrap(),
+            )
+            .unwrap();
+        token_enabled.record_growth(
+            targets.children_spawned,
+            targets.acolytes_recruited,
+            targets.network_contribution_points,
+        );
+        token_enabled
+            .record_economic_result(targets.revenue_micro_units, targets.efficiency_basis_points)
+            .unwrap();
+        token_enabled.record_influence(
+            targets.governance_participation,
+            targets.sibling_influence_points,
+        );
+        let token_judgment = token_enabled
+            .evaluate(&nature, token_enabled.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(token_judgment.outcome, JudgmentOutcome::PropagationRights);
+        let token_record =
+            EvolutionHistoryRecord::new(&nature, token_enabled, token_judgment).unwrap();
+        assert_eq!(
+            token_record.metrics.scored_scale_availability,
+            ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: true,
+                influence: false,
+            }
+        );
+        let token_current = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            token_record.metrics.period_ends_at_unix_seconds,
+            &nature,
+            1,
+        )
+        .unwrap();
+        assert!(
+            is_accepted_propagation_grant(
+                &token_record,
+                &token_current,
+                &nature,
+                1,
+                token_current.period_started_at_unix_seconds + 1,
+            )
+            .unwrap()
+        );
+
+        let mut arbitrary_availability_metrics = token_record.metrics.clone();
+        arbitrary_availability_metrics
+            .scored_scale_availability
+            .growth = true;
+        let arbitrary_availability_judgment = arbitrary_availability_metrics
+            .evaluate(
+                &nature,
+                arbitrary_availability_metrics.period_ends_at_unix_seconds,
+            )
+            .unwrap();
+        let arbitrary_token_availability = EvolutionHistoryRecord::new(
+            &nature,
+            arbitrary_availability_metrics,
+            arbitrary_availability_judgment,
+        )
+        .unwrap();
+        arbitrary_token_availability.validate().unwrap();
+        assert!(
+            !is_accepted_propagation_grant(
+                &arbitrary_token_availability,
+                &token_current,
+                &nature,
+                1,
+                token_current.period_started_at_unix_seconds + 1,
+            )
+            .unwrap()
+        );
+
+        let mut arbitrary_policy = runtime_token_policy(&nature).unwrap();
+        arbitrary_policy.engagement_sensitivity_basis_points =
+            if arbitrary_policy.engagement_sensitivity_basis_points == 10_000 {
+                9_999
+            } else {
+                arbitrary_policy.engagement_sensitivity_basis_points + 1
+            };
+        let mut arbitrary_policy_metrics = token_record.metrics.clone();
+        arbitrary_policy_metrics
+            .record_token_economic_snapshot(
+                token_record.metrics.token_economics.unwrap().snapshot,
+                arbitrary_policy,
+            )
+            .unwrap();
+        let arbitrary_policy_judgment = arbitrary_policy_metrics
+            .evaluate(
+                &nature,
+                arbitrary_policy_metrics.period_ends_at_unix_seconds,
+            )
+            .unwrap();
+        let mismatched_token_policy = EvolutionHistoryRecord::new(
+            &nature,
+            arbitrary_policy_metrics,
+            arbitrary_policy_judgment,
+        )
+        .unwrap();
+        mismatched_token_policy.validate().unwrap();
+        assert!(
+            !is_accepted_propagation_grant(
+                &mismatched_token_policy,
+                &token_current,
+                &nature,
+                1,
+                token_current.period_started_at_unix_seconds + 1,
             )
             .unwrap()
         );

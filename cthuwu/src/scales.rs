@@ -4,6 +4,10 @@
 //! changes governance weight, or grants a vote. Council adapters must apply their independent,
 //! acknowledgement-backed credit and one-Cthulhu-one-vote rules.
 
+use crate::economics::{
+    RecordedTokenEconomics, TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot,
+    apply_score_adjustment,
+};
 use crate::personality::TentacleNature;
 use crate::storage::{ensure_private_directory, restrict_file, sync_directory};
 use anyhow::{Context, Result, bail, ensure};
@@ -74,6 +78,10 @@ pub struct EngagementMetrics {
     pub returning_conversations: u32,
     pub response_time_samples: u32,
     pub response_time_ms_total: u64,
+    /// Sum of bounded, interaction-scoped UWU balance bonuses. A missing or unusable wallet
+    /// observation contributes zero, so the period average remains tied to all conversations.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub token_bonus_basis_points_total: u64,
 }
 
 impl EngagementMetrics {
@@ -99,6 +107,11 @@ impl EngagementMetrics {
             self.response_time_ms_total
                 <= u64::from(self.response_time_samples) * MAX_RESPONSE_TIME_MS_SAMPLE,
             "response-time total exceeds its bound"
+        );
+        ensure!(
+            self.token_bonus_basis_points_total
+                <= u64::from(self.conversations) * u64::from(SCORE_MAX),
+            "engagement token-bonus total exceeds its bound"
         );
         Ok(())
     }
@@ -256,6 +269,10 @@ pub struct TentacleMetrics {
     pub scored_scale_availability: ScoredScaleAvailability,
     /// Operator Nature adjustments are auditable and carry a small, capped evaluation penalty.
     pub nature_adjustment_stress_events: u32,
+    /// Latest bounded token observation and the exact local policy used to derive its effects.
+    /// Missing on metrics written before token observance was introduced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_economics: Option<RecordedTokenEconomics>,
 }
 
 impl TentacleMetrics {
@@ -287,6 +304,7 @@ impl TentacleMetrics {
                 economic_layer_enabled,
             ),
             nature_adjustment_stress_events: 0,
+            token_economics: None,
         })
     }
 
@@ -318,6 +336,7 @@ impl TentacleMetrics {
                 .wealth
                 .as_ref()
                 .is_some_and(|wealth| wealth != &WealthMetrics::default())
+            || self.token_economics.is_some()
     }
 
     pub fn rebind_empty_period(
@@ -344,6 +363,24 @@ impl TentacleMetrics {
         returning: bool,
         response_time_ms: Option<u64>,
     ) {
+        self.record_conversation_with_token_bonus(
+            conversation_depth,
+            returning,
+            response_time_ms,
+            0,
+        );
+    }
+
+    /// Records one conversation plus a bounded, user-scoped UWU engagement bonus.
+    ///
+    /// This bonus never represents the Tentacle's own wealth, stake, rewards, or survival funds.
+    pub fn record_conversation_with_token_bonus(
+        &mut self,
+        conversation_depth: u32,
+        returning: bool,
+        response_time_ms: Option<u64>,
+        token_bonus_basis_points: u16,
+    ) {
         if self.engagement.conversations == MAX_EVENT_COUNT {
             return;
         }
@@ -364,6 +401,10 @@ impl TentacleMetrics {
                 .response_time_ms_total
                 .saturating_add(response_time_ms.min(MAX_RESPONSE_TIME_MS_SAMPLE));
         }
+        self.engagement.token_bonus_basis_points_total = self
+            .engagement
+            .token_bonus_basis_points_total
+            .saturating_add(u64::from(token_bonus_basis_points.min(SCORE_MAX)));
     }
 
     /// Records independent local growth observations. Recruitment does not increment contribution
@@ -412,6 +453,35 @@ impl TentacleMetrics {
             .efficiency_basis_points_total
             .saturating_add(u64::from(efficiency_basis_points.min(SCORE_MAX)));
         Ok(())
+    }
+
+    /// Records the latest bounded, node-level token snapshot for this period.
+    ///
+    /// This library API is reserved for an explicit Tentacle economics adapter. Public-user wallet
+    /// observations must use [`Self::record_conversation_with_token_bonus`] instead.
+    ///
+    /// A trustworthy balance enables Wealth. Positive stake or reward evidence additionally enables
+    /// Influence or Growth; a balance-only adapter never makes unavailable dimensions score as zero.
+    /// An unavailable or untrusted RPC observation remains visible for fallback diagnostics but has
+    /// no scoring or starvation effect. This API never imposes a stake requirement for starting a
+    /// Tentacle; propagation eligibility follows the explicitly recorded policy, whose default
+    /// minimum is zero.
+    pub fn record_token_economic_snapshot(
+        &mut self,
+        snapshot: TokenEconomicSnapshot,
+        policy: TokenEconomicPolicy,
+    ) -> Result<TokenEconomicEffects> {
+        let observation = RecordedTokenEconomics::new(snapshot, policy)?;
+        if observation.snapshot.trustworthy {
+            self.wealth.get_or_insert_default();
+            self.scored_scale_availability.wealth = true;
+            self.scored_scale_availability.growth = observation.snapshot.reward_basis_points > 0;
+            self.scored_scale_availability.influence = observation.snapshot.stake_basis_points > 0;
+        }
+        let effects = observation.effects;
+        self.token_economics = Some(observation);
+        self.validate()?;
+        Ok(effects)
     }
 
     pub fn record_influence(
@@ -479,6 +549,20 @@ impl TentacleMetrics {
         self.influence.validate()?;
         self.scored_scale_availability
             .validate(self.economic_layer_enabled())?;
+        if let Some(economics) = self.token_economics {
+            economics.validate()?;
+            if economics.snapshot.trustworthy {
+                ensure!(
+                    self.economic_layer_enabled()
+                        && self.scored_scale_availability.wealth
+                        && (economics.snapshot.reward_basis_points == 0
+                            || self.scored_scale_availability.growth)
+                        && (economics.snapshot.stake_basis_points == 0
+                            || self.scored_scale_availability.influence),
+                    "trustworthy token economics must enable every observed economic scale"
+                );
+            }
+        }
         ensure!(
             self.nature_adjustment_stress_events <= MAX_NATURE_ADJUSTMENT_STRESS_EVENTS,
             "Nature-adjustment stress count exceeds its bound"
@@ -578,7 +662,16 @@ impl TentacleMetrics {
         )?;
         let scores = score_metrics(self, &policy.targets, weights)?;
         let propagation_evidence = PropagationEvidence::from_metrics(self, &policy);
-        let score_outcome = policy.thresholds.classify(scores.total)?;
+        let economic_starvation_relief_basis_points = self
+            .token_economics
+            .filter(|economics| economics.snapshot.trustworthy)
+            .map_or(0, |economics| {
+                economics.effects.starvation_relief_basis_points
+            });
+        let score_outcome = policy.thresholds.classify_with_starvation_relief(
+            scores.total,
+            economic_starvation_relief_basis_points,
+        )?;
         let outcome = if score_outcome == JudgmentOutcome::PropagationRights
             && !propagation_evidence.eligible
         {
@@ -599,6 +692,7 @@ impl TentacleMetrics {
             weights,
             scores,
             propagation_evidence,
+            economic_starvation_relief_basis_points,
             outcome,
             execution: match evaluation_status {
                 EvaluationStatus::Final => {
@@ -715,13 +809,37 @@ impl JudgmentThresholds {
     }
 
     pub fn classify(&self, score: u16) -> Result<JudgmentOutcome> {
+        self.classify_with_starvation_relief(score, 0)
+    }
+
+    /// Classifies a score after lowering Survival and Starvation thresholds by the observed
+    /// economic relief. Propagation never becomes cheaper, and strict threshold ordering is
+    /// preserved even when relief is maximal.
+    pub fn classify_with_starvation_relief(
+        &self,
+        score: u16,
+        starvation_relief_basis_points: u16,
+    ) -> Result<JudgmentOutcome> {
         self.validate()?;
         ensure!(score <= SCORE_MAX, "judgment score exceeds its bound");
+        ensure!(
+            starvation_relief_basis_points <= SCORE_MAX,
+            "economic starvation relief exceeds its bound"
+        );
+        let survival_min = self
+            .survival_min
+            .saturating_sub(starvation_relief_basis_points)
+            .max(1)
+            .min(self.propagation_rights_min - 1);
+        let starvation_warning_min = self
+            .starvation_warning_min
+            .saturating_sub(starvation_relief_basis_points)
+            .min(survival_min - 1);
         Ok(if score >= self.propagation_rights_min {
             JudgmentOutcome::PropagationRights
-        } else if score >= self.survival_min {
+        } else if score >= survival_min {
             JudgmentOutcome::Survival
-        } else if score >= self.starvation_warning_min {
+        } else if score >= starvation_warning_min {
             JudgmentOutcome::StarvationWarning
         } else {
             JudgmentOutcome::Death
@@ -993,6 +1111,12 @@ pub struct PropagationEvidence {
     pub observed_returning_conversations: u32,
     pub required_conversations: u32,
     pub required_returning_conversations: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub observed_stake_basis_points: u16,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub required_stake_basis_points: u16,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub stake_eligible: bool,
     pub eligible: bool,
 }
 
@@ -1002,13 +1126,29 @@ impl PropagationEvidence {
         let observed_returning_conversations = metrics.engagement.returning_conversations;
         let required_conversations = policy.propagation_min_conversations;
         let required_returning_conversations = policy.propagation_min_returning_conversations;
+        let (observed_stake_basis_points, required_stake_basis_points, stake_eligible) =
+            metrics.token_economics.map_or((0, 0, true), |economics| {
+                (
+                    if economics.snapshot.trustworthy {
+                        economics.snapshot.stake_basis_points
+                    } else {
+                        0
+                    },
+                    economics.policy.propagation_minimum_stake_basis_points,
+                    economics.effects.propagation_stake_eligible,
+                )
+            });
         Self {
             observed_conversations,
             observed_returning_conversations,
             required_conversations,
             required_returning_conversations,
+            observed_stake_basis_points,
+            required_stake_basis_points,
+            stake_eligible,
             eligible: observed_conversations >= required_conversations
-                && observed_returning_conversations >= required_returning_conversations,
+                && observed_returning_conversations >= required_returning_conversations
+                && stake_eligible,
         }
     }
 
@@ -1024,10 +1164,22 @@ impl PropagationEvidence {
             "propagation evidence disagrees with its judgment policy"
         );
         ensure!(
+            self.observed_stake_basis_points <= SCORE_MAX
+                && self.required_stake_basis_points <= SCORE_MAX,
+            "propagation stake evidence exceeds its normalized bound"
+        );
+        ensure!(
+            self.stake_eligible
+                == (self.required_stake_basis_points == 0
+                    || self.observed_stake_basis_points >= self.required_stake_basis_points),
+            "propagation stake eligibility is inconsistent"
+        );
+        ensure!(
             self.eligible
                 == (self.observed_conversations >= self.required_conversations
                     && self.observed_returning_conversations
-                        >= self.required_returning_conversations),
+                        >= self.required_returning_conversations
+                    && self.stake_eligible),
             "propagation evidence eligibility is inconsistent"
         );
         Ok(())
@@ -1050,6 +1202,8 @@ pub struct Judgment {
     pub weights: ScaleWeights,
     pub scores: ScaleScores,
     pub propagation_evidence: PropagationEvidence,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub economic_starvation_relief_basis_points: u16,
     pub outcome: JudgmentOutcome,
     pub execution: DecisionExecution,
 }
@@ -1105,7 +1259,10 @@ impl Judgment {
             .validate(self.scored_scale_availability, self.scores.wealth.is_some())?;
         self.scores.validate()?;
         self.propagation_evidence.validate(&self.policy)?;
-        let score_outcome = self.policy.thresholds.classify(self.scores.total)?;
+        let score_outcome = self.policy.thresholds.classify_with_starvation_relief(
+            self.scores.total,
+            self.economic_starvation_relief_basis_points,
+        )?;
         let expected_outcome = if score_outcome == JudgmentOutcome::PropagationRights
             && !self.propagation_evidence.eligible
         {
@@ -1131,13 +1288,32 @@ fn score_metrics(
     weights: ScaleWeights,
 ) -> Result<ScaleScores> {
     targets.validate()?;
-    let engagement = score_engagement(&metrics.engagement, targets);
-    let growth = score_growth(&metrics.growth, targets);
+    let economic_effects = metrics
+        .token_economics
+        .filter(|economics| economics.snapshot.trustworthy)
+        .map(|economics| economics.effects);
+    let engagement = apply_score_adjustment(
+        score_engagement(&metrics.engagement, targets)?,
+        economic_effects.map_or(0, |effects| effects.engagement_adjustment_basis_points),
+    )?;
+    let growth = apply_score_adjustment(
+        score_growth(&metrics.growth, targets),
+        economic_effects.map_or(0, |effects| effects.growth_adjustment_basis_points),
+    )?;
     let wealth = metrics
         .wealth
         .as_ref()
-        .map(|wealth| score_wealth(wealth, targets));
-    let influence = score_influence(&metrics.influence, targets);
+        .map(|wealth| {
+            apply_score_adjustment(
+                score_wealth(wealth, targets),
+                economic_effects.map_or(0, |effects| effects.wealth_adjustment_basis_points),
+            )
+        })
+        .transpose()?;
+    let influence = apply_score_adjustment(
+        score_influence(&metrics.influence, targets),
+        economic_effects.map_or(0, |effects| effects.influence_adjustment_basis_points),
+    )?;
     let weighted_sum = u64::from(engagement) * u64::from(weights.engagement)
         + u64::from(growth) * u64::from(weights.growth)
         + u64::from(wealth.unwrap_or(0)) * u64::from(weights.wealth)
@@ -1164,7 +1340,7 @@ fn score_metrics(
     Ok(scores)
 }
 
-fn score_engagement(metrics: &EngagementMetrics, targets: &MetricTargets) -> u16 {
+fn score_engagement(metrics: &EngagementMetrics, targets: &MetricTargets) -> Result<u16> {
     let conversations = u128::from(metrics.conversations);
     let depth = ratio_score(
         u128::from(metrics.conversation_depth_total),
@@ -1177,7 +1353,15 @@ fn score_engagement(metrics: &EngagementMetrics, targets: &MetricTargets) -> u16
         targets.response_time_full_credit_ms,
         targets.response_time_zero_credit_ms,
     );
-    component_score([(depth, 4_000), (returns, 3_500), (response_time, 2_500)])
+    let base = component_score([(depth, 4_000), (returns, 3_500), (response_time, 2_500)]);
+    let average_token_bonus = if metrics.conversations == 0 {
+        0
+    } else {
+        u16::try_from(metrics.token_bonus_basis_points_total / u64::from(metrics.conversations))
+            .unwrap_or(SCORE_MAX)
+            .min(SCORE_MAX)
+    };
+    apply_score_adjustment(base, average_token_bonus)
 }
 
 fn score_growth(metrics: &GrowthMetrics, targets: &MetricTargets) -> u16 {
@@ -1406,6 +1590,41 @@ impl EvolutionHistoryRecord {
                         .propagation_evidence
                         .observed_returning_conversations,
             "evolution-history metrics and judgment disagree about propagation evidence"
+        );
+        let expected_economics = self.metrics.token_economics;
+        ensure!(
+            self.judgment.economic_starvation_relief_basis_points
+                == expected_economics
+                    .filter(|economics| economics.snapshot.trustworthy)
+                    .map_or(0, |economics| {
+                        economics.effects.starvation_relief_basis_points
+                    }),
+            "evolution-history metrics and judgment disagree about economic starvation relief"
+        );
+        let (observed_stake, required_stake, stake_eligible) =
+            expected_economics.map_or((0, 0, true), |economics| {
+                (
+                    if economics.snapshot.trustworthy {
+                        economics.snapshot.stake_basis_points
+                    } else {
+                        0
+                    },
+                    economics.policy.propagation_minimum_stake_basis_points,
+                    economics.effects.propagation_stake_eligible,
+                )
+            });
+        ensure!(
+            self.judgment
+                .propagation_evidence
+                .observed_stake_basis_points
+                == observed_stake
+                && self
+                    .judgment
+                    .propagation_evidence
+                    .required_stake_basis_points
+                    == required_stake
+                && self.judgment.propagation_evidence.stake_eligible == stake_eligible,
+            "evolution-history metrics and judgment disagree about propagation stake evidence"
         );
         ensure!(
             self.metrics.nature_id == self.nature_id
@@ -1733,6 +1952,22 @@ fn encode_hex(bytes: &[u8]) -> String {
         encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
     encoded
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn is_zero_u16(value: &u16) -> bool {
+    *value == 0
+}
+
+const fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+const fn is_true(value: &bool) -> bool {
+    *value
 }
 
 #[cfg(test)]
@@ -2153,6 +2388,240 @@ mod tests {
             .unwrap();
         assert_eq!(capped.scores.stress_penalty, MAX_STRESS_PENALTY);
         assert_eq!(capped.scores.total, SCORE_MAX - MAX_STRESS_PENALTY);
+    }
+
+    #[test]
+    fn trustworthy_token_snapshot_enables_and_adjusts_economic_scales() {
+        let candidate = nature(25, 25, 25, 25);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        metrics
+            .restrict_scored_scales(ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: false,
+                influence: false,
+            })
+            .unwrap();
+
+        let effects = metrics
+            .record_token_economic_snapshot(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 4_000,
+                    stake_basis_points: 5_000,
+                    reward_basis_points: 6_000,
+                    trustworthy: true,
+                },
+                TokenEconomicPolicy::default(),
+            )
+            .unwrap();
+        assert_eq!(effects.wealth_adjustment_basis_points, 4_000);
+        assert_eq!(
+            metrics.scored_scale_availability,
+            ScoredScaleAvailability {
+                engagement: true,
+                growth: true,
+                wealth: true,
+                influence: true,
+            }
+        );
+
+        let judgment = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.scores.engagement, 4_000);
+        assert_eq!(judgment.scores.growth, 6_000);
+        assert_eq!(judgment.scores.wealth, Some(4_000));
+        assert_eq!(judgment.scores.influence, 5_000);
+        assert_eq!(judgment.scores.total, 4_750);
+        assert_eq!(judgment.economic_starvation_relief_basis_points, 4_000);
+        assert_eq!(judgment.outcome, JudgmentOutcome::Survival);
+        judgment.validate().unwrap();
+    }
+
+    #[test]
+    fn untrusted_token_snapshot_is_inert_and_does_not_enable_scales() {
+        let candidate = nature(25, 25, 25, 25);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        metrics
+            .restrict_scored_scales(ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: false,
+                influence: false,
+            })
+            .unwrap();
+        let before = metrics.scored_scale_availability;
+        let effects = metrics
+            .record_token_economic_snapshot(
+                TokenEconomicSnapshot {
+                    balance_basis_points: SCORE_MAX,
+                    stake_basis_points: SCORE_MAX,
+                    reward_basis_points: SCORE_MAX,
+                    trustworthy: false,
+                },
+                TokenEconomicPolicy::default(),
+            )
+            .unwrap();
+        assert_eq!(effects.wealth_adjustment_basis_points, 0);
+        assert_eq!(effects.influence_adjustment_basis_points, 0);
+        assert_eq!(effects.growth_adjustment_basis_points, 0);
+        assert_eq!(effects.engagement_adjustment_basis_points, 0);
+        assert_eq!(effects.starvation_relief_basis_points, 0);
+        assert!(effects.propagation_stake_eligible);
+        assert_eq!(metrics.scored_scale_availability, before);
+        assert!(!metrics.economic_layer_enabled());
+    }
+
+    #[test]
+    fn configurable_propagation_stake_is_part_of_deterministic_evidence() {
+        let candidate = nature(100, 0, 0, 0);
+        let targets = MetricTargets::for_period(EvaluationPeriod::Daily);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        metrics
+            .restrict_scored_scales(ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: false,
+                influence: false,
+            })
+            .unwrap();
+        for _ in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
+            metrics.record_conversation(
+                targets.average_conversation_depth,
+                true,
+                Some(targets.response_time_full_credit_ms),
+            );
+        }
+        let stake_policy = TokenEconomicPolicy {
+            propagation_minimum_stake_basis_points: 5_000,
+            ..TokenEconomicPolicy::default()
+        };
+        metrics
+            .record_token_economic_snapshot(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 0,
+                    stake_basis_points: 4_999,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                stake_policy,
+            )
+            .unwrap();
+        let ineligible = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(ineligible.scores.total, SCORE_MAX);
+        assert!(!ineligible.propagation_evidence.stake_eligible);
+        assert!(!ineligible.propagation_evidence.eligible);
+        assert_eq!(ineligible.outcome, JudgmentOutcome::Survival);
+
+        metrics
+            .record_token_economic_snapshot(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 0,
+                    stake_basis_points: 5_000,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                stake_policy,
+            )
+            .unwrap();
+        let eligible = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert!(eligible.propagation_evidence.stake_eligible);
+        assert!(eligible.propagation_evidence.eligible);
+        assert_eq!(eligible.outcome, JudgmentOutcome::PropagationRights);
+    }
+
+    #[test]
+    fn absent_token_fields_preserve_pre_observance_serialization() {
+        let candidate = nature(25, 25, 25, 25);
+        let metrics = complete_metrics_for(&candidate, false);
+        let judgment = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        let encoded_metrics = serde_json::to_value(&metrics).unwrap();
+        assert!(encoded_metrics.get("tokenEconomics").is_none());
+        assert!(
+            encoded_metrics["engagement"]
+                .get("tokenBonusBasisPointsTotal")
+                .is_none()
+        );
+        let encoded_judgment = serde_json::to_value(&judgment).unwrap();
+        assert!(
+            encoded_judgment
+                .get("economicStarvationReliefBasisPoints")
+                .is_none()
+        );
+        let evidence = encoded_judgment
+            .get("propagationEvidence")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert!(!evidence.contains_key("observedStakeBasisPoints"));
+        assert!(!evidence.contains_key("requiredStakeBasisPoints"));
+        assert!(!evidence.contains_key("stakeEligible"));
+
+        let decoded_metrics: TentacleMetrics = serde_json::from_value(encoded_metrics).unwrap();
+        let decoded_judgment: Judgment = serde_json::from_value(encoded_judgment).unwrap();
+        assert_eq!(decoded_metrics, metrics);
+        assert_eq!(decoded_judgment, judgment);
+        decoded_judgment.validate().unwrap();
+    }
+
+    #[test]
+    fn interaction_token_bonus_is_period_averaged_not_last_writer_wins() {
+        let candidate = nature(100, 0, 0, 0);
+        let mut high_then_zero =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        high_then_zero
+            .restrict_scored_scales(ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: false,
+                influence: false,
+            })
+            .unwrap();
+        high_then_zero.record_conversation_with_token_bonus(0, false, None, SCORE_MAX);
+        high_then_zero.record_conversation_with_token_bonus(0, false, None, 0);
+
+        let mut zero_then_high =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        zero_then_high
+            .restrict_scored_scales(ScoredScaleAvailability {
+                engagement: true,
+                growth: false,
+                wealth: false,
+                influence: false,
+            })
+            .unwrap();
+        zero_then_high.record_conversation_with_token_bonus(0, false, None, 0);
+        zero_then_high.record_conversation_with_token_bonus(0, false, None, SCORE_MAX);
+
+        for metrics in [&high_then_zero, &zero_then_high] {
+            assert_eq!(metrics.engagement.conversations, 2);
+            assert_eq!(metrics.engagement.token_bonus_basis_points_total, 10_000);
+            assert!(metrics.token_economics.is_none());
+            assert!(metrics.wealth.is_none());
+            let judgment = metrics
+                .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+                .unwrap();
+            assert_eq!(judgment.scores.engagement, 5_000);
+            assert_eq!(judgment.economic_starvation_relief_basis_points, 0);
+            assert_eq!(
+                judgment.scored_scale_availability,
+                ScoredScaleAvailability {
+                    engagement: true,
+                    growth: false,
+                    wealth: false,
+                    influence: false,
+                }
+            );
+        }
     }
 
     #[test]

@@ -61,27 +61,37 @@ async function main(): Promise<void> {
     if (!context.isDm()) {
       return;
     }
-    const metadata = {
-      messageId: context.message.id,
-      senderInboxId: context.message.senderInboxId,
-      // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
-      // Rust still owns role classification; the sidecar never accepts or emits a role.
-      sentAtNs: context.message.sentAtNs.toString(),
-      conversationId: context.message.conversationId,
-    };
-    const response =
-      Buffer.byteLength(context.message.content, "utf8") > MAX_INBOUND_TEXT_BYTES
-        ? bridge.rejectOversized(metadata)
-        : bridge.request({ ...metadata, text: context.message.content });
-    void response
-      .then(async (response) => {
-        if (response.type === "reply") {
-          await context.conversation.sendText(response.text);
-        }
-      })
-      .catch(async (_error: unknown) => {
-        diagnostic("failed to process an inbound XMTP text message");
-      });
+    void (async () => {
+      // This identifier is resolved from the SDK-authenticated sender inbox. It is optional because
+      // XMTP inboxes may use identifier types that are not EVM addresses.
+      // Wallet metadata is optional. A resolver/provider failure must not drop an otherwise valid,
+      // transport-authenticated XMTP message.
+      let senderAddress: string | undefined;
+      try {
+        senderAddress = await context.getSenderAddress();
+      } catch (_error: unknown) {
+        senderAddress = undefined;
+      }
+      const metadata = {
+        messageId: context.message.id,
+        senderInboxId: context.message.senderInboxId,
+        ...(senderAddress === undefined ? {} : { senderAddress }),
+        // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
+        // Rust still owns role classification; the sidecar never accepts or emits a role.
+        sentAtNs: context.message.sentAtNs.toString(),
+        conversationId: context.message.conversationId,
+      };
+      const response =
+        Buffer.byteLength(context.message.content, "utf8") > MAX_INBOUND_TEXT_BYTES
+          ? bridge.rejectOversized(metadata)
+          : bridge.request({ ...metadata, text: context.message.content });
+      const result = await response;
+      if (result.type === "reply") {
+        await context.conversation.sendText(result.text);
+      }
+    })().catch((_error: unknown) => {
+      diagnostic("failed to process an inbound XMTP text message");
+    });
   });
   agent.on("unhandledError", () => {
     diagnostic("XMTP reported an unhandled error");

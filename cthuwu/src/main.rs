@@ -1,9 +1,11 @@
 mod agent_context;
 pub mod awakening;
 mod bot;
+mod config;
 mod contact;
 mod deadline;
 mod dedupe;
+pub mod economics;
 pub mod evolution;
 pub mod evolution_runtime;
 pub mod hermes;
@@ -16,12 +18,18 @@ mod principal;
 pub mod scales;
 mod sidecar;
 mod storage;
+pub mod token_eye;
+pub mod token_gov;
 mod web_search;
 
 use agent_context::AgentContext;
 use anyhow::{Context, Result, bail};
 use bot::UwUBot;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use config::{
+    BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
+    DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS, REQUESTED_UWU_TOTAL_SUPPLY, UWU_TOKEN_DECIMALS,
+};
 use contact::ContactStore;
 use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
@@ -43,9 +51,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage::{ensure_private_directory, sync_directory};
+use token_eye::ReputationTier;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use web_search::{BraveWebSearch, WebSearch};
+use web_search::{BraveSafeSearch, BraveWebSearch, WebSearch};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -125,6 +134,64 @@ struct Cli {
         default_value = "https://api.search.brave.com/res/v1/web/search"
     )]
     web_search_endpoint: String,
+
+    /// Brave SafeSearch mode. Content filtering is off unless the operator opts in.
+    #[arg(
+        long,
+        env = "UWUBOT_WEB_SEARCH_SAFESEARCH",
+        default_value_t = BraveSafeSearch::Off
+    )]
+    web_search_safesearch: BraveSafeSearch,
+
+    /// Base JSON-RPC endpoint used only for read-only ERC-20 observations.
+    #[arg(
+        long,
+        env = "CTHUWU_RPC_ENDPOINT",
+        default_value = DEFAULT_BASE_RPC_ENDPOINT,
+        hide_env_values = true
+    )]
+    rpc_endpoint: String,
+
+    /// Deployed UWU ERC-20 address. Omit before launch; ordinary interaction remains available.
+    #[arg(long, env = "CTHUWU_TOKEN_CONTRACT")]
+    token_contract: Option<String>,
+
+    /// ERC-20 decimals used to normalize raw balances (Clanker standard: 18).
+    #[arg(long, env = "CTHUWU_TOKEN_DECIMALS", default_value_t = UWU_TOKEN_DECIMALS)]
+    token_decimals: u8,
+
+    /// Whole-token supply used for local normalization (requested UWU default: 1 billion).
+    #[arg(
+        long,
+        env = "CTHUWU_TOKEN_TOTAL_SUPPLY",
+        default_value_t = REQUESTED_UWU_TOTAL_SUPPLY
+    )]
+    token_total_supply: u64,
+
+    /// Enable local token observation. Use `--observe-tokens false` to disable it.
+    #[arg(
+        long,
+        env = "CTHUWU_OBSERVE_TOKENS",
+        default_value_t = true,
+        action = ArgAction::Set
+    )]
+    observe_tokens: bool,
+
+    /// Cache lifetime for ordinary balance observations. Economic admission uses a fresh read.
+    #[arg(
+        long,
+        env = "CTHUWU_OBSERVE_INTERVAL",
+        default_value_t = DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS
+    )]
+    observe_interval: u64,
+
+    /// Minimum known UWU tier for public interaction. Unknown RPC state degrades neutrally.
+    #[arg(long, env = "CTHUWU_MIN_TIER", value_enum, default_value_t = TokenTierArg::Unproven)]
+    min_tier: TokenTierArg,
+
+    /// Override Nature-derived tier differentiation (0 ignores tiers; 100 uses full effects).
+    #[arg(long, env = "CTHUWU_TOKEN_TIER_INTENSITY")]
+    token_tier_intensity: Option<u8>,
 
     /// Root available to authenticated operator file tools and used as the exec working directory.
     #[arg(long, env = "UWUBOT_OPERATOR_ROOT", default_value = ".")]
@@ -245,6 +312,27 @@ enum WebSearchKind {
     Brave,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum TokenTierArg {
+    Whale,
+    Elder,
+    Acolyte,
+    Initiate,
+    Unproven,
+}
+
+impl From<TokenTierArg> for ReputationTier {
+    fn from(value: TokenTierArg) -> Self {
+        match value {
+            TokenTierArg::Whale => Self::Whale,
+            TokenTierArg::Elder => Self::Elder,
+            TokenTierArg::Acolyte => Self::Acolyte,
+            TokenTierArg::Initiate => Self::Initiate,
+            TokenTierArg::Unproven => Self::Unproven,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -284,6 +372,17 @@ async fn main() -> Result<()> {
     }
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
+    let blockchain = BlockchainConfig::from_values(BlockchainConfigInput {
+        observe_tokens: cli.observe_tokens,
+        rpc_endpoint: cli.rpc_endpoint.clone(),
+        token_contract: cli.token_contract.as_deref(),
+        token_decimals: cli.token_decimals,
+        total_supply_whole: cli.token_total_supply,
+        observe_interval_seconds: cli.observe_interval,
+        minimum_tier: cli.min_tier.into(),
+        tier_intensity_override: cli.token_tier_intensity,
+    })?;
+    let token_eye = blockchain.build_token_eye()?;
     let search = build_web_search(&cli)?;
     let router = Arc::new(InferenceRouter::new(build_inference_config(&cli, search)?)?);
     let model: Arc<dyn Model> = router.clone();
@@ -308,12 +407,14 @@ async fn main() -> Result<()> {
         Arc::new(Mutex::new(operators)),
         operator_harness,
         Arc::new(Mutex::new(evolution)),
-    );
+    )
+    .with_token_observance(token_eye, blockchain.clone());
 
     info!(
         xmtp_env = cli.xmtp_env.as_str(),
         data_dir = %cli.data_dir.display(),
         inference = %router.status_line(),
+        token_observation = token_observation_status(&blockchain),
         "starting uwubot"
     );
 
@@ -329,6 +430,16 @@ async fn main() -> Result<()> {
         cli.xmtp_env.as_str(),
     )
     .await
+}
+
+fn token_observation_status(config: &BlockchainConfig) -> &'static str {
+    if !config.observe_tokens {
+        "disabled"
+    } else if config.token_contract.is_none() {
+        "waiting-for-contract"
+    } else {
+        "enabled"
+    }
 }
 
 fn resolve_isolated_operator_root(data_dir: &Path, operator_root: &Path) -> Result<PathBuf> {
@@ -358,10 +469,16 @@ fn build_web_search(cli: &Cli) -> Result<Option<Arc<dyn WebSearch>>> {
                 .web_search_api_key
                 .clone()
                 .context("UWUBOT_WEB_SEARCH_API_KEY is required for --web-search brave")?;
-            Ok(Some(Arc::new(BraveWebSearch::new(
-                &cli.web_search_endpoint,
-                api_key,
-            )?)))
+            let search = if cli.web_search_safesearch == BraveSafeSearch::Off {
+                BraveWebSearch::new(&cli.web_search_endpoint, api_key)?
+            } else {
+                BraveWebSearch::with_safe_search(
+                    &cli.web_search_endpoint,
+                    api_key,
+                    cli.web_search_safesearch,
+                )?
+            };
+            Ok(Some(Arc::new(search)))
         }
     }
 }
@@ -547,9 +664,47 @@ mod tests {
             standalone.ollama_timeout_seconds,
             DEFAULT_OLLAMA_TIMEOUT_SECONDS
         );
+        assert!(standalone.observe_tokens);
+        assert_eq!(standalone.rpc_endpoint, DEFAULT_BASE_RPC_ENDPOINT);
+        assert_eq!(
+            standalone.observe_interval,
+            DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS
+        );
+        assert_eq!(standalone.min_tier, TokenTierArg::Unproven);
+        assert!(standalone.token_contract.is_none());
+        assert_eq!(standalone.token_decimals, UWU_TOKEN_DECIMALS);
+        assert_eq!(standalone.token_total_supply, REQUESTED_UWU_TOTAL_SUPPLY);
+        assert_eq!(standalone.web_search_safesearch, BraveSafeSearch::Off);
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);
+    }
+
+    #[test]
+    fn parses_token_observation_configuration_without_keys() {
+        let parsed = Cli::try_parse_from([
+            "uwubot",
+            "--rpc-endpoint",
+            "https://base.example.invalid",
+            "--token-contract",
+            "0x0123456789abcdef0123456789abcdef01234567",
+            "--observe-tokens",
+            "false",
+            "--token-total-supply",
+            "100000000000",
+            "--observe-interval",
+            "90",
+            "--min-tier",
+            "acolyte",
+            "--token-tier-intensity",
+            "80",
+        ])
+        .unwrap();
+        assert!(!parsed.observe_tokens);
+        assert_eq!(parsed.observe_interval, 90);
+        assert_eq!(parsed.token_total_supply, 100_000_000_000);
+        assert_eq!(parsed.min_tier, TokenTierArg::Acolyte);
+        assert_eq!(parsed.token_tier_intensity, Some(80));
     }
 
     #[test]
