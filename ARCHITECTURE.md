@@ -19,7 +19,13 @@ does not depend on Council membership.
 - **Implemented — local:** `cthuwu-protocol`, deterministic Council domain logic, in-memory
   transport, local registry, protected snapshot persistence, and simulator are verified by the
   deterministic workspace suite.
+- **Implemented — local:** Tentacle Nature, signed awakening epochs, bounded Scales, lineage records,
+  and the Hermes-inspired anti-entropy core have owner-only persistence and focused Rust tests.
+  Nature/awakening signatures are local HMAC tags, and lineage judgments have no automatic process
+  effects.
 - **Experimental boundary:** XMTP Council-group and ERC-8004 adapters.
+- **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
+  provisioning. The anti-entropy state machine is not evidence of network interoperability.
 - **Planned:** live Council-group interoperability and a configured ERC-8004 deployment.
 
 | Plane | Contains | Explicitly excludes |
@@ -92,6 +98,108 @@ phrases to name themselves, describe hopes/offers/needs, inspect memory, control
 deletion. Legacy public command forms remain compatible but are not advertised. Contact notes are
 personal data: they are ignored by git and need future export, correction, deletion, and retention
 controls. Stale, active, and revoked operator paths never create or update contact notes.
+
+### Local Evolution layer
+
+The Evolution layer belongs to the local Tentacle runtime and remains usable in standalone mode. It
+does not require or implicitly join a Council. Five modules keep policy, audit, measurement, lineage,
+and exchange mechanics separate:
+
+| Module | Local responsibility | Does not do |
+|---|---|---|
+| `personality.rs` | Generate, validate, mutate, render, and HMAC-authenticate a seven-slider Nature plus one Sacred Ban | Grant authority or provide a public signature |
+| `awakening.rs` | Gate normal work behind an audited active-operator decision and preserve signed, hash-chained epochs | Authenticate an inbox itself or terminate the process on `KILL` |
+| `scales.rs` | Accumulate bounded aggregate metrics bound to Nature/epoch/period/scoring availability and produce partial/final weighted judgments | Apply a judgment or grant rights from an open period |
+| `evolution.rs` | Validate and persist spawn, family, lifecycle, and absorption records | Provision, launch, terminate, route, or merge private memory automatically |
+| `hermes.rs` | Reconcile signed privacy-shaped knowledge through per-peer anti-entropy state | Send network traffic, discover peers, or distribute peer keys |
+
+Nature records four appetites—engagement, growth, wealth, and influence—and three methods—
+cooperation, stability, and transparency—on closed 0–100 scales. One Sacred Ban forbids recruitment,
+spawning, governance, profit, or memory sharing. A child records its parent Nature and generation;
+inheritance selects bounded similarity, drift, or radical mutation with a 70/20/10 split. Confirmed
+Nature affects a bounded model policy and local relationship observations, but cannot add a model
+tool, select an unconfigured remote provider, authorize a Council action, or weaken sender-role
+classification. Relationship signals stay in the local contact record and are excluded from the
+profile supplied to remote model adapters. Each retained contact contributes at most one observation
+per UTC day, and a returning observation requires activity on a prior day.
+
+`state/nature.json` uses a canonical local HMAC envelope. The owner-only symmetric key also
+authenticates the awakening journal. This detects a changed snapshot or journal when the key remains
+protected; it is not an asymmetric identity, a peer-verifiable signature, or protection from an
+attacker who controls the service account and can re-sign state.
+
+The key is created atomically. Startup will not replace a missing key when signed Nature,
+awakening, or Hermes state—or orphaned metrics, history, or lineage projections—exists; it fails with
+restoration guidance instead. One owner-only `state/evolution-runtime.lock` is held for the Rust
+runtime lifetime to serialize Evolution writers for a data directory.
+
+On a fresh epoch, public conversation, contact mutation, inference, and tools remain closed until an
+already active XMTP operator supplies `YES`, `ADJUST <trait> <delta>`, `REROLL`, or `KILL`.
+`senderInboxId` classification and the grant-time fence happen before ritual parsing. Journal entries
+contain normalized actions, timestamps, full authenticated operator identity, and hashes of opaque
+event IDs—not message bodies. `--skip-awakening` is recorded as a distinct local testing override.
+A forced CLI reroll begins a new epoch without truncating prior history. `KILL` records a request and
+keeps the gate closed; it never exits the process.
+
+Signed `POST_ADJUST` entries make the awakening chain the recovery source for the exact
+current-period adjustment-stress count. Startup and post-transition reconciliation repair a metrics
+snapshot that lagged the audit write. Conversely, an expired empty metrics period while awakening
+is pending is realigned without emitting a judgment; late confirmation does not score gated time.
+Each signed entry contains both its result and exact immediate-predecessor Nature snapshot. Recovery
+accepts the head or only the final entry's signed predecessor for the write-ahead window. A different
+validly HMAC-authenticated Nature is still divergent and fails; backups cannot mix Nature and log
+versions. Before the first journal entry, a missing Nature can be generated only when no Evolution
+projections or alternate Nature exist; established projections force a consistent restore.
+
+The Scales core represents daily or weekly aggregate engagement, growth, optional economic
+efficiency, and influence. Metrics and judgments bind the exact Nature ID/fingerprint, awakening
+epoch, period bounds, and scored-scale availability. The deployed runtime currently scores only
+engagement because trusted growth, economic, and influence adapters are unavailable; weights are
+renormalized across active scales and unavailable dimensions get zero outcome weight. Repeated
+post-confirmation Nature changes add a bounded stress penalty. An evaluation before the period
+boundary is explicitly `PartialSnapshot`/`AdvisorySnapshotOnly`; it cannot authorize spawning. A
+final propagation,
+survival, starvation, or death result still says
+`AuthenticatedOperatorConfirmationRequired`. The runtime therefore treats every result as a
+recommendation. There is no automatic death, absorption, user rerouting, or child-process creation.
+The optional token/staking/slashing proposal is not implemented; local recruitment counts produce
+neither money nor Council contribution credit or votes.
+
+The policy and judgment persist propagation evidence floors and the observed/required counts. Daily
+policy requires eight observations and four prior-day returns; weekly policy requires 32 and 16. A
+score that reaches the propagation threshold without its evidence floor is capped at `Survival`.
+
+Before releasing the runtime mutex for public inference, Rust reserves the signed Nature
+fingerprint, awakening epoch, and current metrics-period bounds. Nature mutation and period rollover
+wait for all reservations on that binding, and a returned observation is accepted only against the
+same reservation. `/spawn` additionally requires final propagation rights from the exact current
+policy, Nature ID/fingerprint, and awakening epoch, plus at least eight daily contact observations
+with four prior-day returns. It stores authenticated operator and hashed transport-event provenance
+and consumes the final judgment's content-derived ID once; partial snapshots never become grants.
+An unused right remains eligible only during the immediately following metrics period. Closing or
+skipping that period after missed cycles invalidates it.
+Loaded lineage is cross-checked against history: every spawn receipt must resolve to its exact Final
+PropagationRights record, match that record's parent Nature, and occur during that immediately
+following period.
+
+Hermes is a decentralized state-machine pattern rather than an agent or traffic router. Each
+Tentacle maintains its own direct peers, digest view, bounded retry queue, and conflict resolution.
+Closed knowledge payloads allow only anonymized aggregate interaction patterns, conversation
+strategies, tool-operation classes without arguments or paths, and bounded operator-created skill
+text. Aggregate records have no fields for raw DMs, inbox/contact identifiers, notes, credentials,
+private memory, filesystem paths, commands, or tool arguments. Skill prose receives bounded
+privacy-shape checks but remains potentially hostile. A memory-sharing Sacred Ban makes the node
+receive-only, including no digest emission.
+
+Hermes authorship and relay tags use configured HMAC identities and a local trusted-key ring. A live
+adapter would also have to bind the actual transport-authenticated peer to that configured key.
+Neither transport nor peer-key provisioning exists today, so bootstrap peer IDs do not create trusted
+connections and deterministic convergence tests make no live-network claim. A received skill remains
+inert, untrusted knowledge until a local authenticated operator reviews it and separately activates it
+through the existing compiled skill boundary.
+
+See [docs/evolution.md](docs/evolution.md) for operator commands, persisted state, and the exact
+implementation boundary.
 
 ### Companion core
 
@@ -374,6 +482,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
+| Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, judgments, spawn/skill requests | Role classification before parsing, signed audit, partial/final distinction, explicit confirmation, no automatic process effects |
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
 | Operator model → runtime | Generated text or local tool call | Current-message-derived closed schema/prompt inventory, exact-command or create-only effect binding, one effectful call, bounded agent loop, structured receipts, no role changes |
@@ -382,6 +491,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |
 | Council → Tentacle | Awards, leases, votes, propagation | Incarnation/generation fencing, typed actions, final local policy check |
+| Hermes peer → local gossip core | Digests, envelopes, skills, authorship and relay claims | Authenticated peer/key binding, HMAC verification, closed privacy-shaped payloads, bounds, inert received skills; no live adapter yet |
 | Disk | Keys, databases, history | Encryption where supported, restrictive permissions, backups |
 
 ## Identity and persistence
@@ -397,6 +507,32 @@ fail-closed: an existing pending record becomes active without a proof, using th
 its boundary, while active and revoked states are preserved. ACL corruption,
 unsafe Unix permissions, symlinks, duplicate IDs, unknown fields, and environment mismatch fail
 closed.
+
+Evolution uses a separate owner-only local HMAC key plus bounded state beneath `state/`:
+`evolution-runtime.lock`, `nature.json`, `awakening_log.md`, `metrics.json`,
+`evolution_history.jsonl`, `lineage.json`, and `hermes_gossip.json`. Nature and awakening records are
+HMAC-authenticated; metrics, lineage, and Hermes stores validate their closed schemas and reject
+unsafe files or symlink targets. Final judgments and awakening interactions are logically
+append-only audit facts, persisted by verifying and atomically copy-on-write replacing canonical,
+newline-terminated journals. Custom `--nature-path` values are non-empty relative paths confined to
+`state/natures/`; absolute paths and parent traversal fail closed. Hermes persistence contains
+configured key IDs and signed envelopes but does not serialize signing secrets.
+
+Only the awakening journal is HMAC-authenticated. The unkeyed judgment history accepts deterministic
+`Final` records evaluated exactly at period end and rejects duplicate IDs, same-period conflicts,
+reordering, and overlap. Its content-derived IDs and structural validation provide consistency, not
+cryptographic tamper evidence.
+
+Open metrics are cross-validated against the last Final history record at startup. A chronological
+overlap is rejected except when the metrics payload exactly equals the last finalized payload—the
+single history-ahead append/reset crash window—which advances to an empty current period. This
+reconciliation also runs for `--show-nature`; the option is not a read-only inspector and cannot be
+combined with skip or reroll mutation flags.
+
+Evolution transitions may update more than one snapshot. A persistence error after a possible early
+commit sets a sticky fail-closed runtime state: public work and operator effects stay blocked until
+restart performs signed recovery, or the operator restores a consistent backup if recovery cannot
+reconcile the state. Error receipts therefore make no claim that nothing was persisted.
 
 The local simulator stores Council identity, membership, capabilities, affinity, leases and
 generation fences, processed message IDs, Constitution, Agenda history, proposals, votes, campaigns,
@@ -427,6 +563,12 @@ and replay without duplicate effects. It is not evidence of live XMTP-group or E
 
 - Unit: config parsing, filtering, deduplication, prompt assembly, model adapters.
 - Integration: JSONL transport contract plus deterministic model.
+- Evolution unit: Nature generation/inheritance/signatures, awakening parser/audit/recovery, bounded
+  Scales and partial/final judgment, lineage identity/cycle/persistence, and Hermes
+  signatures/privacy/conflict/convergence.
+- Evolution integration: runtime role/gate behavior, Nature-influenced deterministic responses,
+  restart persistence, and authenticated operator commands. A live XMTP awakening exercise and a
+  live gossip transport/peer-key test remain open.
 - Council unit: identifiers, envelopes, lifecycle/incarnations, capabilities, routing explanations,
   affinities, leases, registry, governance, propagation, credit, and persistence.
 - Council integration: deterministic routing, failover, governance, multi-level propagation,

@@ -477,6 +477,177 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [ ] A newer incarnation must start at `Starting` and permanently fences updates from older incarnations.
   - [ ] Restarting a Tentacle preserves its Cthulhu and Tentacle IDs.
 
+### Tentacle Nature and authenticated awakening
+
+- **Stability**: in-progress
+- **Description**: Give each local Tentacle a persistent, operator-confirmed Nature that changes
+  bounded conversation and resource policy without granting autonomous authority.
+- **Properties**:
+  - Nature contains four 0–100 appetites (`engagement`, `growth`, `wealth`, and `influence`), three
+    0–100 methods (`cooperation`, `stability`, and `transparency`), one closed Sacred Ban, a random
+    Nature ID, generation, and optional parent Nature ID.
+  - Child inheritance chooses a bounded similarity, drift, or radical-mutation mode with an exact
+    70/20/10 selection split; every result is validated and remains in range.
+  - `state/nature.json` is atomically written with owner-only permissions and authenticated by a
+    local HMAC. This detects changes made without the local symmetric key; it is not a public
+    signature or protection from a compromised `uwubot` account that can read and reuse that key.
+    The key itself is created atomically; if it is missing beside signed Nature, awakening, or
+    Hermes state, or beside metrics/history/lineage projections, startup fails without silently
+    rekeying or adopting orphaned projections.
+  - First boot remains behind an awakening gate. Only an already authenticated active XMTP operator
+    may answer `YES`, `ADJUST <trait> <delta>`, `REROLL`, or `KILL`; public, stale, and revoked senders
+    cannot complete the ritual or reach normal work while it is pending.
+  - `state/awakening_log.md` is a signed, hash-chained, logically append-only audit journal with
+    normalized actions, hashed transport event IDs, authenticated operator provenance, restart
+    recovery, and immutable reroll epochs. Each update verifies and atomically copy-on-write
+    replaces the complete canonical newline-terminated journal. `KILL` records and holds a request;
+    it does not terminate the process.
+  - Each signed entry binds its resulting Nature to the exact immediate-predecessor Nature snapshot.
+    Recovery accepts only the head or the final entry's signed predecessor for the deliberate
+    log-ahead window; a separately valid but divergent Nature/log pair fails closed. With an empty
+    journal, missing Nature generation requires the absence of all Evolution projections and
+    alternate Nature state; otherwise startup requires a consistent restore.
+  - Signed `POST_ADJUST` entries reconcile the exact current-period adjustment-stress counter after
+    a crash between journal and metrics persistence. An expired empty metrics period while awakening
+    remains pending is reset without a final judgment; late confirmation cannot score gated time.
+  - `--skip-awakening` creates an explicit signed local testing event. `--reroll-nature` requires
+    `--force` and starts another epoch instead of truncating the prior audit trail. `--nature-path`
+    accepts a non-empty relative path confined below `UWUBOT_DATA_DIR/state/natures/`; absolute
+    paths and `..` are rejected. `--show-nature` performs normal startup reconciliation before
+    rendering and exiting; it is not read-only and conflicts with skip/reroll mutators.
+  - After confirmation, Nature produces a bounded model policy and local relationship signals. It
+    never expands a model's tool schema, operator authority, Council authority, or remote-provider
+    privacy permission. Relationship values stay local and are omitted from remote model profiles.
+    One retained contact can contribute at most one observation per UTC day; a return requires
+    activity on an earlier day.
+  - One Rust-held `state/evolution-runtime.lock` serializes Evolution writers for a data directory.
+    Public inference also reserves its Nature fingerprint, awakening epoch, and metrics-period
+    bounds; Nature mutation and rollover wait for all matching reservations to finish.
+  - A possible partial multi-snapshot persistence transition makes the runtime sticky fail-closed.
+    Public work and operator effects stay blocked until restart performs signed recovery or a
+    consistent backup is restored; error receipts do not claim that nothing was written.
+- **Test Criteria**:
+  - [x] Random generation, slider validation, all Sacred Bans, lineage inheritance, and each forced
+    mutation mode are covered by deterministic-bound tests.
+  - [x] Signed Nature persistence round-trips and rejects tampering, wrong keys, malformed
+    signatures, unsafe permissions, and symlink redirection.
+  - [x] Ritual tests cover every action, malformed input, authenticated provenance, duplicate and
+    backward events, confirmation, kill, signed local skip, post-confirmation adjustment, crash
+    recovery with exact stress reconciliation, expired-empty pending-period reset, immutable
+    forced-reroll epochs, exact-predecessor recovery, divergent valid snapshot rejection, restart,
+    and journal tampering.
+  - [ ] A live XMTP release exercise proves that only the configured operator can complete an
+    awakening and that public DMs remain gated before confirmation.
+  - [ ] Cross-platform startup measurements verify Nature loading and state permissions on every
+    supported production host.
+
+### Scales of Judgment and lineage records
+
+- **Stability**: in-progress
+- **Description**: Measure bounded local outcomes, weight them by Nature, and record family history
+  while leaving every lifecycle effect under authenticated operator control.
+- **Properties**:
+  - The Scales core represents daily or weekly aggregate engagement, growth, optional economic
+    efficiency, and influence. Counters saturate at fixed bounds; Nature adjustments add a bounded
+    visible stress penalty. Metrics and judgments bind the exact Nature ID/fingerprint, awakening
+    epoch, period bounds, and persisted scored-scale availability.
+  - Nature appetites produce weights renormalized across active scales, while unavailable scales get
+    zero outcome weight. The current runtime scores engagement only because trusted growth,
+    economic, and influence adapters are unavailable; wealth remains disabled.
+  - `/judgment` during an open period returns a `PartialSnapshot` with
+    `AdvisorySnapshotOnly`. Only evaluation at or after the period boundary is `Final`, and even its
+    propagation, survival, starvation, or death outcome requires authenticated operator
+    confirmation.
+  - `JudgmentPolicy` and `Judgment` persist propagation evidence floors and observed/required counts:
+    daily uses eight observations/four prior-day returns and weekly uses 32/16. A score above the
+    propagation threshold without that sample is capped at `Survival`.
+  - `state/metrics.json` stores the bounded current period and
+    `state/evolution_history.jsonl` records validated final judgments as a logically append-only,
+    canonical, newline-terminated journal updated by atomic copy-on-write replacement. History
+    accepts only deterministic `Final` records evaluated exactly at period end and rejects duplicate
+    IDs, same-period conflicts, reordered periods, and overlap. It is unkeyed consistency validation,
+    not cryptographic tamper evidence.
+  - Startup cross-validates open metrics with the last Final history record. Overlap is accepted only
+    for exact equality with that finalized metrics payload, replaying the one history-ahead
+    append-before-reset crash window into an empty current period; every other overlap fails closed.
+  - `state/lineage.json` records founder/child relationships, generations, spawn facts, lifecycle,
+    and absorption destinations. Parent identity binding, generation rules, duplicate IDs, lineage
+    cycles, and absorption cycles fail closed.
+  - `/spawn` may create a child Nature and lineage record only after a final propagation-rights
+    judgment under the exact current scoring policy, Nature ID/fingerprint, and awakening epoch,
+    with at least eight daily contact observations and four prior-day returns. It binds the
+    authenticated operator and hashed transport event provenance and consumes the final judgment's
+    content-derived ID exactly once; partial snapshots never grant. It does not provision
+    credentials, start a process, authorize an inbox, or announce a live Tentacle. Death and
+    absorption remain recommendations or records; neither shuts down a process, routes users, nor
+    merges raw memory automatically.
+  - A propagation grant expires when the immediately following metrics period closes. Missing that
+    period, including after skipped cycles, invalidates rather than extends the grant.
+  - Loaded spawn receipts are projections, not standalone authority. Each must resolve to its exact
+    Final PropagationRights history record, match its parent Nature, and fall inside the immediately
+    following-period timestamp window.
+  - Recruitment is only an aggregate local measurement. It does not create Council contribution
+    credit, money, tokens, governance votes, or ancestor rewards. The proposed economic/token Phase
+    5 is not part of this implementation.
+- **Test Criteria**:
+  - [x] Tests cover normalized Nature weights, bounded/saturating metric updates, optional wealth,
+    explicit threshold and evidence-floor edges, partial-versus-final evaluation, stress penalties,
+    low-sample outcome capping, and randomized valid inputs.
+  - [x] Metrics and logically append-only history round-trip and reject unsafe permissions,
+    symlinks, corrupt or partial records, duplicate/conflicting judgment IDs, reordered/overlapping
+    periods, non-final or off-boundary history, invalid Nature/epoch/period/scoring bindings, and
+    non-exact metrics/history overlap recovery.
+  - [x] Lineage tests cover identity-bound multi-generation spawning, family queries, audited
+    absorption records, lifecycle recommendations, cycle rejection, atomic reload, and symlink
+    rejection. Runtime grant tests cover evidence floors, current-policy binding, one-time use, and
+    expiry after the immediately following period; startup rejects spawn receipts whose history,
+    parent Nature, or authorization window cannot be verified.
+  - [ ] A controlled operator integration test provisions and later retires separate child
+    processes without treating a lineage record as proof that either effect occurred.
+  - [ ] Council metrics publication and propagation-rights governance remain unavailable until a
+    live authenticated Council adapter and schema are designed and tested.
+
+### Hermes-inspired knowledge gossip core
+
+- **Stability**: in-progress
+- **Description**: Persist a decentralized anti-entropy state machine for bounded, privacy-safe
+  knowledge exchange without introducing a central routing agent or claiming a live network
+  transport.
+- **Properties**:
+  - Every Tentacle is modeled as a producer/consumer with direct opportunistic peers. The core
+    compares digests, requests missing knowledge, retries bounded outbound batches until
+    acknowledgement, and resolves conflicts by configured signature authority, timestamp, then
+    digest.
+  - The closed payload set contains aggregate anonymized interaction patterns, conversation
+    strategies, tool-operation patterns without arguments or paths, and bounded operator-created
+    skill text. Validators reject common contact/private-memory/credential markers, likely
+    wallet/inbox/email identifiers, unsafe control characters, and oversized content. Skill prose
+    remains untrusted after these shape checks.
+  - Authorship and relay envelopes use configured HMAC identities and a local trusted-key ring, and
+    an authenticated transport peer must match the peer/key binding. These symmetric tags are not
+    public signatures. The repository currently provides no live gossip transport, handshake, peer
+    discovery, or peer-key provisioning path; `--gossip-peers` therefore cannot establish trust by
+    itself.
+  - A memory-sharing Sacred Ban makes a Tentacle strictly receive-only: it emits neither knowledge
+    envelopes nor digest summaries.
+  - `state/hermes_gossip.json` persists bounded peers, digest views, knowledge, sync timestamps, and
+    pending outbound work with owner-only atomic storage. Signing secrets are not serialized there.
+  - `/share-skill` can stage a locally operator-signed skill in the gossip core and `/request-skill`
+    can inspect locally held knowledge. Without a live adapter neither command claims delivery or a
+    network query. Received skills remain inert data pending explicit local operator review and the
+    existing compiled skill-creation/activation checks; they never become model tools automatically.
+- **Test Criteria**:
+  - [x] Core tests bind authenticated peer, author, relay, path, and signature; reject untrusted or
+    malformed input; and cover deterministic conflict resolution.
+  - [x] Tests prove receive-only Sacred Ban behavior, sibling skill propagation, anti-entropy
+    convergence after a simulated partition, privacy-shape rejection, owner-only persistence, and
+    symlink rejection.
+  - [ ] A live transport test provisions peer keys out of band, authenticates both peers, exchanges
+    and acknowledges bounded batches, reconnects after a partition, and proves that no private data
+    crosses the wire.
+  - [ ] A reviewed activation flow safely imports a received skill without allowing gossip content
+    to enlarge compiled operator or public authority.
+
 ### Capabilities and liveness
 
 - **Stability**: in-progress

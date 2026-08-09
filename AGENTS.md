@@ -43,6 +43,7 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - `docs/`: architecture, research, decisions, and operating notes.
 - `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
 - `docs/operator.md`: privileged XMTP operator enrollment, tools, isolation, and deployment warning.
+- `docs/evolution.md`: Nature, awakening, Scales, lineage, Hermes gossip, and current non-goals.
 - `skills/`: reusable procedures specific to this repository.
 
 ## Build and verification
@@ -158,6 +159,70 @@ interoperability.
 - Keep registry types chain/deployment/ABI/revision neutral. Do not put heartbeats, load, sessions,
   leases, user references, contact memory, DMs, or credentials on-chain.
 
+## Evolution security rules
+
+- Treat `state/nature.json` and the awakening journal as local, HMAC-authenticated state. The
+  owner-only symmetric key is a local integrity boundary, not a public signature, peer identity, or
+  defense against an attacker who controls the `uwubot` OS account and can re-sign modified state.
+  Keep the signed awakening and unkeyed judgment journals logically append-only and update their
+  complete validated, canonical, newline-terminated contents through atomic copy-on-write. Judgment
+  history consistency is not cryptographic tamper evidence. Never silently generate a new key when
+  signed Evolution state or metrics/history/lineage projections exist without the original key.
+- Accept awakening and Nature-adjustment actions only after classifying a canonical active XMTP
+  operator inbox. Until an awakening epoch is confirmed, normal public conversation, inference,
+  contact mutation, and tools remain closed. `--skip-awakening` is an explicit local testing
+  override, not an operator message or a production attestation; forced rerolls start a new audited
+  epoch rather than rewriting history. Reconcile exact adjustment stress from signed `POST_ADJUST`
+  entries after crashes; reset an expired empty pending-awakening period without a judgment.
+  Require each signed entry's exact immediate-predecessor Nature snapshot; recover only the head or
+  final signed predecessor, never a different independently valid Nature/log combination. Never
+  generate a missing pre-action Nature over existing Evolution projections or alternate Nature.
+- Keep Scales decisions advisory. An open-period snapshot cannot grant propagation rights, and a
+  final judgment still requires authenticated operator confirmation. A death recommendation, `KILL`,
+  absorption record, or spawn record must never terminate, route, merge private memory, provision a
+  process, or launch a child automatically.
+- Preserve the exact Nature ID/fingerprint, awakening epoch, period, and scored-scale-availability
+  bindings on metrics and judgments. Renormalize weight only across available scales. The current
+  runtime may score engagement only until trusted growth, economic, and influence adapters exist.
+  Persist evidence floors and counts in policy/judgment, and cap a propagation-threshold result at
+  `Survival` when the sample is below its floor.
+- Accept at most one relationship/Scales observation per retained contact per UTC day; count a
+  return only after prior-day activity. Keep local loyalty and Nature-affinity signals out of remote
+  model profiles. Reserve public inference against its Nature fingerprint, awakening epoch, and
+  metrics period; defer Nature mutation and rollover until every matching reservation finishes.
+- Keep `/spawn` gated by a final judgment for the exact current policy, Nature ID/fingerprint, and
+  awakening epoch, at least eight daily observations and four prior-day returns, authenticated
+  operator plus hashed event provenance, and one-time consumption of the content-derived judgment
+  ID. Partial snapshots never grant rights. Accept the final grant only in the immediately following
+  metrics period; a closed or missed period invalidates it. Cross-check every loaded spawn receipt
+  against its exact Final PropagationRights history, parent Nature, and authorized time window.
+- Permit judgment history to contain only deterministic `Final` records evaluated exactly at period
+  end. Reject duplicate IDs, same-period conflicts, reordering, and overlap; do not describe these
+  unkeyed consistency checks as cryptographic tamper evidence. Cross-check open metrics against the
+  latest Final record and replay only exact payload equality in the history-ahead append/reset crash
+  window; fail closed on every other overlap.
+- Hold one Rust `state/evolution-runtime.lock` per data directory. Confine custom `--nature-path`
+  values below `state/natures/` as relative paths. After any ambiguous or partially persisted
+  multi-snapshot transition, keep Evolution sticky fail-closed until signed restart recovery or
+  consistent-backup restoration; do not claim that nothing was written. Treat `--show-nature` as a
+  reconciling startup path, not a read-only inspector, and keep it mutually exclusive with skip and
+  reroll mutators.
+- Treat every Hermes summary, envelope, digest, skill, peer ID, signature, and relay path as hostile
+  input. Bind peer keys out of band to an actually authenticated transport before trusting them;
+  persisted bootstrap IDs alone are not authenticated peers and there is currently no live gossip
+  transport or peer-key provisioning path.
+- Gossip only closed, bounded, aggregate knowledge shapes. Never gossip raw DMs, contact identifiers,
+  contact notes, model credentials, or private memory. Tool-usage patterns must not carry filesystem
+  paths, shell commands, output, or arguments. Treat bounded operator skill prose as potentially
+  hostile even after privacy-shape validation. A Nature with the memory-sharing Sacred Ban is
+  strictly receive-only and emits neither knowledge nor digest summaries.
+- Keep received skills inert and quarantined until a local authenticated operator explicitly reviews
+  and activates them through the existing compiled skill boundary. A Hermes signature establishes
+  only the configured key's provenance; it does not make instructions safe or authorize tools.
+- Do not add token, staking, slashing, revenue-sharing, or financial recruitment incentives as part
+  of the Evolution layer. Phase 5 of the proposal is intentionally out of scope; existing Council
+  contribution credit remains non-financial and never rewards raw recruitment.
+
 ## Coding conventions
 
 - Prefer small modules and explicit trust boundaries.
@@ -213,3 +278,6 @@ interoperability.
   the deterministic workspace suite.
 - The XMTP Council-group adapter and ERC-8004 registry adapter are experimental boundaries/stubs.
   There is no live Council-group, configured ERC-8004, or production-signature claim yet.
+- The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
+  judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
+  still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.

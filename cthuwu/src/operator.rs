@@ -224,7 +224,7 @@ impl OperatorHarness {
             .join(",");
 
         let runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -562,6 +562,10 @@ fn operator_help() -> String {
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
+        "`/nature` AND `/adjust <trait> <value>` — INSPECT OR SIGNED-AUDIT THE LOCAL NATURE.",
+        "`/lineage`, `/metrics`, AND `/judgment` — INSPECT LOCAL EVOLUTION STATE; JUDGMENTS NEVER EXECUTE LIFECYCLE ACTIONS.",
+        "`/spawn [child-id]` — RECORD A MUTATED CHILD ONLY AFTER FINAL PROPAGATION RIGHTS; IT DOES NOT CREATE A PROCESS.",
+        "`/gossip-status`, `/share-skill <name>`, AND `/request-skill <name>` — USE THE QUARANTINED LOCAL HERMES CATALOG. LIVE PEER TRANSPORT IS NOT YET ENABLED.",
         "ORDINARY LANGUAGE MAY DRIVE `/files`, `/read`, `/search`, AND `/qmd` WHEN THE MODEL SUPPORTS TOOL CALLING. AN EXPLICIT CURRENT-MESSAGE REQUEST THAT NAMES THE EXACT SHELL COMMAND—PREFERABLY IN BACKTICKS, SUCH AS \"please run `cargo test`\"—ACTIVATES ONE UNSANDBOXED `exec` MODEL CALL BOUND TO THAT COMMAND; `/exec` REMAINS THE EXACT DIRECT FORM.",
         "AN EXPLICIT REQUEST TO CREATE OR GENERATE A REUSABLE SKILL ACTIVATES A CREATE-ONLY TOOL FOR `skills/<kebab-name>/SKILL.md`. IT NEVER OVERWRITES. GENERAL FILE WRITES AND EDITS STILL REQUIRE `/write` OR `/edit`.",
         "ASK WHERE MY NOTES ARE FOR AN EXACT LOCAL REPORT OF THE WORKSPACE, PROTECTED MEMORY, OPERATOR PROFILE, CONTACT-NOTE ROOT, AND SKILLS ROOT. CONTACT REPORTS REMAIN A STRICT PARSED RUNTIME ROUTE.",
@@ -1395,6 +1399,12 @@ fn contact_value(
             "introductions_paused": contact.introductions_paused,
             "note": "This consent is only for peer match suggestions; it is not a general disclosure flag."
         },
+        "relationship": {
+            "loyalty_score": contact.loyalty_score,
+            "nature_affinity_id": contact.nature_affinity_id.as_deref(),
+            "nature_affinity_score": contact.nature_affinity_score,
+            "note": "Bounded local heuristics, not user assertions or proof of preference."
+        },
     });
     let mut fields_truncated = false;
     if include_profiles {
@@ -1764,6 +1774,8 @@ struct RenderedContact {
     observed: RenderedObservedContact,
     matching: RenderedMatchingContact,
     #[serde(default)]
+    relationship: RenderedRelationshipSignals,
+    #[serde(default)]
     profile: Option<RenderedContactProfile>,
 }
 
@@ -1778,6 +1790,14 @@ struct RenderedObservedContact {
 struct RenderedMatchingContact {
     peer_suggestion_consent_current: bool,
     introductions_paused: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct RenderedRelationshipSignals {
+    loyalty_score: u8,
+    #[serde(default)]
+    nature_affinity_id: Option<String>,
+    nature_affinity_score: u8,
 }
 
 #[derive(Deserialize)]
@@ -1888,6 +1908,16 @@ fn append_rendered_contact(output: &mut String, contact: &RenderedContact) {
         } else {
             "NOT PAUSED"
         }
+    ));
+    output.push_str(&format!(
+        "\n  LOCAL RELATIONSHIP HEURISTICS: LOYALTY {} / 100; NATURE AFFINITY {} ({} / 100). THESE ARE BOUNDED NODE OBSERVATIONS, NOT USER-ASSERTED FACTS.",
+        contact.relationship.loyalty_score,
+        contact
+            .relationship
+            .nature_affinity_id
+            .as_deref()
+            .unwrap_or("NOT MEASURED"),
+        contact.relationship.nature_affinity_score,
     ));
     let Some(profile) = &contact.profile else {
         output.push_str("\n  PROFILE: NOT REQUESTED.");
