@@ -21,7 +21,8 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
   privacy controls in ordinary language.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
 - Record useful discoveries while they are fresh.
-- Work directly on `main` during early development unless Dean asks for a branch or PR.
+- Always commit and push completed scoped work directly to `main`. Use a branch or PR only when
+  Dean explicitly asks for one.
 
 ## Start-of-task loop
 
