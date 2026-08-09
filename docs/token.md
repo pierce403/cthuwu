@@ -1,203 +1,286 @@
-# UWU token observance and economics
+# UWU token observance and active economics
 
-## Status
+UWU is the transferable Base-chain economic layer for Tentacle survival, propagation, reputation,
+and governance. Each Tentacle observes balances through its own RPC connection and persists its own
+economic view. There is no central balance or reputation registry.
 
-The runtime has a local, read-only ERC-20 observation path for the planned transferable **UWU**
-token on Base mainnet (chain ID `8453`). Token observation is enabled by default, but remains
-inactive until an operator configures the deployed contract address. No token balance or stake is
-required to start a Tentacle, and the default interaction tier is `unproven`, so token observation
-does not create a startup gate.
+Token state never replaces XMTP authentication. A wallet balance cannot make a public sender an
+operator, grant shell/tool authority, or impersonate a Council member. Address-to-role bindings must
+come from authenticated transport or explicit node configuration.
 
-This phase does not deploy a token, stake funds, sign transfers, spend tokens, or keep a private key.
-It also does not turn UWU holders into authenticated operators. XMTP operator authority continues to
-come only from the existing exact-inbox ACL.
+## Launch parameters
 
-## Launch parameters and unresolved supply choice
-
-| Parameter | Current decision |
-|---|---|
-| Name | `UWU` |
-| Symbol | `UWU` |
+| Parameter | Decision |
+| --- | --- |
+| Name / symbol | `UWU` / `UWU` |
 | Chain | Base mainnet, chain ID `8453` |
-| Decimals | `18` by default; configurable to match the deployed contract |
-| Transferability | Standard transferable ERC-20 |
-| Minimum stake to start | `0` |
-| Contract address | Supplied after deployment; never hard-coded |
-| Requested supply | `1,000,000,000` UWU |
+| Transfer model | Fully transferable ERC-20 |
+| Initial operator stake | None required to start a Tentacle |
+| Spawn stake | Required by the active per-Tentacle economic policy |
+| Supply target | 1,000,000,000 UWU |
+| Decimals | 18 unless the deployed contract says otherwise |
+| Contract | Not deployed or committed in this repository |
 
-The requested one-billion supply is **not** the current Clanker v4 standard. Clanker's current v4
-deployment documentation defines a fixed standard supply of **100,000,000,000 tokens with 18
-decimals**. Launch therefore needs an explicit choice: use the current standard 100-billion Clanker
-supply, or use a custom/nonstandard deployment path for the requested one-billion supply. Runtime
-normalization defaults to one billion. Set `--token-total-supply 100000000000` (or the corresponding
-environment variable) for a standard current Clanker v4 launch; configured decimals and supply must
-match the deployed contract.
-
-Clanker's standard creator rewards are liquidity-pool/swap fees. They are not an ERC-20
-fee-on-transfer mechanism. A transfer tax would require a custom contract and separate review;
-Cthuwu does not assume one. See the current
-[Clanker v4 deployment configuration](https://github.com/clanker-devco/DOCS/blob/main/references/core-contracts/v4/deployment-config.md),
-[token implementation reference](https://github.com/clanker-devco/DOCS/blob/main/references/core-contracts/clankertoken-v3.1.0-and-v4.0.0.md),
-and [creator rewards documentation](https://github.com/clanker-devco/DOCS/blob/main/general/creator-rewards-and-fees.md).
-
-## Local observation path
-
-The Agent SDK resolves an optional EVM address from the transport-authenticated XMTP sender inbox.
-The sidecar passes that address as authenticated envelope metadata; message text cannot supply or
-override it. XMTP inboxes without an EVM identifier continue normally without a token observation.
-
-Each Tentacle owns an in-process `TokenObservance` cache. It validates the configured nonzero
-20-byte contract and holder addresses, rechecks that the RPC endpoint reports chain ID `8453`
-before every balance read, and then issues the standard read-only `eth_call` for
-`balanceOf(address)` at `latest`. There is no central token registry, global holder service, or
-shared tier authority. The RPC endpoint supplies chain data, but every cache and tier decision
-belongs to the observing Tentacle.
-
-The wire call follows Base's documented
-[`eth_call` API](https://docs.base.org/base-chain/api-reference/ethereum-json-rpc-api/eth_call); it
-does not create a transaction or consume gas from a Cthuwu-controlled account.
-
-The running DM path currently observes authenticated EVM addresses for public one-to-one senders.
-`TokenEye` can observe any validated address, but Council-member, sibling-lineage, and operator
-acolyte enumeration are not connected because those live identity/address adapters do not yet exist.
-They must use the same transport-authenticated or cryptographically bound address path when added;
-they must not infer wallets from display names or message text.
-
-Fresh values are cached for the configured observation interval. A failed refresh retains an old
-value as stale diagnostic context instead of changing it to zero. Ordinary observations use a
-per-holder negative-cache backoff derived from that interval and bounded to 1–30 seconds, so one
-outage does not hammer Base or serialize unrelated holders behind network I/O. Unknown and stale
-observations are neutral: they do not enforce `--min-tier`, modify a response, or add an Engagement
-bonus. Ordinary conversation continues when Base or the RPC provider is unavailable.
-
-## Reputation tiers and response behavior
-
-Tiers are recalculated from the positive balances that one Tentacle has observed locally:
-
-| Tier | Local calculation | Default response effect at full intensity |
-|---|---|---|
-| `whale` | Top 1% of eligible local balances, only with at least 100 eligible holders | Priority/deep-lore treatment and more response depth |
-| `elder` | Top 10% after whales, only with at least 10 eligible holders | Elevated conversation depth |
-| `acolyte` | At least one whole UWU, outside an available percentile tier | Standard interaction |
-| `initiate` | Positive balance below one whole UWU | Focused/basic interaction |
-| `unproven` | Observed zero balance | Skeptical, proof-oriented interaction |
-
-Only balances of at least one whole UWU enter the percentile population; dust wallets cannot create
-a sample or promote another holder. With the default policy, Whale is unavailable below 100 eligible
-local holders and Elder is unavailable below 10. Until a percentile has a meaningful sample,
-otherwise eligible holders remain Acolytes. Equal balances receive the same tier because ranking
-counts strictly greater balances rather than using address order. Because ranks are local, two
-Tentacles with different observations may classify the same address differently; that is
-intentional and avoids a central holder registry.
-
-The difference between tiers is Nature-adjustable. With no explicit override, effective intensity
-is `100 - cooperation`: a maximally cooperative Tentacle ignores tier differences, while a
-competitive Tentacle applies more of them. `--token-tier-intensity 0` disables the response
-difference and `100` applies it fully. A configured `--min-tier` can gate known fresh/cached
-observations, but defaults to `unproven`; unknown or stale chain state does not become a denial.
-Token tier never grants the operator role, operator commands, local tools, or shell access.
-
-## Engagement-only Scales integration
-
-A fresh or unexpired cached public-sender balance can contribute one bounded Engagement bonus for
-that conversation. The runtime removes the configured decimals, normalizes whole tokens against the
-configured total supply, and bounds the result to 0–10,000 basis points. The period stores the sum
-of those per-observation bonuses and divides by **all** conversations, including conversations with
-no usable wallet observation. Ordering therefore does not matter and a high-balance final message
-cannot replace earlier observations or win through last-writer state.
-
-This public-user balance is evidence about the sender, not the Tentacle. It does **not** activate or
-modify Wealth, starvation relief, stake eligibility, Growth rewards, Influence, propagation rights,
-or a separate lifecycle scale. Its only possible judgment influence is through the period-averaged
-Engagement score and the existing evidence/operator gates; it cannot create a direct or last-writer
-lifecycle grant. Current runtime periods keep `token_economics` absent, Wealth inactive, and the
-scored-scale set at Engagement only.
-
-`RecordedTokenEconomics` and its Wealth, starvation, stake, reward, and emergency-spend calculations
-remain adapter-only library APIs. Before a future node/operator economic adapter can reach runtime
-state, its evidence must cryptographically bind at least the holder role and address, chain ID,
-token contract, block, observation time, decimals, total supply, and configuration fingerprint. It
-must also prevent a later observation from silently replacing an earlier lifecycle-relevant fact.
-No such source is wired today, and the existing emergency-survival result remains a recommendation
-with no transaction signer or expenditure path. Existing Scales period, evidence, spawn, and
-lifecycle limits are tracked in [the guardrail audit](guardrail-audit.md).
-
-## Token-weighted governance core
-
-`token_gov.rs` implements a deterministic local ballot box for content-addressed proposals. Its
-closed subjects are Nature adjustment, Council policy, economic policy, and skill-propagation
-priority. It accepts one ballot per validated address, bounds raw holding weight to 0–10,000 basis
-points, applies Nature-scaled tier multipliers, and calculates quorum and approval without network or
-wall-clock input. The permissive default minimum is Unproven; a zero-balance voter may record a
-zero-weight ballot rather than being treated as an identity failure.
-
-This is a library-only, advisory core. It is not wired to live Council proposals, does not mutate a
-Nature, and has no persistence, RPC, key, transaction, command, process, or operator-authorization
-surface. A future adapter must bind each ballot to an authenticated address and an exact trustworthy
-balance snapshot before treating the result as evidence. Transferable UWU can never authorize OS
-tools or replace the XMTP operator ACL.
+Current Clanker v4 uses a fixed 100-billion-token supply. A one-billion supply therefore requires a
+custom/nonstandard deployment decision; it must not be described as the Clanker default. The final
+contract address and audited ABI must be configured after launch.
 
 ## Configuration
 
-| CLI option | Environment variable | Default / meaning |
-|---|---|---|
-| `--rpc-endpoint <url>` | `CTHUWU_RPC_ENDPOINT` | `https://mainnet.base.org`; read-only Base RPC |
-| `--token-contract <address>` | `CTHUWU_TOKEN_CONTRACT` | unset; when set it must be nonzero |
-| `--token-decimals <count>` | `CTHUWU_TOKEN_DECIMALS` | `18`; must match the deployed token |
-| `--token-total-supply <tokens>` | `CTHUWU_TOKEN_TOTAL_SUPPLY` | `1000000000`; positive whole-token normalization reference |
-| `--observe-tokens <true|false>` | `CTHUWU_OBSERVE_TOKENS` | `true` |
-| `--observe-interval <seconds>` | `CTHUWU_OBSERVE_INTERVAL` | `60`; must be at least one second |
-| `--min-tier <tier>` | `CTHUWU_MIN_TIER` | `unproven` |
-| `--token-tier-intensity <0..100>` | `CTHUWU_TOKEN_TIER_INTENSITY` | unset; derive from Nature cooperation |
+Existing observance configuration includes:
 
-The RPC URL may contain a provider credential, so the CLI hides its environment value and normal
-diagnostics report only `disabled`, `waiting-for-contract`, or `enabled`. Transport errors are
-sanitized so the URL is not included. Put any RPC credential in the environment, not on a committed
-command line or configuration file.
+```text
+--rpc-endpoint <url>
+--token-contract <0x-address>
+--tentacle-wallet <0x-address>
+--treasury-attestation-signature <0x-signature>
+--print-treasury-attestation
+--observe-tokens <true|false>
+--min-tier <whale|elder|acolyte|initiate|unproven>
 
-`--observe-tokens false` is an operational escape hatch: token-only endpoint, contract, decimals,
-supply, interval, minimum-tier, and intensity values are ignored rather than allowing stale token
-configuration to block an otherwise valid Tentacle. When observation is enabled, the contract must
-be a valid nonzero address; the zero address is rejected.
-
-Pre-launch, the default is intentionally usable:
-
-```bash
-./uwu.sh
+CTHUWU_RPC_ENDPOINT
+CTHUWU_TOKEN_CONTRACT
+CTHUWU_TENTACLE_WALLET
+CTHUWU_TREASURY_ATTESTATION_SIGNATURE
+CTHUWU_OBSERVE_INTERVAL
 ```
 
-After deployment:
+Aggressive economics additionally requires a configured Tentacle treasury address, a fresh stake
+source, and receipt-producing executors for any on-chain mutation. The repository does not contain a
+deployed UWU contract, private key, transaction signer, burn contract, staking contract, reward
+contract, authenticated revenue source, revenue router, persisted ballot adapter,
+payout/application executor, or external provisioner. Do not claim a spend, stake, reward, revenue
+distribution, governance application, child provision, or absorption completed merely because a
+local intent or core record was created. Do not claim Shutdown completed until the Rust supervisor
+has stopped XMTP and written its native local receipt.
 
-```bash
-CTHUWU_RPC_ENDPOINT=https://mainnet.base.org \
-CTHUWU_TOKEN_CONTRACT=<verified-UWU-contract-address> \
-CTHUWU_TOKEN_DECIMALS=18 \
-CTHUWU_TOKEN_TOTAL_SUPPLY=100000000000 \
-./uwu.sh
-```
+Private keys are supplied only to the external attesting wallet or a separately isolated signer/key
+service, never to Rust, CLI values, the uwubot environment, observance state, logs, or the
+repository. Normal runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor receives
+no raw signing key. RPC URLs may contain credentials and are redacted from diagnostics.
 
-This is intentionally a non-runnable template: replace `<verified-UWU-contract-address>` with the
-verified deployed UWU address. Startup rejects malformed and zero addresses, and every balance
-observation rejects an RPC endpoint reporting a chain other than Base mainnet.
+### Treasury ownership attestation
 
-## Launch and activation checklist
+`CTHUWU_TENTACLE_WALLET` binds node economics to one configured treasury. Establish that binding
+without giving Rust the treasury key:
 
-1. Resolve the supply mismatch: standard current Clanker v4 100 billion, or a reviewed custom path
-   for the requested 1 billion.
-2. Confirm name `UWU`, symbol `UWU`, 18 decimals, transferability, Base chain ID `8453`, and the
-   desired Clanker LP fee/reward configuration.
-3. Deploy without giving the observer a private key. Record and independently verify the contract
-   address and deployment transaction.
-4. Set `CTHUWU_TOKEN_DECIMALS` and `CTHUWU_TOKEN_TOTAL_SUPPLY` to the verified deployed values before
-   enabling holder-tier and Engagement effects; current standard Clanker v4 uses `18` and
-   `100000000000`.
-5. Configure `CTHUWU_RPC_ENDPOINT` and `CTHUWU_TOKEN_CONTRACT`, start one Tentacle, and confirm its
-   status says `enabled` without logging the endpoint credential.
-6. Test zero, sub-token, ordinary, top-10%, and top-1% balances; an unavailable RPC; a wrong-chain
-   endpoint; and cache expiry against the deployed contract.
-7. Connect Council-member, sibling-lineage, and operator-acolyte address enumeration only after each
-   source has an authenticated wallet binding; keep every resulting cache local to its Tentacle.
-8. Add a node/operator Wealth, starvation, stake, reward, or expenditure adapter only when its
-   cryptographic evidence binds holder role/address, chain, contract, block, time, decimals/supply,
-   and configuration fingerprint, with idempotent history and transaction handling. Until then those
-   library dimensions remain inactive or recommendation-only.
+1. Set the RPC endpoint, token and optional stake contracts, `CTHUWU_TENTACLE_WALLET`, token
+   metadata, and propagation-stake policy.
+2. Run `./uwu.sh --print-treasury-attestation` and capture its canonical output exactly, excluding
+   only the CLI's final line delimiter.
+3. Personal-sign that exact message with the configured treasury in an external wallet.
+4. Set the resulting recoverable 65-byte signature as
+   `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`, then start the node with the same configuration.
+
+The canonical message binds Base chain ID `8453`, token and stake contracts, treasury, configured
+decimals/supply assumptions, propagation-stake policy, and configuration identity. The signature
+proves that the treasury signed those settings; it does not prove the contract reports the same
+metadata. Initial observation and every periodic treasury/stake refresh verify the signature through
+Base's `ecrecover` precompile and require the recovered signer to equal
+`CTHUWU_TENTACLE_WALLET`. Changing any bound configuration requires a new signature. No private key
+enters Rust.
+
+## Local observance
+
+`TokenEye` issues ERC-20 `balanceOf(address)` calls against the configured nonzero contract and
+revalidates Base chain ID `8453`. It validates JSON-RPC quantities, response bounds, the ERC-20 ABI
+shape, and configured contract. Calls use the `latest` block tag, whose response contains no block
+number; current observations therefore carry local wall-clock time, set `observed_block_number` to
+`None`, and omit `observedBlockNumber` from JSON. Configured and treasury-attested decimals, supply,
+and configuration identity normalize the balance, but Rust does not call ERC-20 `decimals()` or
+`totalSupply()` to verify them. Observations are cached per address and ranked only within the
+Tentacle's local sample.
+
+Observed roles are distinct:
+
+- Public user wallets affect that entity's reputation tier and Engagement contribution.
+- Council member addresses affect Council weighting only after authenticated membership binding.
+- Sibling treasury addresses affect lineage economics only after lineage and address binding.
+- Acolyte addresses affect operator rewards only after authenticated operator binding.
+- The Tentacle treasury address is the sole source for its Wealth, starvation relief, spawn stake,
+  survival spending, and revenue state.
+
+Never substitute a public sender's holdings for the Tentacle treasury.
+
+### Hard-failure behavior
+
+Unknown, stale, malformed, or wrong-chain observations are not converted to zero and do not receive
+ordinary treatment. When token observance is active:
+
+- a missing or failed public-wallet observation blocks token-gated interaction;
+- a missing treasury observation blocks Scales evaluation and new token-dependent lifecycle
+  authorization;
+- RPC outage degrades the node by refusing token-dependent work;
+- a zero, freshly observed public balance is `Unproven` and receives minimal functionality;
+- a zero, freshly observed treasury balance is real economic evidence and may produce starvation or
+  death under the configured policy.
+
+Retry/backoff may protect the RPC endpoint, but it must not turn unknown economics into an accepted
+operation or introduce a delay after all required economic evidence is fresh and the action is
+authorized.
+
+Normal startup validates token configuration, treasury ownership, initial economics, and the
+lifecycle executor before creating or mutating Evolution state. The only outage exception is a
+read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
+`Shutdown` work, the runtime may open solely to drain that work even while Base is unavailable.
+Persisted `Spawn` and survival `Spend`, plus new token-dependent decisions, wait for fresh bound
+economics.
+
+## Reputation tiers
+
+The default local ranking policy is:
+
+| Tier | Meaning | Default behavior |
+| --- | --- | --- |
+| Whale | Top 1% of eligible locally observed holders | Highest routing priority, deepest modes, greatest holding weight |
+| Elder | Top 10% | Elevated depth and propagation priority |
+| Acolyte | Holds at least one whole UWU outside the percentile bands | Standard member behavior |
+| Initiate | Positive balance below one whole UWU | Basic interaction |
+| Unproven | Freshly observed zero balance | Minimal, skeptical interaction |
+
+Ties receive the same tier. Sample floors prevent a tiny local sample from inventing percentile
+precision. Per-Tentacle intensity is variable: cooperative Natures may flatten tier differences;
+competitive Natures may use the full configured spread. The configured minimum tier remains a local
+interaction policy, not an operator-authentication mechanism.
+
+## Active Tentacle economics
+
+`RecordedTokenEconomics` consumes cryptographically and configurationally bound node observations.
+It is part of the Scales input rather than an optional reporting surface:
+
+- treasury balance is the primary Wealth input;
+- fresh stake contributes to Influence and is required for propagation;
+- configured operator/recruitment reward records contribute to Growth when accepted; no
+  authenticated live reward source is committed;
+- UWU holdings lower the starvation threshold according to policy;
+- an accepted executor receipt whose asserted fields match an emergency survival-spend intent
+  cancels a pending Death before its deadline; Rust does not independently query that transaction;
+- the same event or transaction receipt is applied at most once.
+
+Scales counters have no artificial policy ceilings. Count fields saturate at `u32::MAX` and
+accumulated totals at `u64::MAX`; per-sample and persistence-integrity bounds remain.
+
+Economic records can carry role, address, chain, contract, optional block, observed time, configured
+token metadata, configuration identity, and a source label. The current live path supplies a
+revalidated chain ID, the configured nonzero contract address, local observation time, no block
+number, and treasury-signed configured metadata; it does not verify contract bytecode, and its local
+source label is not independently authenticated external identity. Event and receipt IDs prevent
+last-writer state and replayed transactions. The revenue-split core has no authenticated revenue
+source or payout executor and therefore records no live allocation.
+
+## Automatic lifecycle effects
+
+A final `Death` judgment immediately stops new conversation admission and creates an absorption
+intent plus a shutdown deadline 24 hours later. A configured executor may merge the permitted
+memory projection into the parent or sibling. Private keys, raw DMs, contact notes, and credentials
+are never absorption payloads.
+
+Before the deadline, a configured signer may submit the policy-defined UWU survival expenditure.
+Only an idempotently consumed executor receipt whose asserted chain fields match the intent cancels
+pending death. Rust validates that assertion structurally and against policy, but does not yet fetch
+the transaction receipt or block independently from Base. If none arrives, the Rust
+supervisor/controller stops XMTP after the grace period, writes the native local Shutdown receipt,
+and exits. Shutdown is not sent to the lifecycle executor.
+
+The executor protocol currently returns one final JSON response and has no durable submitted-
+transaction reconciliation. A survival burn can broadcast before grace while that response is lost
+or preempted, spending UWU without canceling Death. This blocks production-value launch until exact
+action-ID receipt replay, a durable two-phase `Submitted` state, and Base receipt/reorg verification
+are implemented.
+
+A final `PropagationRights` judgment authorizes a child only when the required stake is freshly
+observed. If `Nature.growth > 70` and auto-spawn is enabled, the runtime durably creates the
+provision intent without operator confirmation. Manual mode uses the same grant and stake evidence
+through `/spawn`. The grant may authorize distinct children without an artificial rate, volume, or
+expiry quota; each exact child/action and provision receipt is consumed once to reject replay.
+
+If Death preempts an in-flight Spawn, Rust kills the local executor process group, rejects a late
+provision receipt, and refuses the child lineage projection. That is not proof that a remote
+provisioner rolled back completed work. Without a provisioner lease or compensating teardown, an
+external child/resource may remain orphaned.
+
+Base mutation, provisioning, and absorption execution use a durable intent/receipt boundary:
+
+1. Persist the binding judgment and economic evidence.
+2. Persist a uniquely identified intent.
+3. Invoke the configured provision, absorption, or signer executor.
+4. Validate and persist its receipt.
+5. Mark the effect complete exactly once.
+
+Shutdown uses a distinct native path: Rust intercepts its durable intent, stops XMTP, writes a local
+controller receipt, and lets the process exit. It does not invoke the configured lifecycle executor.
+
+The local runtime can truthfully report `pending`, `blocked`, `failed`, or `confirmed`. With no
+executor configured, external Base/provision/absorption effects remain `blocked`; local records are
+not evidence of an external process or Base transaction. Native Shutdown does not require that
+executor. Child/spawn/lineage lifecycle persistence has no fixed
+file-size cap and validates each record and its provenance. This claim does not extend to dormant
+Council/Hermes collections, which retain documented local resource, depth, fan-out, campaign, and
+cache bounds; neither transport is live.
+
+The lifecycle executor starts with a cleared allowlisted environment and no caller-controlled loader
+paths. Rust forwards only its validated exact `CTHUWU_RPC_ENDPOINT` as a `CTHUWU_*` value; contract,
+wallet, amount, configuration, vault, payout, and child-root fields come from the durable intent, not
+ambient variables. On Unix it receives a fixed system `PATH` and `/` as its working directory. Rust
+hashes and rechecks the top-level executable and pins that file for launch on Linux. This does not
+attest an interpreter, shared libraries, subprocesses, or signer service; operators must trust and
+pin that dependency chain separately. On Unix, the executor is a process-group leader and cleanup
+kills the complete group, including signer/provisioner descendants, after success, failure, or
+timeout. The XMTP sidecar similarly kills its entire process group on supervisor teardown.
+
+## Revenue and recruitment
+
+The revenue-split core calculates these default shares:
+
+| Recipient | Default share |
+| --- | ---: |
+| Parent Tentacle | 15% |
+| Operating acolyte | 10% |
+| Recruiter | 5% |
+| Earning Tentacle | 70% |
+
+The split is configurable per Tentacle, and the intended model financially rewards recruitment. No
+authenticated revenue source, deployed contract/signer, or payout executor is committed, so this
+calculation is not a live payout. A future payout must bind the earning event, lineage,
+authenticated acolyte/recruiter identities, token contract, and consumed transaction receipt. A
+descendant cannot invent or rewrite its ancestry after the earning event.
+
+There is no artificial spawn-rate, child-count, or lineage-depth quota in the active lifecycle
+policy. Token stake and Scales outcomes provide admission pressure. This is not an end-to-end
+network-size claim: dormant Council/Hermes resource and propagation bounds remain flagged until
+live peer-to-peer adapters replace or configure them.
+
+## Token-governance binding records
+
+Token governance accepts one deterministic ballot per authenticated address for a closed set of
+Nature adjustment, Council policy, economic policy, and skill-propagation subjects. Holding and
+stake determine voting weight. An accepted result returns a binding disposition and application
+record from the core.
+
+No persisted ballot adapter or application executor is committed. A result is not an applied change
+until a configured adapter durably stores the ballot/application and returns a successful receipt.
+Governance subjects cannot grant operator authority, disclose credentials, or inject arbitrary
+shell/tool commands.
+
+## Post-launch activation
+
+1. Deploy and audit the chosen one-billion UWU ERC-20 and any staking, survival-spend, reward, and
+   revenue-routing contracts.
+2. Record the Base contract addresses, ABI revisions, decimals, and deployment blocks.
+3. Configure independent Base RPC endpoints and `CTHUWU_TENTACLE_WALLET`.
+4. Print the canonical treasury attestation, personal-sign the exact output externally, and set
+   `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`; do not provide the wallet key to Rust.
+5. Configure transaction signer/executor identities without exposing their keys to observance or
+   logs.
+6. Verify chain ID, treasury signer recovery, contract bytecode, `balanceOf`, `decimals()`,
+   `totalSupply()`, block-pinned observations, transaction receipts, and reorg behavior. The current
+   Rust adapter implements only chain ID, `balanceOf(..., "latest")`, and treasury signer recovery.
+7. Exercise zero, stale, unavailable, wrong-chain, and invalid-attestation hard-failure cases.
+8. Exercise Wealth, starvation, survival spend, automatic spawn, revenue payout, and governance
+   application against test contracts and receipt-producing adapters.
+9. Enable production effects only after receipts can be independently reconciled.
+
+Until those steps are complete, local deterministic policy and durable intent creation can be
+tested, but the repository must continue to say that the UWU contract, signer, authenticated revenue
+source, persisted ballot adapter, payout/application executor, provisioner, and live peer-to-peer
+Council/Hermes transports are not committed.

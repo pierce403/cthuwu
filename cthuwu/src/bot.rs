@@ -305,9 +305,19 @@ impl UwUBot {
             }
         };
         let mut turn_guard = PublicTurnGuard::new(self.evolution.clone(), turn.token);
-        let token_observation = self
+        let token_observation = match self
             .observe_authenticated_wallet(authenticated_sender_address)
-            .await;
+            .await
+        {
+            Ok(observation) => observation,
+            Err(error) => {
+                warn!(%error, "required UWU balance observation is unavailable");
+                return Ok(
+                    "economic verification is unavailable, so this Tentacle refuses to operate until a current Base UWU balance can be confirmed."
+                        .to_owned(),
+                );
+            }
+        };
         if let Some(observation) = token_observation.as_ref()
             && observation_is_current(observation)
             && !observation.tier.meets(self.blockchain.minimum_tier)
@@ -417,14 +427,39 @@ impl UwUBot {
     async fn observe_authenticated_wallet(
         &self,
         authenticated_sender_address: Option<&str>,
-    ) -> Option<BalanceObservation> {
-        let token_eye = self.token_eye.as_ref()?;
-        let holder = Address::from_str(authenticated_sender_address?).ok()?;
+    ) -> Result<Option<BalanceObservation>> {
+        let economic_observation_required =
+            self.blockchain.observe_tokens && self.blockchain.token_contract.is_some();
+        let Some(token_eye) = self.token_eye.as_ref() else {
+            if economic_observation_required {
+                anyhow::bail!("configured token contract has no token observer");
+            }
+            return Ok(None);
+        };
+        let sender_address = authenticated_sender_address.context(
+            "configured token operation requires an SDK-authenticated EVM sender address",
+        )?;
+        let holder = Address::from_str(sender_address)
+            .context("authenticated EVM sender address is invalid")?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        Some(token_eye.observe(holder, now).await)
+        if economic_observation_required {
+            let observation = token_eye
+                .observe_required(holder, now)
+                .await
+                .context("current Base UWU balance is required")?;
+            return Ok(Some(BalanceObservation {
+                holder: observation.holder,
+                balance: Some(observation.balance),
+                observed_at: Some(observation.observed_at),
+                tier: observation.tier,
+                freshness: observation.freshness,
+                error: None,
+            }));
+        }
+        Ok(Some(token_eye.observe(holder, now).await))
     }
 
     async fn model_reply(&self, profile: &str, text: &str, policy: &ModelPolicy) -> String {
@@ -1292,7 +1327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kill_records_a_terminal_gate_without_executing_or_exiting() {
+    async fn kill_creates_a_binding_shutdown_action_without_running_operator_tools() {
         let root = tempfile::tempdir().unwrap();
         let tools = Arc::new(RecordingTools {
             calls: StdMutex::new(Vec::new()),
@@ -1309,14 +1344,14 @@ mod tests {
         );
 
         let killed = send(&bot, 0, OPERATOR_ID, "KILL").await;
-        assert!(killed.contains("DID NOT TERMINATE THE PROCESS"));
+        assert!(killed.contains("DURABLE SHUTDOWN ACTION"));
         let later = send(&bot, 1, OPERATOR_ID, "/exec true").await;
-        assert!(later.contains("NORMAL OPERATION REMAINS BLOCKED"));
+        assert!(later.contains("DEATH LIFECYCLE IS ACTIVE"));
         assert!(tools.calls.lock().unwrap().is_empty());
         assert!(
             send(&bot, 2, "aabbcc", "hello")
                 .await
-                .contains("still waking safely")
+                .contains("binding Death judgment")
         );
     }
 

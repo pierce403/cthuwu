@@ -1,10 +1,7 @@
-//! Deterministic, local token-weighted governance.
+//! Deterministic, binding token-weighted governance.
 //!
-//! This module consumes normalized observations and produces advisory
-//! governance outcomes. It has no network, key, transaction, command, process,
-//! filesystem, or operator-authorization surface. In particular, transferable
-//! UWU holdings can influence the closed governance subjects represented here,
-//! but can never authenticate an operator or grant operating-system authority.
+//! An approved result creates a mandatory application record. Application is tracked separately so
+//! tallying a vote never falsely claims that a configuration or on-chain transaction already ran.
 
 use crate::token_eye::{Address, ReputationTier};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -92,10 +89,7 @@ impl<'de> Deserialize<'de> for TokenProposalId {
     }
 }
 
-/// Closed subjects that token governance may influence.
-///
-/// There is deliberately no operator, shell, process, credential, or arbitrary
-/// execution subject in this enum.
+/// Governance domains that token holders can change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GovernanceSubject {
@@ -103,6 +97,9 @@ pub enum GovernanceSubject {
     CouncilPolicy,
     EconomicPolicy,
     SkillPropagationPriority,
+    LifecyclePolicy,
+    RevenueSharePolicy,
+    SpawnPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,6 +242,16 @@ pub enum GovernanceOutcome {
     NoDecisiveWeight,
 }
 
+/// Binding effect of a completed tally.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingGovernanceDisposition {
+    ApplyApprovedProposal,
+    PreserveCurrentPolicyAfterRejection,
+    PreserveCurrentPolicyWithoutQuorum,
+    PreserveCurrentPolicyWithoutDecisiveWeight,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct GovernanceResult {
@@ -257,6 +264,118 @@ pub struct GovernanceResult {
     pub approval_achieved_bps: u16,
     pub approval_required_bps: u16,
     pub outcome: GovernanceOutcome,
+    pub binding_disposition: BindingGovernanceDisposition,
+}
+
+impl GovernanceResult {
+    pub const fn requires_application(self) -> bool {
+        matches!(
+            self.binding_disposition,
+            BindingGovernanceDisposition::ApplyApprovedProposal
+        )
+    }
+
+    pub fn application_record(
+        self,
+        proposal_payload_hash: [u8; 32],
+        decided_at_unix_seconds: u64,
+    ) -> Result<GovernanceApplicationRecord, TokenGovernanceError> {
+        if !self.requires_application() {
+            return Err(TokenGovernanceError::OutcomeHasNoApplication);
+        }
+        if proposal_payload_hash == [0; 32] {
+            return Err(TokenGovernanceError::InvalidApplication(
+                "proposal payload hash cannot be zero",
+            ));
+        }
+        if decided_at_unix_seconds == 0 {
+            return Err(TokenGovernanceError::InvalidApplication(
+                "decision timestamp must be positive",
+            ));
+        }
+        Ok(GovernanceApplicationRecord {
+            proposal_id: self.proposal_id,
+            subject: self.subject,
+            proposal_payload_hash,
+            decided_at_unix_seconds,
+            progress: GovernanceApplicationProgress::Pending,
+        })
+    }
+}
+
+/// Application state for an approved binding decision. Only `Applied` means the target subsystem
+/// accepted the mandate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum GovernanceApplicationProgress {
+    Pending,
+    Applied {
+        applied_at_unix_seconds: u64,
+        resulting_configuration_hash: [u8; 32],
+    },
+    Failed {
+        failed_at_unix_seconds: u64,
+        error_code: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct GovernanceApplicationRecord {
+    pub proposal_id: TokenProposalId,
+    pub subject: GovernanceSubject,
+    pub proposal_payload_hash: [u8; 32],
+    pub decided_at_unix_seconds: u64,
+    pub progress: GovernanceApplicationProgress,
+}
+
+impl GovernanceApplicationRecord {
+    pub fn validate(self) -> Result<(), TokenGovernanceError> {
+        if self.proposal_payload_hash == [0; 32] {
+            return Err(TokenGovernanceError::InvalidApplication(
+                "proposal payload hash cannot be zero",
+            ));
+        }
+        if self.decided_at_unix_seconds == 0 {
+            return Err(TokenGovernanceError::InvalidApplication(
+                "decision timestamp must be positive",
+            ));
+        }
+        match self.progress {
+            GovernanceApplicationProgress::Pending => {}
+            GovernanceApplicationProgress::Applied {
+                applied_at_unix_seconds,
+                resulting_configuration_hash,
+            } => {
+                if applied_at_unix_seconds < self.decided_at_unix_seconds {
+                    return Err(TokenGovernanceError::InvalidApplication(
+                        "application predates its decision",
+                    ));
+                }
+                if resulting_configuration_hash == [0; 32] {
+                    return Err(TokenGovernanceError::InvalidApplication(
+                        "resulting configuration hash cannot be zero",
+                    ));
+                }
+            }
+            GovernanceApplicationProgress::Failed {
+                failed_at_unix_seconds,
+                error_code,
+            } => {
+                if failed_at_unix_seconds < self.decided_at_unix_seconds {
+                    return Err(TokenGovernanceError::InvalidApplication(
+                        "application failure predates its decision",
+                    ));
+                }
+                if error_code == 0 {
+                    return Err(TokenGovernanceError::InvalidApplication(
+                        "application failure code cannot be zero",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One deterministic local view of a proposal's token ballots.
@@ -432,6 +551,18 @@ impl TokenBallotBox {
         } else {
             GovernanceOutcome::Rejected
         };
+        let binding_disposition = match outcome {
+            GovernanceOutcome::Approved => BindingGovernanceDisposition::ApplyApprovedProposal,
+            GovernanceOutcome::Rejected => {
+                BindingGovernanceDisposition::PreserveCurrentPolicyAfterRejection
+            }
+            GovernanceOutcome::QuorumNotMet => {
+                BindingGovernanceDisposition::PreserveCurrentPolicyWithoutQuorum
+            }
+            GovernanceOutcome::NoDecisiveWeight => {
+                BindingGovernanceDisposition::PreserveCurrentPolicyWithoutDecisiveWeight
+            }
+        };
 
         GovernanceResult {
             proposal_id: self.proposal_id,
@@ -442,6 +573,7 @@ impl TokenBallotBox {
             approval_achieved_bps,
             approval_required_bps: self.policy.approval_bps,
             outcome,
+            binding_disposition,
         }
     }
 }
@@ -460,6 +592,8 @@ pub enum TokenGovernanceError {
         minimum: ReputationTier,
     },
     EligibleWeightExceeded,
+    OutcomeHasNoApplication,
+    InvalidApplication(&'static str),
 }
 
 impl fmt::Display for TokenGovernanceError {
@@ -482,6 +616,12 @@ impl fmt::Display for TokenGovernanceError {
             ),
             Self::EligibleWeightExceeded => {
                 formatter.write_str("ballots exceed the locally eligible normalized weight")
+            }
+            Self::OutcomeHasNoApplication => {
+                formatter.write_str("governance outcome has no binding application")
+            }
+            Self::InvalidApplication(reason) => {
+                write!(formatter, "invalid governance application: {reason}")
             }
         }
     }
@@ -602,6 +742,11 @@ mod tests {
         let result = ballots.result();
         assert_eq!(result.approval_achieved_bps, 6_666);
         assert_eq!(result.outcome, GovernanceOutcome::Approved);
+        assert_eq!(
+            result.binding_disposition,
+            BindingGovernanceDisposition::ApplyApprovedProposal
+        );
+        assert!(result.requires_application());
     }
 
     #[test]
@@ -717,5 +862,38 @@ mod tests {
         let after = ballots.result();
         assert!(after.quorum_met);
         assert_eq!(after.outcome, GovernanceOutcome::Approved);
+    }
+
+    #[test]
+    fn approved_vote_creates_pending_binding_application_not_fake_completion() {
+        let mut ballots = ballot_box(TokenGovernancePolicy::default(), 100);
+        ballots
+            .cast(address(1), ReputationTier::Whale, 100, BallotChoice::Yes)
+            .unwrap();
+        let result = ballots.result();
+        let application = result.application_record([7; 32], 1_700_000_000).unwrap();
+        assert_eq!(application.progress, GovernanceApplicationProgress::Pending);
+        application.validate().unwrap();
+
+        let applied = GovernanceApplicationRecord {
+            progress: GovernanceApplicationProgress::Applied {
+                applied_at_unix_seconds: 1_700_000_001,
+                resulting_configuration_hash: [8; 32],
+            },
+            ..application
+        };
+        applied.validate().unwrap();
+
+        let mut rejected = ballot_box(TokenGovernancePolicy::default(), 100);
+        rejected
+            .cast(address(2), ReputationTier::Acolyte, 100, BallotChoice::No)
+            .unwrap();
+        let rejected = rejected.result();
+        assert_eq!(rejected.outcome, GovernanceOutcome::Rejected);
+        assert!(!rejected.requires_application());
+        assert_eq!(
+            rejected.application_record([7; 32], 1_700_000_000),
+            Err(TokenGovernanceError::OutcomeHasNoApplication)
+        );
     }
 }

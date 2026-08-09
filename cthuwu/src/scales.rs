@@ -1,50 +1,47 @@
-//! Versioned local measurements and deterministic, advisory lifecycle judgments.
+//! Versioned local measurements and deterministic lifecycle judgments.
 //!
-//! Acolyte recruitment is only a local observation. It never creates Council contribution credit,
-//! changes governance weight, or grants a vote. Council adapters must apply their independent,
-//! acknowledgement-backed credit and one-Cthulhu-one-vote rules.
+//! Final judgments are execution-bearing. Verified node holdings are the primary Wealth input,
+//! stake controls propagation, and earned operator/recruitment rewards contribute to Growth.
 
 use crate::economics::{
-    RecordedTokenEconomics, TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot,
-    apply_score_adjustment,
+    EconomicObservationProvenance, MlmRevenueDistribution, RecordedTokenEconomics,
+    TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot, apply_score_adjustment,
 };
 use crate::personality::TentacleNature;
 use crate::storage::{ensure_private_directory, restrict_file, sync_directory};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 pub const METRICS_SCHEMA_VERSION: u32 = 1;
-pub const JUDGMENT_SCHEMA_VERSION: u32 = 1;
+pub const JUDGMENT_SCHEMA_VERSION: u32 = 2;
 pub const JUDGMENT_POLICY_SCHEMA_VERSION: u32 = 1;
-pub const EVOLUTION_HISTORY_SCHEMA_VERSION: u32 = 1;
+pub const EVOLUTION_HISTORY_SCHEMA_VERSION: u32 = 2;
+
+const LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION: u32 = 1;
+const LEGACY_ADVISORY_HISTORY_SCHEMA_VERSION: u32 = 1;
 
 /// Scores and weights are integer basis points so evaluation is deterministic.
 pub const SCORE_MAX: u16 = 10_000;
 pub const PROPAGATION_RIGHTS_MIN_SCORE: u16 = 8_000;
 pub const SURVIVAL_MIN_SCORE: u16 = 5_500;
 pub const STARVATION_WARNING_MIN_SCORE: u16 = 3_000;
-pub const DAILY_PROPAGATION_MIN_CONVERSATIONS: u32 = 8;
-pub const DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS: u32 = 4;
-pub const WEEKLY_PROPAGATION_MIN_CONVERSATIONS: u32 = 32;
-pub const WEEKLY_PROPAGATION_MIN_RETURNING_CONVERSATIONS: u32 = 16;
+pub const DAILY_PROPAGATION_MIN_CONVERSATIONS: u32 = 0;
+pub const DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS: u32 = 0;
+pub const WEEKLY_PROPAGATION_MIN_CONVERSATIONS: u32 = 0;
+pub const WEEKLY_PROPAGATION_MIN_RETURNING_CONVERSATIONS: u32 = 0;
 
-const MAX_EVENT_COUNT: u32 = 1_000_000;
 const MAX_CONVERSATION_DEPTH_SAMPLE: u32 = 1_000;
 const MAX_RESPONSE_TIME_MS_SAMPLE: u64 = 86_400_000;
-const MAX_NETWORK_CONTRIBUTION_POINTS: u64 = 1_000_000_000_000;
-const MAX_SIBLING_INFLUENCE_POINTS: u64 = 1_000_000_000_000;
-const MAX_REVENUE_MICRO_UNITS: u64 = 1_000_000_000_000_000;
-const MAX_NATURE_ADJUSTMENT_STRESS_EVENTS: u32 = 10_000;
 const STRESS_PENALTY_PER_EVENT: u16 = 100;
 const MAX_STRESS_PENALTY: u16 = 1_000;
 const MAX_METRICS_BYTES: u64 = 256 * 1024;
-const MAX_HISTORY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_HISTORY_LINE_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -87,10 +84,6 @@ pub struct EngagementMetrics {
 impl EngagementMetrics {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.conversations <= MAX_EVENT_COUNT,
-            "engagement conversation count exceeds its bound"
-        );
-        ensure!(
             self.returning_conversations <= self.conversations,
             "returning conversations cannot exceed all conversations"
         );
@@ -121,36 +114,23 @@ impl EngagementMetrics {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GrowthMetrics {
     pub children_spawned: u32,
-    /// A local observation only; this is not Council credit and carries no governance weight.
     pub acolytes_recruited: u32,
     pub network_contribution_points: u64,
-}
-
-impl GrowthMetrics {
-    fn validate(&self) -> Result<()> {
-        ensure!(
-            self.children_spawned <= MAX_EVENT_COUNT,
-            "children-spawned count exceeds its bound"
-        );
-        ensure!(
-            self.acolytes_recruited <= MAX_EVENT_COUNT,
-            "acolyte-recruitment count exceeds its bound"
-        );
-        ensure!(
-            self.network_contribution_points <= MAX_NETWORK_CONTRIBUTION_POINTS,
-            "network-contribution total exceeds its bound"
-        );
-        Ok(())
-    }
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub operator_reward_micro_units: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub recruitment_reward_micro_units: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WealthMetrics {
-    /// Abstract micro-units; the economic adapter defines the currency.
+    /// Gross economic revenue in configured micro-units.
     pub revenue_micro_units: u64,
     pub efficiency_samples: u32,
     pub efficiency_basis_points_total: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub parent_revenue_share_micro_units: u64,
 }
 
 impl WealthMetrics {
@@ -163,14 +143,6 @@ impl WealthMetrics {
     }
 
     fn validate(&self) -> Result<()> {
-        ensure!(
-            self.revenue_micro_units <= MAX_REVENUE_MICRO_UNITS,
-            "revenue total exceeds its bound"
-        );
-        ensure!(
-            self.efficiency_samples <= MAX_EVENT_COUNT,
-            "efficiency sample count exceeds its bound"
-        );
         ensure!(
             self.efficiency_basis_points_total
                 <= u64::from(self.efficiency_samples) * u64::from(SCORE_MAX),
@@ -187,25 +159,7 @@ pub struct InfluenceMetrics {
     pub sibling_influence_points: u64,
 }
 
-impl InfluenceMetrics {
-    fn validate(&self) -> Result<()> {
-        ensure!(
-            self.governance_participation <= MAX_EVENT_COUNT,
-            "governance-participation count exceeds its bound"
-        );
-        ensure!(
-            self.sibling_influence_points <= MAX_SIBLING_INFLUENCE_POINTS,
-            "sibling-influence total exceeds its bound"
-        );
-        Ok(())
-    }
-}
-
-/// Declares which locally observable scales are eligible to affect a judgment.
-///
-/// A disabled scale may still retain its raw score for operator visibility, but its normalized
-/// weight is always zero. This keeps unavailable adapters and locally prohibited dimensions from
-/// lowering or raising lifecycle outcomes.
+/// Declares which locally observable scales affect a judgment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScoredScaleAvailability {
@@ -318,6 +272,14 @@ impl TentacleMetrics {
     /// already-collected observations outcome-bearing retroactively.
     pub fn restrict_scored_scales(&mut self, availability: ScoredScaleAvailability) -> Result<()> {
         availability.validate(self.economic_layer_enabled())?;
+        if let Some(economics) = self.token_economics {
+            ensure!(
+                availability.wealth
+                    && (economics.snapshot.reward_basis_points == 0 || availability.growth)
+                    && (economics.snapshot.stake_basis_points == 0 || availability.influence),
+                "active token-economic scales cannot be disabled"
+            );
+        }
         ensure!(
             availability.is_restriction_of(self.scored_scale_availability),
             "scored-scale availability can only be restricted within an evaluation period"
@@ -356,7 +318,7 @@ impl TentacleMetrics {
         self.validate()
     }
 
-    /// Adds one bounded observation. Once the event cap is reached, later observations are ignored.
+    /// Adds one bounded observation. Counters saturate only at their storage type's natural limit.
     pub fn record_conversation(
         &mut self,
         conversation_depth: u32,
@@ -381,7 +343,7 @@ impl TentacleMetrics {
         response_time_ms: Option<u64>,
         token_bonus_basis_points: u16,
     ) {
-        if self.engagement.conversations == MAX_EVENT_COUNT {
+        if self.engagement.conversations == u32::MAX {
             return;
         }
         self.engagement.conversations += 1;
@@ -418,18 +380,15 @@ impl TentacleMetrics {
         self.growth.children_spawned = self
             .growth
             .children_spawned
-            .saturating_add(children_spawned)
-            .min(MAX_EVENT_COUNT);
+            .saturating_add(children_spawned);
         self.growth.acolytes_recruited = self
             .growth
             .acolytes_recruited
-            .saturating_add(acolytes_recruited)
-            .min(MAX_EVENT_COUNT);
+            .saturating_add(acolytes_recruited);
         self.growth.network_contribution_points = self
             .growth
             .network_contribution_points
-            .saturating_add(network_contribution_points)
-            .min(MAX_NETWORK_CONTRIBUTION_POINTS);
+            .saturating_add(network_contribution_points);
     }
 
     pub fn record_economic_result(
@@ -441,13 +400,12 @@ impl TentacleMetrics {
             .wealth
             .as_mut()
             .context("the optional economic layer is disabled")?;
-        if wealth.efficiency_samples == MAX_EVENT_COUNT {
+        if wealth.efficiency_samples == u32::MAX {
             return Ok(());
         }
         wealth.revenue_micro_units = wealth
             .revenue_micro_units
-            .saturating_add(revenue_micro_units)
-            .min(MAX_REVENUE_MICRO_UNITS);
+            .saturating_add(revenue_micro_units);
         wealth.efficiency_samples += 1;
         wealth.efficiency_basis_points_total = wealth
             .efficiency_basis_points_total
@@ -455,29 +413,71 @@ impl TentacleMetrics {
         Ok(())
     }
 
-    /// Records the latest bounded, node-level token snapshot for this period.
+    /// Records one conserved MLM revenue split. The child keeps its retained share while parent,
+    /// operator, and recruiter earnings become outcome-bearing Wealth/Growth observations.
+    pub fn record_mlm_distribution(&mut self, distribution: MlmRevenueDistribution) -> Result<()> {
+        distribution.validate()?;
+        let wealth = self
+            .wealth
+            .as_mut()
+            .context("the economic layer is disabled")?;
+        wealth.revenue_micro_units = wealth
+            .revenue_micro_units
+            .saturating_add(distribution.child_retained_micro_units);
+        wealth.parent_revenue_share_micro_units = wealth
+            .parent_revenue_share_micro_units
+            .saturating_add(distribution.parent_revenue_micro_units);
+        self.growth.operator_reward_micro_units = self
+            .growth
+            .operator_reward_micro_units
+            .saturating_add(distribution.operator_reward_micro_units);
+        self.growth.recruitment_reward_micro_units = self
+            .growth
+            .recruitment_reward_micro_units
+            .saturating_add(distribution.recruitment_reward_micro_units);
+        self.validate()?;
+        Ok(())
+    }
+
+    /// Rejects an unbound token snapshot before it can mutate lifecycle-bearing metrics.
     ///
-    /// This library API is reserved for an explicit Tentacle economics adapter. Public-user wallet
-    /// observations must use [`Self::record_conversation_with_token_bonus`] instead.
-    ///
-    /// A trustworthy balance enables Wealth. Positive stake or reward evidence additionally enables
-    /// Influence or Growth; a balance-only adapter never makes unavailable dimensions score as zero.
-    /// An unavailable or untrusted RPC observation remains visible for fallback diagnostics but has
-    /// no scoring or starvation effect. This API never imposes a stake requirement for starting a
-    /// Tentacle; propagation eligibility follows the explicitly recorded policy, whose default
-    /// minimum is zero.
+    /// Call [`Self::record_node_token_economic_observation`] with holder, contract, chain,
+    /// block/timestamp, and configuration provenance instead.
     pub fn record_token_economic_snapshot(
+        &mut self,
+        _snapshot: TokenEconomicSnapshot,
+        _policy: TokenEconomicPolicy,
+    ) -> Result<TokenEconomicEffects> {
+        bail!("node token economics require cryptographically bound observation provenance")
+    }
+
+    /// Records a verified, provenance-bound observation for this Tentacle's active economic
+    /// identity. Public user/acolyte holdings must remain entity-scoped and must not be passed here.
+    pub fn record_node_token_economic_observation(
         &mut self,
         snapshot: TokenEconomicSnapshot,
         policy: TokenEconomicPolicy,
+        provenance: EconomicObservationProvenance,
     ) -> Result<TokenEconomicEffects> {
-        let observation = RecordedTokenEconomics::new(snapshot, policy)?;
-        if observation.snapshot.trustworthy {
-            self.wealth.get_or_insert_default();
-            self.scored_scale_availability.wealth = true;
-            self.scored_scale_availability.growth = observation.snapshot.reward_basis_points > 0;
-            self.scored_scale_availability.influence = observation.snapshot.stake_basis_points > 0;
-        }
+        let observation =
+            RecordedTokenEconomics::new_with_provenance(snapshot, policy, provenance)?;
+        self.apply_token_economic_observation(observation)
+    }
+
+    fn apply_token_economic_observation(
+        &mut self,
+        observation: RecordedTokenEconomics,
+    ) -> Result<TokenEconomicEffects> {
+        self.wealth.get_or_insert_default();
+        // A verified zero is still evidence. Keep every economic dimension active so zero rewards
+        // or zero stake score honestly instead of silently redistributing their Nature weight to
+        // the remaining scales.
+        self.scored_scale_availability = ScoredScaleAvailability {
+            engagement: true,
+            growth: true,
+            wealth: true,
+            influence: true,
+        };
         let effects = observation.effects;
         self.token_economics = Some(observation);
         self.validate()?;
@@ -492,21 +492,17 @@ impl TentacleMetrics {
         self.influence.governance_participation = self
             .influence
             .governance_participation
-            .saturating_add(governance_participation)
-            .min(MAX_EVENT_COUNT);
+            .saturating_add(governance_participation);
         self.influence.sibling_influence_points = self
             .influence
             .sibling_influence_points
-            .saturating_add(sibling_influence_points)
-            .min(MAX_SIBLING_INFLUENCE_POINTS);
+            .saturating_add(sibling_influence_points);
     }
 
     /// Records one successful operator `/adjust`; rejected adjustments must not call this method.
     pub fn record_nature_adjustment_stress(&mut self) {
-        self.nature_adjustment_stress_events = self
-            .nature_adjustment_stress_events
-            .saturating_add(1)
-            .min(MAX_NATURE_ADJUSTMENT_STRESS_EVENTS);
+        self.nature_adjustment_stress_events =
+            self.nature_adjustment_stress_events.saturating_add(1);
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -542,31 +538,23 @@ impl TentacleMetrics {
             "metrics evaluation period has invalid bounds"
         );
         self.engagement.validate()?;
-        self.growth.validate()?;
         if let Some(wealth) = &self.wealth {
             wealth.validate()?;
         }
-        self.influence.validate()?;
         self.scored_scale_availability
             .validate(self.economic_layer_enabled())?;
         if let Some(economics) = self.token_economics {
             economics.validate()?;
-            if economics.snapshot.trustworthy {
-                ensure!(
-                    self.economic_layer_enabled()
-                        && self.scored_scale_availability.wealth
-                        && (economics.snapshot.reward_basis_points == 0
-                            || self.scored_scale_availability.growth)
-                        && (economics.snapshot.stake_basis_points == 0
-                            || self.scored_scale_availability.influence),
-                    "trustworthy token economics must enable every observed economic scale"
-                );
-            }
+            ensure!(
+                self.economic_layer_enabled()
+                    && self.scored_scale_availability.wealth
+                    && (economics.snapshot.reward_basis_points == 0
+                        || self.scored_scale_availability.growth)
+                    && (economics.snapshot.stake_basis_points == 0
+                        || self.scored_scale_availability.influence),
+                "token economics must enable every observed economic scale"
+            );
         }
-        ensure!(
-            self.nature_adjustment_stress_events <= MAX_NATURE_ADJUSTMENT_STRESS_EVENTS,
-            "Nature-adjustment stress count exceeds its bound"
-        );
         Ok(())
     }
 
@@ -582,8 +570,7 @@ impl TentacleMetrics {
         )
     }
 
-    /// Returns a clearly labeled, non-actionable view of an evaluation period still in progress.
-    /// Authenticated operator routing remains an integration responsibility.
+    /// Returns a clearly labeled observation of an evaluation period still in progress.
     pub fn evaluate_snapshot(
         &self,
         nature: &TentacleNature,
@@ -654,6 +641,13 @@ impl TentacleMetrics {
                 "a partial snapshot must fall within its open evaluation period"
             ),
         }
+        ensure!(
+            !self.economic_layer_enabled()
+                || self
+                    .token_economics
+                    .is_some_and(|economics| economics.provenance.is_some()),
+            "economic evaluation blocked: provenance-bound token data is missing"
+        );
 
         let weights = ScaleWeights::from_nature_with_availability(
             nature,
@@ -662,12 +656,9 @@ impl TentacleMetrics {
         )?;
         let scores = score_metrics(self, &policy.targets, weights)?;
         let propagation_evidence = PropagationEvidence::from_metrics(self, &policy);
-        let economic_starvation_relief_basis_points = self
-            .token_economics
-            .filter(|economics| economics.snapshot.trustworthy)
-            .map_or(0, |economics| {
-                economics.effects.starvation_relief_basis_points
-            });
+        let economic_starvation_relief_basis_points = self.token_economics.map_or(0, |economics| {
+            economics.effects.starvation_relief_basis_points
+        });
         let score_outcome = policy.thresholds.classify_with_starvation_relief(
             scores.total,
             economic_starvation_relief_basis_points,
@@ -695,10 +686,8 @@ impl TentacleMetrics {
             economic_starvation_relief_basis_points,
             outcome,
             execution: match evaluation_status {
-                EvaluationStatus::Final => {
-                    DecisionExecution::AuthenticatedOperatorConfirmationRequired
-                }
-                EvaluationStatus::PartialSnapshot => DecisionExecution::AdvisorySnapshotOnly,
+                EvaluationStatus::Final => DecisionExecution::AutomaticLifecycleActionRequired,
+                EvaluationStatus::PartialSnapshot => DecisionExecution::PartialObservationOnly,
             },
         })
     }
@@ -890,14 +879,7 @@ impl JudgmentPolicy {
         self.targets.validate()?;
         self.thresholds.validate()?;
         ensure!(
-            self.propagation_min_conversations > 0
-                && self.propagation_min_conversations <= MAX_EVENT_COUNT,
-            "propagation conversation evidence floor is invalid"
-        );
-        ensure!(
-            self.propagation_min_returning_conversations > 0
-                && self.propagation_min_returning_conversations
-                    <= self.propagation_min_conversations,
+            self.propagation_min_returning_conversations <= self.propagation_min_conversations,
             "propagation returning-conversation evidence floor is invalid"
         );
         Ok(())
@@ -1096,12 +1078,15 @@ pub enum JudgmentOutcome {
     Death,
 }
 
-/// The scales only recommend outcomes. Applying any outcome belongs to an authenticated operator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionExecution {
+    /// Legacy schema-v1 partial result. It remains loadable but can never execute lifecycle work.
     AdvisorySnapshotOnly,
+    /// Legacy schema-v1 final result. It remains loadable but can never execute lifecycle work.
     AuthenticatedOperatorConfirmationRequired,
+    PartialObservationOnly,
+    AutomaticLifecycleActionRequired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1126,14 +1111,11 @@ impl PropagationEvidence {
         let observed_returning_conversations = metrics.engagement.returning_conversations;
         let required_conversations = policy.propagation_min_conversations;
         let required_returning_conversations = policy.propagation_min_returning_conversations;
-        let (observed_stake_basis_points, required_stake_basis_points, stake_eligible) =
-            metrics.token_economics.map_or((0, 0, true), |economics| {
+        let (observed_stake_basis_points, required_stake_basis_points, stake_eligible) = metrics
+            .token_economics
+            .map_or((0, 0, !metrics.economic_layer_enabled()), |economics| {
                 (
-                    if economics.snapshot.trustworthy {
-                        economics.snapshot.stake_basis_points
-                    } else {
-                        0
-                    },
+                    economics.snapshot.stake_basis_points,
                     economics.policy.propagation_minimum_stake_basis_points,
                     economics.effects.propagation_stake_eligible,
                 )
@@ -1211,7 +1193,10 @@ pub struct Judgment {
 impl Judgment {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == JUDGMENT_SCHEMA_VERSION,
+            matches!(
+                self.schema_version,
+                LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION | JUDGMENT_SCHEMA_VERSION
+            ),
             "unsupported judgment schema version {}",
             self.schema_version
         );
@@ -1225,28 +1210,53 @@ impl Judgment {
                 == Some(self.period_ends_at_unix_seconds),
             "judgment evaluation period has invalid bounds"
         );
-        match self.evaluation_status {
-            EvaluationStatus::Final => {
+        match (self.schema_version, self.evaluation_status) {
+            (JUDGMENT_SCHEMA_VERSION, EvaluationStatus::Final) => {
                 ensure!(
                     self.evaluated_at_unix_seconds >= self.period_ends_at_unix_seconds,
                     "final judgment predates the end of its evaluation period"
                 );
                 ensure!(
-                    self.execution == DecisionExecution::AuthenticatedOperatorConfirmationRequired,
-                    "final judgment must require authenticated operator confirmation"
+                    self.execution == DecisionExecution::AutomaticLifecycleActionRequired,
+                    "final judgment must require automatic lifecycle execution"
                 );
             }
-            EvaluationStatus::PartialSnapshot => {
+            (JUDGMENT_SCHEMA_VERSION, EvaluationStatus::PartialSnapshot) => {
                 ensure!(
                     (self.period_started_at_unix_seconds..self.period_ends_at_unix_seconds)
                         .contains(&self.evaluated_at_unix_seconds),
                     "partial judgment must fall within its open evaluation period"
                 );
                 ensure!(
-                    self.execution == DecisionExecution::AdvisorySnapshotOnly,
-                    "partial judgment must remain advisory"
+                    self.execution == DecisionExecution::PartialObservationOnly,
+                    "partial judgment cannot execute before the period closes"
                 );
             }
+            (LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION, EvaluationStatus::Final) => {
+                ensure!(
+                    self.evaluated_at_unix_seconds >= self.period_ends_at_unix_seconds,
+                    "legacy final judgment predates the end of its evaluation period"
+                );
+                ensure!(
+                    self.execution == DecisionExecution::AuthenticatedOperatorConfirmationRequired,
+                    "legacy final judgment must preserve its operator-confirmation disposition"
+                );
+            }
+            (LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION, EvaluationStatus::PartialSnapshot) => {
+                ensure!(
+                    (self.period_started_at_unix_seconds..self.period_ends_at_unix_seconds)
+                        .contains(&self.evaluated_at_unix_seconds),
+                    "legacy partial judgment must fall within its open evaluation period"
+                );
+                ensure!(
+                    self.execution == DecisionExecution::AdvisorySnapshotOnly,
+                    "legacy partial judgment must preserve its observation-only disposition"
+                );
+            }
+            _ => bail!(
+                "unsupported judgment schema version {}",
+                self.schema_version
+            ),
         }
         ensure!(
             self.policy.period == self.period,
@@ -1277,8 +1287,11 @@ impl Judgment {
         Ok(())
     }
 
-    pub fn recommends_death(&self) -> bool {
-        self.evaluation_status == EvaluationStatus::Final && self.outcome == JudgmentOutcome::Death
+    pub fn requires_death_execution(&self) -> bool {
+        self.schema_version == JUDGMENT_SCHEMA_VERSION
+            && self.execution == DecisionExecution::AutomaticLifecycleActionRequired
+            && self.evaluation_status == EvaluationStatus::Final
+            && self.outcome == JudgmentOutcome::Death
     }
 }
 
@@ -1288,10 +1301,7 @@ fn score_metrics(
     weights: ScaleWeights,
 ) -> Result<ScaleScores> {
     targets.validate()?;
-    let economic_effects = metrics
-        .token_economics
-        .filter(|economics| economics.snapshot.trustworthy)
-        .map(|economics| economics.effects);
+    let economic_effects = metrics.token_economics.map(|economics| economics.effects);
     let engagement = apply_score_adjustment(
         score_engagement(&metrics.engagement, targets)?,
         economic_effects.map_or(0, |effects| effects.engagement_adjustment_basis_points),
@@ -1300,16 +1310,12 @@ fn score_metrics(
         score_growth(&metrics.growth, targets),
         economic_effects.map_or(0, |effects| effects.growth_adjustment_basis_points),
     )?;
-    let wealth = metrics
-        .wealth
-        .as_ref()
-        .map(|wealth| {
-            apply_score_adjustment(
-                score_wealth(wealth, targets),
-                economic_effects.map_or(0, |effects| effects.wealth_adjustment_basis_points),
-            )
+    let wealth = metrics.wealth.as_ref().map(|wealth| {
+        let operational_score = score_wealth(wealth, targets);
+        economic_effects.map_or(operational_score, |effects| {
+            primary_token_wealth_score(effects.wealth_adjustment_basis_points, operational_score)
         })
-        .transpose()?;
+    });
     let influence = apply_score_adjustment(
         score_influence(&metrics.influence, targets),
         economic_effects.map_or(0, |effects| effects.influence_adjustment_basis_points),
@@ -1365,28 +1371,34 @@ fn score_engagement(metrics: &EngagementMetrics, targets: &MetricTargets) -> Res
 }
 
 fn score_growth(metrics: &GrowthMetrics, targets: &MetricTargets) -> u16 {
+    let reward_score = ratio_score(
+        u128::from(metrics.operator_reward_micro_units)
+            + u128::from(metrics.recruitment_reward_micro_units),
+        u128::from(targets.revenue_micro_units),
+    );
     component_score([
         (
             ratio_score(
                 u128::from(metrics.children_spawned),
                 u128::from(targets.children_spawned),
             ),
-            3_000,
+            2_500,
         ),
         (
             ratio_score(
                 u128::from(metrics.acolytes_recruited),
                 u128::from(targets.acolytes_recruited),
             ),
-            3_000,
+            2_000,
         ),
         (
             ratio_score(
                 u128::from(metrics.network_contribution_points),
                 u128::from(targets.network_contribution_points),
             ),
-            4_000,
+            2_500,
         ),
+        (reward_score, 3_000),
     ])
 }
 
@@ -1394,7 +1406,8 @@ fn score_wealth(metrics: &WealthMetrics, targets: &MetricTargets) -> u16 {
     component_score([
         (
             ratio_score(
-                u128::from(metrics.revenue_micro_units),
+                u128::from(metrics.revenue_micro_units)
+                    + u128::from(metrics.parent_revenue_share_micro_units),
                 u128::from(targets.revenue_micro_units),
             ),
             6_000,
@@ -1407,6 +1420,15 @@ fn score_wealth(metrics: &WealthMetrics, targets: &MetricTargets) -> u16 {
             4_000,
         ),
     ])
+}
+
+/// Verified token holdings are eighty percent of Wealth; operational revenue/efficiency is twenty
+/// percent. This makes holdings the primary input without discarding productive economic activity.
+fn primary_token_wealth_score(token_balance_score: u16, operational_score: u16) -> u16 {
+    let weighted = u32::from(token_balance_score) * 8_000 + u32::from(operational_score) * 2_000;
+    u16::try_from((weighted + 5_000) / 10_000)
+        .unwrap_or(SCORE_MAX)
+        .min(SCORE_MAX)
 }
 
 fn score_influence(metrics: &InfluenceMetrics, targets: &MetricTargets) -> u16 {
@@ -1475,7 +1497,8 @@ fn component_score<const N: usize>(parts: [(u16, u16); N]) -> u16 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvolutionHistoryRecord {
     pub schema_version: u32,
-    /// Stable authorization/audit identifier. A propagation judgment may be consumed only once.
+    /// Stable authorization/audit identifier. Each child plan binds this ID to prevent replay of
+    /// the same child; an economically valid propagation judgment may authorize distinct children.
     pub judgment_id: String,
     pub nature_id: String,
     pub nature_fingerprint: String,
@@ -1523,9 +1546,19 @@ impl EvolutionHistoryRecord {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == EVOLUTION_HISTORY_SCHEMA_VERSION,
+            matches!(
+                self.schema_version,
+                LEGACY_ADVISORY_HISTORY_SCHEMA_VERSION | EVOLUTION_HISTORY_SCHEMA_VERSION
+            ),
             "unsupported evolution-history schema version {}",
             self.schema_version
+        );
+        ensure!(
+            (self.schema_version == EVOLUTION_HISTORY_SCHEMA_VERSION
+                && self.judgment.schema_version == JUDGMENT_SCHEMA_VERSION)
+                || (self.schema_version == LEGACY_ADVISORY_HISTORY_SCHEMA_VERSION
+                    && self.judgment.schema_version == LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION),
+            "evolution-history and judgment schema generations do not match"
         );
         ensure!(
             self.nature_id.len() == 32
@@ -1577,6 +1610,16 @@ impl EvolutionHistoryRecord {
             self.metrics.economic_layer_enabled() == self.judgment.scores.wealth.is_some(),
             "evolution-history metrics and judgment disagree about the economic layer"
         );
+        if self.schema_version == EVOLUTION_HISTORY_SCHEMA_VERSION {
+            ensure!(
+                !self.metrics.economic_layer_enabled()
+                    || self
+                        .metrics
+                        .token_economics
+                        .is_some_and(|economics| economics.provenance.is_some()),
+                "economic evolution history requires provenance-bound node data"
+            );
+        }
         ensure!(
             self.metrics.scored_scale_availability == self.judgment.scored_scale_availability,
             "evolution-history metrics and judgment disagree about scored-scale availability"
@@ -1594,25 +1637,21 @@ impl EvolutionHistoryRecord {
         let expected_economics = self.metrics.token_economics;
         ensure!(
             self.judgment.economic_starvation_relief_basis_points
-                == expected_economics
-                    .filter(|economics| economics.snapshot.trustworthy)
-                    .map_or(0, |economics| {
-                        economics.effects.starvation_relief_basis_points
-                    }),
+                == expected_economics.map_or(0, |economics| {
+                    economics.effects.starvation_relief_basis_points
+                }),
             "evolution-history metrics and judgment disagree about economic starvation relief"
         );
-        let (observed_stake, required_stake, stake_eligible) =
-            expected_economics.map_or((0, 0, true), |economics| {
+        let (observed_stake, required_stake, stake_eligible) = expected_economics.map_or(
+            (0, 0, !self.metrics.economic_layer_enabled()),
+            |economics| {
                 (
-                    if economics.snapshot.trustworthy {
-                        economics.snapshot.stake_basis_points
-                    } else {
-                        0
-                    },
+                    economics.snapshot.stake_basis_points,
                     economics.policy.propagation_minimum_stake_basis_points,
                     economics.effects.propagation_stake_eligible,
                 )
-            });
+            },
+        );
         ensure!(
             self.judgment
                 .propagation_evidence
@@ -1633,6 +1672,16 @@ impl EvolutionHistoryRecord {
             "evolution-history Nature binding is inconsistent"
         );
         Ok(())
+    }
+
+    /// Only schema-v2 records created under the autonomous policy can trigger lifecycle effects.
+    pub const fn authorizes_automatic_lifecycle(&self) -> bool {
+        self.schema_version == EVOLUTION_HISTORY_SCHEMA_VERSION
+            && self.judgment.schema_version == JUDGMENT_SCHEMA_VERSION
+            && matches!(
+                self.judgment.execution,
+                DecisionExecution::AutomaticLifecycleActionRequired
+            )
     }
 
     fn compute_judgment_id(&self) -> Result<String> {
@@ -1663,6 +1712,91 @@ pub struct ScalesStore {
     state_directory: PathBuf,
     metrics_path: PathBuf,
     history_path: PathBuf,
+}
+
+/// A disk-backed index built while validating the complete history stream.
+///
+/// Production startup uses this catalog so history growth does not require retaining every full
+/// judgment in heap memory. The temporary owner-only index is deleted when the catalog is dropped.
+pub struct ValidatedHistoryCatalog {
+    directory: TempDir,
+    last: Option<EvolutionHistoryRecord>,
+    record_count: u64,
+}
+
+impl ValidatedHistoryCatalog {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            directory: tempfile::tempdir().context("creating temporary judgment-history index")?,
+            last: None,
+            record_count: 0,
+        })
+    }
+
+    pub(crate) fn insert(&mut self, record: &EvolutionHistoryRecord) -> Result<()> {
+        let path = self.directory.path().join(&record.judgment_id);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::anyhow!("evolution history contains a duplicate judgment ID")
+            } else {
+                anyhow::Error::from(error)
+            }
+        })?;
+        serde_json::to_writer(&mut file, record)?;
+        self.last = Some(record.clone());
+        self.record_count = self
+            .record_count
+            .checked_add(1)
+            .context("evolution history record count overflowed")?;
+        Ok(())
+    }
+
+    pub fn last(&self) -> Option<&EvolutionHistoryRecord> {
+        self.last.as_ref()
+    }
+
+    pub const fn record_count(&self) -> u64 {
+        self.record_count
+    }
+
+    pub fn get(&self, judgment_id: &str) -> Result<Option<EvolutionHistoryRecord>> {
+        ensure!(
+            judgment_id.len() == 64
+                && judgment_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "history lookup judgment ID must be lowercase SHA-256 hex"
+        );
+        let path = self.directory.path().join(judgment_id);
+        let mut file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| "opening indexed judgment record"),
+        };
+        let mut encoded = Vec::new();
+        Read::by_ref(&mut file)
+            .take(MAX_HISTORY_LINE_BYTES as u64 + 1)
+            .read_to_end(&mut encoded)?;
+        ensure!(
+            encoded.len() <= MAX_HISTORY_LINE_BYTES,
+            "indexed evolution-history record exceeds its line bound"
+        );
+        let record: EvolutionHistoryRecord =
+            serde_json::from_slice(&encoded).context("indexed judgment record is invalid JSON")?;
+        record.validate()?;
+        ensure!(
+            record.judgment_id == judgment_id,
+            "indexed judgment record identity mismatch"
+        );
+        Ok(Some(record))
+    }
 }
 
 impl ScalesStore {
@@ -1755,51 +1889,44 @@ impl ScalesStore {
     pub fn append_history(&self, record: &EvolutionHistoryRecord) -> Result<()> {
         record.validate()?;
         reject_symlink_or_non_file(&self.history_path)?;
-        let (mut journal, existing_records) =
-            if let Some(metadata) = checked_file_metadata(&self.history_path)? {
-                ensure!(
-                    metadata.len() <= MAX_HISTORY_BYTES,
-                    "evolution history exceeds its storage bound"
-                );
-                assert_owner_only(&metadata, "evolution history")?;
-                let mut file = open_read_no_follow(&self.history_path)?;
-                let mut existing = Vec::with_capacity(metadata.len() as usize);
-                Read::take(&mut file, MAX_HISTORY_BYTES + 1).read_to_end(&mut existing)?;
-                ensure!(
-                    existing.len() as u64 <= MAX_HISTORY_BYTES,
-                    "evolution history exceeds its storage bound"
-                );
-                ensure!(
-                    existing.is_empty() || existing.last() == Some(&b'\n'),
-                    "evolution history ends with an incomplete record"
-                );
-                // Authenticate every existing logical record before carrying it into the replacement.
-                let existing_records = self.load_history()?;
-                (existing, existing_records)
-            } else {
-                (Vec::new(), Vec::new())
-            };
-
+        let mut temporary = NamedTempFile::new_in(&self.state_directory)?;
+        restrict_file(temporary.as_file(), "temporary evolution history")?;
+        let mut catalog = ValidatedHistoryCatalog::new()?;
         let mut already_present = false;
-        for existing in &existing_records {
-            if existing.has_same_period_key(record) {
-                ensure!(
-                    existing.judgment_id == record.judgment_id && existing == record,
-                    "evolution history conflicts with an existing judgment for the same Nature period"
-                );
-                already_present = true;
-            }
-        }
+        let summary = if let Some(metadata) = checked_file_metadata(&self.history_path)? {
+            assert_owner_only(&metadata, "evolution history")?;
+            let file = open_read_no_follow(&self.history_path)
+                .with_context(|| format!("opening {}", self.history_path.display()))?;
+            let opened_metadata = file.metadata()?;
+            ensure!(
+                opened_metadata.is_file(),
+                "evolution history must be a regular file"
+            );
+            assert_owner_only(&opened_metadata, "evolution history")?;
+            let mut reader = BufReader::new(file);
+            scan_history_records(&mut reader, Some(&mut temporary), |existing| {
+                catalog.insert(existing)?;
+                if existing.has_same_period_key(record) {
+                    ensure!(
+                        existing.judgment_id == record.judgment_id && existing == record,
+                        "evolution history conflicts with an existing judgment for the same Nature period"
+                    );
+                    already_present = true;
+                }
+                Ok(())
+            })?
+        } else {
+            HistoryScanSummary::default()
+        };
+
         if already_present {
-            return Ok(());
+            return sync_directory(&self.state_directory);
         }
         ensure!(
-            existing_records
-                .iter()
-                .all(|existing| existing.judgment_id != record.judgment_id),
+            catalog.get(&record.judgment_id)?.is_none(),
             "evolution history reuses a judgment ID for another period"
         );
-        if let Some(previous) = existing_records.last() {
+        if let Some(previous) = summary.last.as_ref() {
             ensure!(
                 record.metrics.period_started_at_unix_seconds
                     >= previous.metrics.period_ends_at_unix_seconds,
@@ -1814,33 +1941,21 @@ impl ScalesStore {
             "evolution-history record exceeds its line bound"
         );
 
-        ensure!(
-            journal
-                .len()
-                .checked_add(encoded.len())
-                .is_some_and(|total| total as u64 <= MAX_HISTORY_BYTES),
-            "evolution history exceeds its storage bound"
-        );
-        journal.extend_from_slice(&encoded);
-        let mut temporary = NamedTempFile::new_in(&self.state_directory)?;
-        restrict_file(temporary.as_file(), "temporary evolution history")?;
-        temporary.write_all(&journal)?;
+        temporary.write_all(&encoded)?;
         temporary.as_file().sync_all()?;
+        reject_symlink_or_non_file(&self.history_path)?;
         temporary
             .persist(&self.history_path)
             .map_err(|error| error.error)?;
         sync_directory(&self.state_directory)
     }
 
+    #[cfg(test)]
     pub fn load_history(&self) -> Result<Vec<EvolutionHistoryRecord>> {
         let metadata = match checked_file_metadata(&self.history_path)? {
             Some(metadata) => metadata,
             None => return Ok(Vec::new()),
         };
-        ensure!(
-            metadata.len() <= MAX_HISTORY_BYTES,
-            "evolution history exceeds its storage bound"
-        );
         assert_owner_only(&metadata, "evolution history")?;
         let file = open_read_no_follow(&self.history_path)
             .with_context(|| format!("opening {}", self.history_path.display()))?;
@@ -1850,50 +1965,97 @@ impl ScalesStore {
             "evolution history must be a regular file"
         );
         assert_owner_only(&opened_metadata, "evolution history")?;
-        let mut encoded = Vec::with_capacity(metadata.len() as usize);
-        file.take(MAX_HISTORY_BYTES + 1).read_to_end(&mut encoded)?;
-        ensure!(
-            encoded.len() as u64 <= MAX_HISTORY_BYTES,
-            "evolution history exceeds its storage bound"
-        );
-        if encoded.is_empty() {
-            return Ok(Vec::new());
-        }
-        ensure!(
-            encoded.last() == Some(&b'\n'),
-            "evolution history ends with an incomplete record"
-        );
-
+        let mut reader = BufReader::new(file);
         let mut records = Vec::new();
         let mut judgment_ids = BTreeSet::new();
-        let mut previous_period_end = None;
-        for line in encoded[..encoded.len() - 1].split(|byte| *byte == b'\n') {
-            ensure!(
-                !line.is_empty(),
-                "evolution history contains an empty record"
-            );
-            ensure!(
-                line.len() < MAX_HISTORY_LINE_BYTES,
-                "evolution-history record exceeds its line bound"
-            );
-            let record: EvolutionHistoryRecord =
-                serde_json::from_slice(line).context("evolution history contains invalid JSON")?;
-            record.validate()?;
+        scan_history_records(&mut reader, None, |record| {
             ensure!(
                 judgment_ids.insert(record.judgment_id.clone()),
                 "evolution history contains a duplicate judgment ID"
             );
-            if let Some(previous_period_end) = previous_period_end {
-                ensure!(
-                    record.metrics.period_started_at_unix_seconds >= previous_period_end,
-                    "evolution history periods are reordered or overlapping"
-                );
-            }
-            previous_period_end = Some(record.metrics.period_ends_at_unix_seconds);
-            records.push(record);
-        }
+            records.push(record.clone());
+            Ok(())
+        })?;
         Ok(records)
     }
+
+    /// Validates the complete stream into an owner-only disk-backed lookup catalog.
+    pub fn history_catalog(&self) -> Result<ValidatedHistoryCatalog> {
+        let metadata = match checked_file_metadata(&self.history_path)? {
+            Some(metadata) => metadata,
+            None => return ValidatedHistoryCatalog::new(),
+        };
+        assert_owner_only(&metadata, "evolution history")?;
+        let file = open_read_no_follow(&self.history_path)
+            .with_context(|| format!("opening {}", self.history_path.display()))?;
+        let opened_metadata = file.metadata()?;
+        ensure!(
+            opened_metadata.is_file(),
+            "evolution history must be a regular file"
+        );
+        assert_owner_only(&opened_metadata, "evolution history")?;
+        let mut reader = BufReader::new(file);
+        let mut catalog = ValidatedHistoryCatalog::new()?;
+        scan_history_records(&mut reader, None, |record| catalog.insert(record))?;
+        Ok(catalog)
+    }
+}
+
+#[derive(Default)]
+struct HistoryScanSummary {
+    last: Option<EvolutionHistoryRecord>,
+}
+
+fn scan_history_records<R, F>(
+    reader: &mut R,
+    mut verified_copy: Option<&mut dyn Write>,
+    mut visit: F,
+) -> Result<HistoryScanSummary>
+where
+    R: BufRead,
+    F: FnMut(&EvolutionHistoryRecord) -> Result<()>,
+{
+    let mut summary = HistoryScanSummary::default();
+    let mut previous_period_end = None;
+    let mut encoded_line = Vec::new();
+
+    loop {
+        encoded_line.clear();
+        let mut bounded_line = Read::by_ref(reader).take((MAX_HISTORY_LINE_BYTES + 1) as u64);
+        let bytes_read = bounded_line.read_until(b'\n', &mut encoded_line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        ensure!(
+            encoded_line.len() <= MAX_HISTORY_LINE_BYTES,
+            "evolution-history record exceeds its line bound"
+        );
+        ensure!(
+            encoded_line.last() == Some(&b'\n'),
+            "evolution history ends with an incomplete record"
+        );
+        let line = &encoded_line[..encoded_line.len() - 1];
+        ensure!(
+            !line.is_empty(),
+            "evolution history contains an empty record"
+        );
+        let record: EvolutionHistoryRecord =
+            serde_json::from_slice(line).context("evolution history contains invalid JSON")?;
+        record.validate()?;
+        if let Some(previous_period_end) = previous_period_end {
+            ensure!(
+                record.metrics.period_started_at_unix_seconds >= previous_period_end,
+                "evolution history periods are reordered or overlapping"
+            );
+        }
+        previous_period_end = Some(record.metrics.period_ends_at_unix_seconds);
+        visit(&record)?;
+        if let Some(writer) = verified_copy.as_mut() {
+            writer.write_all(&encoded_line)?;
+        }
+        summary.last = Some(record);
+    }
+    Ok(summary)
 }
 
 fn reject_symlink_or_non_file(path: &Path) -> Result<()> {
@@ -1996,6 +2158,18 @@ mod tests {
         complete_metrics_for(&nature(25, 25, 25, 25), economic_layer_enabled)
     }
 
+    fn active_provenance() -> EconomicObservationProvenance {
+        EconomicObservationProvenance::base(
+            [1; 20],
+            crate::economics::EconomicHolderRole::TentacleTreasury,
+            [2; 20],
+            1_700_000_000,
+            None,
+            [3; 32],
+        )
+        .unwrap()
+    }
+
     fn complete_metrics_for(
         candidate: &TentacleNature,
         economic_layer_enabled: bool,
@@ -2009,7 +2183,7 @@ mod tests {
         )
         .unwrap();
         let targets = MetricTargets::for_period(EvaluationPeriod::Daily);
-        for _ in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
+        for _ in 0..1 {
             metrics.record_conversation(
                 targets.average_conversation_depth,
                 true,
@@ -2026,6 +2200,18 @@ mod tests {
                 .record_economic_result(
                     targets.revenue_micro_units,
                     targets.efficiency_basis_points,
+                )
+                .unwrap();
+            metrics
+                .record_node_token_economic_observation(
+                    TokenEconomicSnapshot {
+                        balance_basis_points: SCORE_MAX,
+                        stake_basis_points: SCORE_MAX,
+                        reward_basis_points: SCORE_MAX,
+                        trustworthy: true,
+                    },
+                    TokenEconomicPolicy::default(),
+                    active_provenance(),
                 )
                 .unwrap();
         }
@@ -2063,7 +2249,19 @@ mod tests {
     #[test]
     fn unavailable_scales_are_zero_weighted_and_active_weights_are_renormalized() {
         let candidate = nature(10, 80, 100, 30);
-        let mut metrics = complete_metrics_for(&candidate, true);
+        let mut active_economics = complete_metrics_for(&candidate, true);
+        assert!(
+            active_economics
+                .restrict_scored_scales(ScoredScaleAvailability {
+                    engagement: true,
+                    growth: false,
+                    wealth: false,
+                    influence: true,
+                })
+                .is_err()
+        );
+
+        let mut metrics = complete_metrics_for(&candidate, false);
         metrics
             .restrict_scored_scales(ScoredScaleAvailability {
                 engagement: true,
@@ -2081,8 +2279,8 @@ mod tests {
         assert_eq!(judgment.weights.wealth, 0);
         assert_eq!(judgment.weights.influence, 7_500);
         assert_eq!(judgment.weights.total(), SCORE_MAX);
-        assert_eq!(judgment.scores.growth, SCORE_MAX);
-        assert_eq!(judgment.scores.wealth, Some(SCORE_MAX));
+        assert_eq!(judgment.scores.growth, 7_000);
+        assert_eq!(judgment.scores.wealth, None);
 
         let targets = MetricTargets::for_period(EvaluationPeriod::Daily);
         let mut only_engagement =
@@ -2107,14 +2305,14 @@ mod tests {
         let inactive_success = only_engagement
             .evaluate(&candidate, only_engagement.period_ends_at_unix_seconds)
             .unwrap();
-        assert_eq!(inactive_success.scores.growth, SCORE_MAX);
+        assert_eq!(inactive_success.scores.growth, 7_000);
         assert_eq!(inactive_success.scores.influence, SCORE_MAX);
         assert_eq!(inactive_success.scores.total, 0);
         assert_eq!(inactive_success.outcome, JudgmentOutcome::Death);
     }
 
     #[test]
-    fn high_score_needs_minimum_evidence_before_propagation_rights() {
+    fn high_score_has_no_artificial_conversation_quota_for_propagation() {
         let candidate = nature(100, 0, 0, 0);
         let targets = MetricTargets::for_period(EvaluationPeriod::Daily);
         let mut metrics =
@@ -2132,28 +2330,22 @@ mod tests {
             true,
             Some(targets.response_time_full_credit_ms),
         );
-        let low_sample = metrics
-            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
-            .unwrap();
-        assert_eq!(low_sample.scores.total, SCORE_MAX);
-        assert!(!low_sample.propagation_evidence.eligible);
-        assert_eq!(low_sample.outcome, JudgmentOutcome::Survival);
-
-        for index in 1..DAILY_PROPAGATION_MIN_CONVERSATIONS {
-            metrics.record_conversation(
-                targets.average_conversation_depth,
-                index < DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
-                Some(targets.response_time_full_credit_ms),
-            );
-        }
         let eligible = metrics
             .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
             .unwrap();
+        assert_eq!(eligible.scores.total, SCORE_MAX);
+        assert_eq!(eligible.propagation_evidence.required_conversations, 0);
+        assert_eq!(
+            eligible
+                .propagation_evidence
+                .required_returning_conversations,
+            0
+        );
         assert!(eligible.propagation_evidence.eligible);
         assert_eq!(eligible.outcome, JudgmentOutcome::PropagationRights);
 
-        let mut forged = low_sample;
-        forged.propagation_evidence.eligible = true;
+        let mut forged = eligible;
+        forged.propagation_evidence.eligible = false;
         assert!(forged.validate().is_err());
     }
 
@@ -2211,14 +2403,14 @@ mod tests {
     }
 
     #[test]
-    fn metric_recording_is_bounded_and_saturating() {
+    fn metric_recording_has_no_artificial_growth_or_revenue_ceiling() {
         let candidate = nature(25, 25, 25, 25);
         let mut metrics =
             TentacleMetrics::new(EvaluationPeriod::Daily, 0, true, &candidate, 1).unwrap();
-        metrics.engagement.conversations = MAX_EVENT_COUNT - 1;
+        metrics.engagement.conversations = u32::MAX - 1;
         metrics.record_conversation(u32::MAX, true, Some(u64::MAX));
         metrics.record_conversation(1, true, Some(1));
-        assert_eq!(metrics.engagement.conversations, MAX_EVENT_COUNT);
+        assert_eq!(metrics.engagement.conversations, u32::MAX);
         assert_eq!(
             metrics.engagement.conversation_depth_total,
             u64::from(MAX_CONVERSATION_DEPTH_SAMPLE)
@@ -2230,26 +2422,22 @@ mod tests {
 
         metrics.record_growth(u32::MAX, u32::MAX, u64::MAX);
         metrics.record_growth(1, 1, 1);
-        assert_eq!(metrics.growth.children_spawned, MAX_EVENT_COUNT);
-        assert_eq!(metrics.growth.acolytes_recruited, MAX_EVENT_COUNT);
-        assert_eq!(
-            metrics.growth.network_contribution_points,
-            MAX_NETWORK_CONTRIBUTION_POINTS
-        );
+        assert_eq!(metrics.growth.children_spawned, u32::MAX);
+        assert_eq!(metrics.growth.acolytes_recruited, u32::MAX);
+        assert_eq!(metrics.growth.network_contribution_points, u64::MAX);
 
         metrics.record_influence(u32::MAX, u64::MAX);
-        assert_eq!(metrics.influence.governance_participation, MAX_EVENT_COUNT);
-        assert_eq!(
-            metrics.influence.sibling_influence_points,
-            MAX_SIBLING_INFLUENCE_POINTS
-        );
-        metrics.nature_adjustment_stress_events = MAX_NATURE_ADJUSTMENT_STRESS_EVENTS;
+        assert_eq!(metrics.influence.governance_participation, u32::MAX);
+        assert_eq!(metrics.influence.sibling_influence_points, u64::MAX);
+        metrics.nature_adjustment_stress_events = u32::MAX;
         metrics.record_nature_adjustment_stress();
-        assert_eq!(
-            metrics.nature_adjustment_stress_events,
-            MAX_NATURE_ADJUSTMENT_STRESS_EVENTS
-        );
+        assert_eq!(metrics.nature_adjustment_stress_events, u32::MAX);
         metrics.validate().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let store = ScalesStore::new(root.path()).unwrap();
+        store.save_metrics(&metrics).unwrap();
+        assert_eq!(store.load_metrics().unwrap(), Some(metrics));
     }
 
     #[test]
@@ -2270,7 +2458,7 @@ mod tests {
         enabled.record_economic_result(u64::MAX, u16::MAX).unwrap();
         assert_eq!(
             enabled.wealth.as_ref().unwrap().revenue_micro_units,
-            MAX_REVENUE_MICRO_UNITS
+            u64::MAX
         );
         assert_eq!(
             enabled
@@ -2283,7 +2471,77 @@ mod tests {
     }
 
     #[test]
-    fn recruitment_is_only_a_local_measurement_not_credit_or_a_vote() {
+    fn economic_evaluation_requires_provenance_bound_node_data() {
+        let candidate = nature(25, 25, 25, 25);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, true, &candidate, 1).unwrap();
+        assert!(
+            metrics
+                .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+                .is_err()
+        );
+        let before = metrics.clone();
+        assert!(
+            metrics
+                .record_token_economic_snapshot(
+                    TokenEconomicSnapshot {
+                        balance_basis_points: 5_000,
+                        stake_basis_points: 1_000,
+                        reward_basis_points: 0,
+                        trustworthy: true,
+                    },
+                    TokenEconomicPolicy::default(),
+                )
+                .is_err()
+        );
+        assert_eq!(metrics, before);
+        metrics
+            .record_node_token_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 5_000,
+                    stake_basis_points: 1_000,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                TokenEconomicPolicy::default(),
+                active_provenance(),
+            )
+            .unwrap();
+        metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+    }
+
+    #[test]
+    fn mlm_revenue_split_is_persisted_and_outcome_bearing() {
+        let candidate = nature(25, 25, 25, 25);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, true, &candidate, 1).unwrap();
+        let distribution = crate::economics::MlmIncentivePolicy::default()
+            .distribute(1_000_000)
+            .unwrap();
+        metrics.record_mlm_distribution(distribution).unwrap();
+        assert_eq!(
+            metrics
+                .wealth
+                .as_ref()
+                .unwrap()
+                .parent_revenue_share_micro_units,
+            150_000
+        );
+        assert_eq!(metrics.growth.operator_reward_micro_units, 100_000);
+        assert_eq!(metrics.growth.recruitment_reward_micro_units, 50_000);
+        let targets = MetricTargets::for_period(EvaluationPeriod::Daily);
+        assert!(score_growth(&metrics.growth, &targets) > 0);
+        assert!(score_wealth(metrics.wealth.as_ref().unwrap(), &targets) > 0);
+
+        let encoded = serde_json::to_vec(&metrics).unwrap();
+        let decoded: TentacleMetrics = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, metrics);
+    }
+
+    #[test]
+    fn recruitment_is_measured_for_growth_and_economic_rewards() {
         let candidate = nature(25, 25, 25, 25);
         let mut metrics =
             TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
@@ -2338,7 +2596,10 @@ mod tests {
             snapshot.evaluation_status,
             EvaluationStatus::PartialSnapshot
         );
-        assert_eq!(snapshot.execution, DecisionExecution::AdvisorySnapshotOnly);
+        assert_eq!(
+            snapshot.execution,
+            DecisionExecution::PartialObservationOnly
+        );
         assert!(
             metrics
                 .evaluate_snapshot(&nature(25, 25, 25, 25), end)
@@ -2350,21 +2611,21 @@ mod tests {
         assert_eq!(judgment.outcome, JudgmentOutcome::PropagationRights);
         assert_eq!(
             judgment.execution,
-            DecisionExecution::AuthenticatedOperatorConfirmationRequired
+            DecisionExecution::AutomaticLifecycleActionRequired
         );
 
         let candidate = nature(25, 25, 25, 25);
         let empty = TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
         let provisional_death = empty.evaluate_snapshot(&nature(25, 25, 25, 25), 1).unwrap();
         assert_eq!(provisional_death.outcome, JudgmentOutcome::Death);
-        assert!(!provisional_death.recommends_death());
+        assert!(!provisional_death.requires_death_execution());
         let death = empty
             .evaluate(&nature(25, 25, 25, 25), empty.period_ends_at_unix_seconds)
             .unwrap();
-        assert!(death.recommends_death());
+        assert!(death.requires_death_execution());
         assert_eq!(
             death.execution,
-            DecisionExecution::AuthenticatedOperatorConfirmationRequired
+            DecisionExecution::AutomaticLifecycleActionRequired
         );
     }
 
@@ -2405,7 +2666,7 @@ mod tests {
             .unwrap();
 
         let effects = metrics
-            .record_token_economic_snapshot(
+            .record_node_token_economic_observation(
                 TokenEconomicSnapshot {
                     balance_basis_points: 4_000,
                     stake_basis_points: 5_000,
@@ -2413,6 +2674,7 @@ mod tests {
                     trustworthy: true,
                 },
                 TokenEconomicPolicy::default(),
+                active_provenance(),
             )
             .unwrap();
         assert_eq!(effects.wealth_adjustment_basis_points, 4_000);
@@ -2431,16 +2693,51 @@ mod tests {
             .unwrap();
         assert_eq!(judgment.scores.engagement, 4_000);
         assert_eq!(judgment.scores.growth, 6_000);
-        assert_eq!(judgment.scores.wealth, Some(4_000));
+        assert_eq!(judgment.scores.wealth, Some(3_200));
         assert_eq!(judgment.scores.influence, 5_000);
-        assert_eq!(judgment.scores.total, 4_750);
+        assert_eq!(judgment.scores.total, 4_550);
         assert_eq!(judgment.economic_starvation_relief_basis_points, 4_000);
         assert_eq!(judgment.outcome, JudgmentOutcome::Survival);
         judgment.validate().unwrap();
     }
 
     #[test]
-    fn untrusted_token_snapshot_is_inert_and_does_not_enable_scales() {
+    fn verified_zero_stake_and_rewards_remain_scored_economic_evidence() {
+        let candidate = nature(25, 25, 25, 25);
+        let mut metrics =
+            TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
+        metrics
+            .record_node_token_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 1_000,
+                    stake_basis_points: 0,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                TokenEconomicPolicy::default(),
+                active_provenance(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            metrics.scored_scale_availability,
+            ScoredScaleAvailability {
+                engagement: true,
+                growth: true,
+                wealth: true,
+                influence: true,
+            }
+        );
+        let judgment = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.scores.growth, 0);
+        assert_eq!(judgment.scores.influence, 0);
+        judgment.validate().unwrap();
+    }
+
+    #[test]
+    fn untrusted_token_snapshot_hard_fails_without_mutating_scales() {
         let candidate = nature(25, 25, 25, 25);
         let mut metrics =
             TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
@@ -2453,23 +2750,16 @@ mod tests {
             })
             .unwrap();
         let before = metrics.scored_scale_availability;
-        let effects = metrics
-            .record_token_economic_snapshot(
-                TokenEconomicSnapshot {
-                    balance_basis_points: SCORE_MAX,
-                    stake_basis_points: SCORE_MAX,
-                    reward_basis_points: SCORE_MAX,
-                    trustworthy: false,
-                },
-                TokenEconomicPolicy::default(),
-            )
-            .unwrap();
-        assert_eq!(effects.wealth_adjustment_basis_points, 0);
-        assert_eq!(effects.influence_adjustment_basis_points, 0);
-        assert_eq!(effects.growth_adjustment_basis_points, 0);
-        assert_eq!(effects.engagement_adjustment_basis_points, 0);
-        assert_eq!(effects.starvation_relief_basis_points, 0);
-        assert!(effects.propagation_stake_eligible);
+        let result = metrics.record_token_economic_snapshot(
+            TokenEconomicSnapshot {
+                balance_basis_points: SCORE_MAX,
+                stake_basis_points: SCORE_MAX,
+                reward_basis_points: SCORE_MAX,
+                trustworthy: false,
+            },
+            TokenEconomicPolicy::default(),
+        );
+        assert!(result.is_err());
         assert_eq!(metrics.scored_scale_availability, before);
         assert!(!metrics.economic_layer_enabled());
     }
@@ -2488,7 +2778,7 @@ mod tests {
                 influence: false,
             })
             .unwrap();
-        for _ in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
+        for _ in 0..1 {
             metrics.record_conversation(
                 targets.average_conversation_depth,
                 true,
@@ -2500,7 +2790,7 @@ mod tests {
             ..TokenEconomicPolicy::default()
         };
         metrics
-            .record_token_economic_snapshot(
+            .record_node_token_economic_observation(
                 TokenEconomicSnapshot {
                     balance_basis_points: 0,
                     stake_basis_points: 4_999,
@@ -2508,6 +2798,7 @@ mod tests {
                     trustworthy: true,
                 },
                 stake_policy,
+                active_provenance(),
             )
             .unwrap();
         let ineligible = metrics
@@ -2519,7 +2810,7 @@ mod tests {
         assert_eq!(ineligible.outcome, JudgmentOutcome::Survival);
 
         metrics
-            .record_token_economic_snapshot(
+            .record_node_token_economic_observation(
                 TokenEconomicSnapshot {
                     balance_basis_points: 0,
                     stake_basis_points: 5_000,
@@ -2527,6 +2818,7 @@ mod tests {
                     trustworthy: true,
                 },
                 stake_policy,
+                active_provenance(),
             )
             .unwrap();
         let eligible = metrics
@@ -2664,6 +2956,18 @@ mod tests {
                 metrics
                     .record_economic_result(next(), next() as u16)
                     .unwrap();
+                metrics
+                    .record_node_token_economic_observation(
+                        TokenEconomicSnapshot {
+                            balance_basis_points: (next() % 10_001) as u16,
+                            stake_basis_points: (next() % 10_001) as u16,
+                            reward_basis_points: (next() % 10_001) as u16,
+                            trustworthy: true,
+                        },
+                        TokenEconomicPolicy::default(),
+                        active_provenance(),
+                    )
+                    .unwrap();
             }
             metrics.record_influence(next() as u32, next());
             for _ in 0..(next() % 20) {
@@ -2735,6 +3039,99 @@ mod tests {
     }
 
     #[test]
+    fn schema_v1_advisory_history_remains_loadable_but_cannot_execute() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ScalesStore::new(root.path()).unwrap();
+        let candidate = nature(40, 30, 20, 10);
+        let metrics = complete_metrics_for(&candidate, false);
+        let judgment = metrics
+            .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        let mut legacy = EvolutionHistoryRecord::new(&candidate, metrics, judgment).unwrap();
+        legacy.schema_version = LEGACY_ADVISORY_HISTORY_SCHEMA_VERSION;
+        legacy.judgment.schema_version = LEGACY_ADVISORY_JUDGMENT_SCHEMA_VERSION;
+        legacy.judgment.execution = DecisionExecution::AuthenticatedOperatorConfirmationRequired;
+        legacy.judgment_id = legacy.compute_judgment_id().unwrap();
+        legacy.validate().unwrap();
+        assert!(!legacy.authorizes_automatic_lifecycle());
+
+        let encoded = serde_json::to_vec(&legacy).unwrap();
+        assert!(
+            std::str::from_utf8(&encoded)
+                .unwrap()
+                .contains("authenticated_operator_confirmation_required")
+        );
+        store.append_history(&legacy).unwrap();
+        assert_eq!(store.load_history().unwrap(), vec![legacy]);
+    }
+
+    #[test]
+    fn history_has_no_total_lifetime_size_ceiling() {
+        const FORMER_TOTAL_LIMIT: usize = 16 * 1024 * 1024;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = ScalesStore::new(root.path()).unwrap();
+        let candidate = nature(40, 30, 20, 10);
+        let template = complete_metrics_for(&candidate, false);
+        let mut encoded = Vec::with_capacity(FORMER_TOTAL_LIMIT + MAX_HISTORY_LINE_BYTES);
+        let mut expected_records = 0_usize;
+        while encoded.len() <= FORMER_TOTAL_LIMIT {
+            let mut metrics = template.clone();
+            metrics.period_started_at_unix_seconds = 1_000
+                + i64::try_from(expected_records).unwrap() * metrics.period.duration_seconds();
+            metrics.period_ends_at_unix_seconds =
+                metrics.period_started_at_unix_seconds + metrics.period.duration_seconds();
+            let judgment = metrics
+                .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+                .unwrap();
+            let record = EvolutionHistoryRecord::new(&candidate, metrics, judgment).unwrap();
+            encoded.extend_from_slice(&serde_json::to_vec(&record).unwrap());
+            encoded.push(b'\n');
+            expected_records += 1;
+        }
+        store
+            .append_history(
+                &EvolutionHistoryRecord::new(
+                    &candidate,
+                    template.clone(),
+                    template
+                        .evaluate(&candidate, template.period_ends_at_unix_seconds)
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        fs::write(store.history_path(), &encoded).unwrap();
+
+        let catalog = store.history_catalog().unwrap();
+        assert_eq!(catalog.record_count(), expected_records as u64);
+        assert!(catalog.last().is_some());
+        assert!(fs::metadata(store.history_path()).unwrap().len() > FORMER_TOTAL_LIMIT as u64);
+    }
+
+    #[test]
+    fn history_rejects_an_oversized_single_line() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ScalesStore::new(root.path()).unwrap();
+        let candidate = nature(40, 30, 20, 10);
+        let metrics = complete_metrics_for(&candidate, false);
+        let record = EvolutionHistoryRecord::new(
+            &candidate,
+            metrics.clone(),
+            metrics
+                .evaluate(&candidate, metrics.period_ends_at_unix_seconds)
+                .unwrap(),
+        )
+        .unwrap();
+        store.append_history(&record).unwrap();
+        let mut oversized = vec![b'x'; MAX_HISTORY_LINE_BYTES];
+        oversized.push(b'\n');
+        fs::write(store.history_path(), oversized).unwrap();
+        let error = store.load_history().unwrap_err().to_string();
+        assert!(error.contains("exceeds its line bound"));
+    }
+
+    #[test]
     fn history_rejects_a_conflicting_judgment_for_the_same_nature_period() {
         let root = tempfile::tempdir().unwrap();
         let store = ScalesStore::new(root.path()).unwrap();
@@ -2802,7 +3199,7 @@ mod tests {
 
         let mut partial = first;
         partial.judgment.evaluation_status = EvaluationStatus::PartialSnapshot;
-        partial.judgment.execution = DecisionExecution::AdvisorySnapshotOnly;
+        partial.judgment.execution = DecisionExecution::PartialObservationOnly;
         partial.judgment.evaluated_at_unix_seconds = partial.metrics.period_started_at_unix_seconds;
         partial.judgment_id = partial.compute_judgment_id().unwrap();
         fs::write(store.history_path(), line(&partial)).unwrap();

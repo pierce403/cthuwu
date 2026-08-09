@@ -1,9 +1,10 @@
-//! Local, read-only observation of ERC-20 balances.
+//! Local ERC-20 observation for mandatory economic admission and lifecycle scoring.
 //!
 //! The types in this module deliberately do not depend on an Ethereum SDK.  A
 //! Tentacle needs only an RPC endpoint, a token contract address, and the
 //! addresses it has learned through its existing peer-to-peer relationships.
-//! No signing material is accepted or retained here.
+//! No signing material is accepted or retained here; transaction execution is handled by the
+//! explicit economic action state machine.
 
 use async_trait::async_trait;
 use reqwest::{Client, Url};
@@ -24,6 +25,8 @@ use std::{
 use tokio::sync::Mutex;
 
 const BALANCE_OF_SELECTOR: &str = "70a08231";
+const ECRECOVER_PRECOMPILE: Address =
+    Address::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RPC_RESPONSE_BYTES: usize = 64 * 1024;
 const BASIS_POINTS_DENOMINATOR: u128 = 10_000;
@@ -101,6 +104,58 @@ impl<'de> Deserialize<'de> for Address {
     {
         let value = String::deserialize(deserializer)?;
         value.parse().map_err(de::Error::custom)
+    }
+}
+
+/// A strict recoverable secp256k1 signature encoded as `0x{r}{s}{v}`.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct EthereumSignature {
+    r: [u8; 32],
+    s: [u8; 32],
+    recovery_id: u8,
+}
+
+impl FromStr for EthereumSignature {
+    type Err = TokenEyeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let encoded = value.strip_prefix("0x").ok_or(TokenEyeError::Transport(
+            "treasury signature must start with lowercase 0x".to_owned(),
+        ))?;
+        if encoded.len() != 130 {
+            return Err(TokenEyeError::Transport(
+                "treasury signature must contain exactly 65 bytes".to_owned(),
+            ));
+        }
+        let mut bytes = [0_u8; 65];
+        decode_hex_exact(encoded.as_bytes(), &mut bytes).map_err(|reason| {
+            TokenEyeError::Transport(format!("treasury signature is invalid: {reason}"))
+        })?;
+        let recovery_id = match bytes[64] {
+            0 | 1 => bytes[64],
+            27 | 28 => bytes[64] - 27,
+            _ => {
+                return Err(TokenEyeError::Transport(
+                    "treasury signature recovery byte must be 0, 1, 27, or 28".to_owned(),
+                ));
+            }
+        };
+        let mut r = [0_u8; 32];
+        r.copy_from_slice(&bytes[..32]);
+        let mut s = [0_u8; 32];
+        s.copy_from_slice(&bytes[32..64]);
+        if r == [0; 32] || s == [0; 32] {
+            return Err(TokenEyeError::Transport(
+                "treasury signature scalars must be nonzero".to_owned(),
+            ));
+        }
+        Ok(Self { r, s, recovery_id })
+    }
+}
+
+impl fmt::Debug for EthereumSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("EthereumSignature(<redacted>)")
     }
 }
 
@@ -242,6 +297,18 @@ impl U256 {
         Some(value)
     }
 
+    /// Multiplies by a machine-sized unsigned value without wrapping the ERC-20 `uint256` range.
+    pub fn checked_mul_u64(self, multiplier: u64) -> Option<Self> {
+        let mut product = [0_u8; 32];
+        let mut carry = 0_u128;
+        for index in (0..32).rev() {
+            let value = u128::from(self.0[index]) * u128::from(multiplier) + carry;
+            product[index] = value as u8;
+            carry = value >> 8;
+        }
+        (carry == 0).then_some(Self(product))
+    }
+
     fn div_small(self, divisor: u16) -> Self {
         debug_assert!(divisor != 0);
         let mut quotient = [0_u8; 32];
@@ -323,6 +390,7 @@ pub enum TokenEyeError {
     HttpStatus(u16),
     Rpc { code: i64, message: String },
     Transport(String),
+    EconomicDataUnavailable(&'static str),
 }
 
 impl fmt::Display for TokenEyeError {
@@ -345,6 +413,9 @@ impl fmt::Display for TokenEyeError {
                 write!(formatter, "RPC returned error {code}: {message}")
             }
             Self::Transport(message) => write!(formatter, "token transport failed: {message}"),
+            Self::EconomicDataUnavailable(reason) => {
+                write!(formatter, "economic operation blocked: {reason}")
+            }
         }
     }
 }
@@ -387,6 +458,37 @@ pub fn chain_id_rpc_request(id: u64) -> Value {
         "id": id,
         "method": "eth_chainId",
         "params": []
+    })
+}
+
+/// Constructs a read-only call to Base's `ecrecover` precompile for a personal-signature proof.
+pub fn recover_personal_signer_rpc_request(
+    id: u64,
+    message: &[u8],
+    signature: EthereumSignature,
+) -> Value {
+    let digest = ethereum_personal_message_hash(message);
+    let mut input = [0_u8; 128];
+    input[..32].copy_from_slice(&digest);
+    input[63] = signature.recovery_id + 27;
+    input[64..96].copy_from_slice(&signature.r);
+    input[96..128].copy_from_slice(&signature.s);
+    let mut data = String::with_capacity(2 + input.len() * 2);
+    data.push_str("0x");
+    for byte in input {
+        push_hex_byte(&mut data, byte);
+    }
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "eth_call",
+        "params": [
+            {
+                "to": ECRECOVER_PRECOMPILE.to_string(),
+                "data": data,
+            },
+            "latest"
+        ]
     })
 }
 
@@ -465,7 +567,43 @@ pub fn parse_chain_id_rpc_response(
         .ok_or(TokenEyeError::InvalidResponse("chain id exceeds 64 bits"))
 }
 
-/// A mockable, read-only source of ERC-20 balances.
+fn parse_recovered_address_rpc_response(
+    response: Value,
+    expected_id: u64,
+) -> Result<Address, TokenEyeError> {
+    let response: RpcResponse = serde_json::from_value(response)
+        .map_err(|_| TokenEyeError::InvalidResponse("response is not valid JSON-RPC"))?;
+    if response.jsonrpc != "2.0" || response.id.as_u64() != Some(expected_id) {
+        return Err(TokenEyeError::InvalidResponse(
+            "ecrecover response envelope does not match its request",
+        ));
+    }
+    if let Some(error) = response.error {
+        return Err(TokenEyeError::Rpc {
+            code: error.code,
+            message: limit_chars(&error.message, 512),
+        });
+    }
+    let result = response.result.ok_or(TokenEyeError::InvalidResponse(
+        "ecrecover response has no result",
+    ))?;
+    let word = U256::from_abi_word(&result)?;
+    if word.0[..12] != [0; 12] {
+        return Err(TokenEyeError::InvalidResponse(
+            "ecrecover response is not a canonical address word",
+        ));
+    }
+    let mut address = [0_u8; 20];
+    address.copy_from_slice(&word.0[12..]);
+    if address == [0; 20] {
+        return Err(TokenEyeError::InvalidResponse(
+            "treasury signature did not recover an address",
+        ));
+    }
+    Ok(Address::from_bytes(address))
+}
+
+/// A mockable source of ERC-20 balances used for economic admission.
 #[async_trait]
 pub trait TokenBalanceTransport: Send + Sync {
     async fn balance_of(
@@ -577,6 +715,27 @@ impl JsonRpcTokenTransport {
             return Err(TokenEyeError::Transport(format!(
                 "RPC endpoint reported chain id {actual_chain_id}, expected {expected_chain_id}"
             )));
+        }
+        Ok(())
+    }
+
+    /// Proves control of the configured treasury without accepting its private key.
+    pub async fn verify_personal_signature(
+        &self,
+        message: &[u8],
+        signature: EthereumSignature,
+        expected_signer: Address,
+    ) -> Result<(), TokenEyeError> {
+        self.verify_chain().await?;
+        let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let body = self
+            .post_json(recover_personal_signer_rpc_request(id, message, signature))
+            .await?;
+        let recovered = parse_recovered_address_rpc_response(body, id)?;
+        if recovered != expected_signer {
+            return Err(TokenEyeError::EconomicDataUnavailable(
+                "treasury ownership signature does not match CTHUWU_TENTACLE_WALLET",
+            ));
         }
         Ok(())
     }
@@ -696,7 +855,8 @@ impl Default for TierPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ObservationFreshness {
     /// A successful RPC query was performed for this observation.
     Fresh,
@@ -715,8 +875,54 @@ pub struct BalanceObservation {
     pub observed_at: Option<u64>,
     pub tier: ReputationTier,
     pub freshness: ObservationFreshness,
-    /// Present when a refresh failed. The cached value, if any, remains usable.
+    /// Present when a refresh failed. Cached stale data is diagnostic only and cannot authorize an
+    /// economic or lifecycle operation.
     pub error: Option<TokenEyeError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationalBalanceObservation {
+    pub holder: Address,
+    pub balance: U256,
+    pub observed_at: u64,
+    pub tier: ReputationTier,
+    pub freshness: ObservationFreshness,
+}
+
+impl BalanceObservation {
+    /// Converts a diagnostic observation into operation-bearing economic data.
+    ///
+    /// Stale and unknown observations are hard failures even when a historical balance is present.
+    pub fn require_operational(self) -> Result<OperationalBalanceObservation, TokenEyeError> {
+        match self.freshness {
+            ObservationFreshness::Fresh | ObservationFreshness::Cached => {
+                let balance = self.balance.ok_or(TokenEyeError::EconomicDataUnavailable(
+                    "current observation has no balance",
+                ))?;
+                let observed_at =
+                    self.observed_at
+                        .ok_or(TokenEyeError::EconomicDataUnavailable(
+                            "current observation has no timestamp",
+                        ))?;
+                if let Some(error) = self.error {
+                    return Err(error);
+                }
+                Ok(OperationalBalanceObservation {
+                    holder: self.holder,
+                    balance,
+                    observed_at,
+                    tier: self.tier,
+                    freshness: self.freshness,
+                })
+            }
+            ObservationFreshness::Stale => Err(TokenEyeError::EconomicDataUnavailable(
+                "token balance is stale after an RPC failure",
+            )),
+            ObservationFreshness::Unknown => Err(TokenEyeError::EconomicDataUnavailable(
+                "token balance is unknown",
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -954,6 +1160,7 @@ impl TokenObservance {
 /// Thread-safe runtime wrapper around one Tentacle's local token view.
 pub struct TokenEye {
     token_contract: Address,
+    expected_chain_id: Option<u64>,
     transport: Arc<dyn TokenBalanceTransport>,
     observance: Mutex<TokenObservance>,
 }
@@ -980,6 +1187,7 @@ impl TokenEye {
     ) -> Self {
         Self {
             token_contract,
+            expected_chain_id: None,
             transport,
             observance: Mutex::new(TokenObservance::with_policy(
                 observation_interval,
@@ -1022,7 +1230,7 @@ impl TokenEye {
         expected_chain_id: u64,
         tier_policy: TierPolicy,
     ) -> Result<Self, TokenEyeError> {
-        Ok(Self::new_with_policy(
+        let mut eye = Self::new_with_policy(
             token_contract,
             Arc::new(JsonRpcTokenTransport::for_chain(
                 endpoint,
@@ -1030,11 +1238,17 @@ impl TokenEye {
             )?),
             observation_interval,
             tier_policy,
-        ))
+        );
+        eye.expected_chain_id = Some(expected_chain_id);
+        Ok(eye)
     }
 
     pub const fn token_contract(&self) -> Address {
         self.token_contract
+    }
+
+    pub const fn expected_chain_id(&self) -> Option<u64> {
+        self.expected_chain_id
     }
 
     pub async fn observe(&self, holder: Address, now_unix_seconds: u64) -> BalanceObservation {
@@ -1068,6 +1282,28 @@ impl TokenEye {
             .lock()
             .await
             .apply_refresh(holder, now_unix_seconds, result)
+    }
+
+    /// Requires a current balance for an operation that changes economic or lifecycle state.
+    pub async fn observe_required(
+        &self,
+        holder: Address,
+        now_unix_seconds: u64,
+    ) -> Result<OperationalBalanceObservation, TokenEyeError> {
+        self.observe(holder, now_unix_seconds)
+            .await
+            .require_operational()
+    }
+
+    /// Forces a chain read and hard-fails if the RPC response cannot authorize the operation.
+    pub async fn observe_fresh_required(
+        &self,
+        holder: Address,
+        now_unix_seconds: u64,
+    ) -> Result<OperationalBalanceObservation, TokenEyeError> {
+        self.observe_fresh(holder, now_unix_seconds)
+            .await
+            .require_operational()
     }
 }
 
@@ -1175,6 +1411,113 @@ fn push_hex_nibble(output: &mut String, value: u8) {
     output.push(char::from(HEX[usize::from(value)]));
 }
 
+fn ethereum_personal_message_hash(message: &[u8]) -> [u8; 32] {
+    let mut envelope = Vec::with_capacity(message.len() + 64);
+    envelope.extend_from_slice(b"\x19Ethereum Signed Message:\n");
+    envelope.extend_from_slice(message.len().to_string().as_bytes());
+    envelope.extend_from_slice(message);
+    keccak256(&envelope)
+}
+
+fn keccak256(input: &[u8]) -> [u8; 32] {
+    const RATE: usize = 136;
+    let mut state = [0_u64; 25];
+    let mut chunks = input.chunks_exact(RATE);
+    for block in &mut chunks {
+        for (lane, bytes) in block.chunks_exact(8).enumerate() {
+            state[lane] ^= u64::from_le_bytes(bytes.try_into().expect("lane is eight bytes"));
+        }
+        keccak_f1600(&mut state);
+    }
+    let remainder = chunks.remainder();
+    let mut final_block = [0_u8; RATE];
+    final_block[..remainder.len()].copy_from_slice(remainder);
+    final_block[remainder.len()] = 0x01;
+    final_block[RATE - 1] |= 0x80;
+    for (lane, bytes) in final_block.chunks_exact(8).enumerate() {
+        state[lane] ^= u64::from_le_bytes(bytes.try_into().expect("lane is eight bytes"));
+    }
+    keccak_f1600(&mut state);
+
+    let mut output = [0_u8; 32];
+    for (lane, chunk) in output.chunks_exact_mut(8).enumerate() {
+        chunk.copy_from_slice(&state[lane].to_le_bytes());
+    }
+    output
+}
+
+#[allow(clippy::many_single_char_names)]
+fn keccak_f1600(state: &mut [u64; 25]) {
+    const ROUND_CONSTANTS: [u64; 24] = [
+        0x0000_0000_0000_0001,
+        0x0000_0000_0000_8082,
+        0x8000_0000_0000_808a,
+        0x8000_0000_8000_8000,
+        0x0000_0000_0000_808b,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8009,
+        0x0000_0000_0000_008a,
+        0x0000_0000_0000_0088,
+        0x0000_0000_8000_8009,
+        0x0000_0000_8000_000a,
+        0x0000_0000_8000_808b,
+        0x8000_0000_0000_008b,
+        0x8000_0000_0000_8089,
+        0x8000_0000_0000_8003,
+        0x8000_0000_0000_8002,
+        0x8000_0000_0000_0080,
+        0x0000_0000_0000_800a,
+        0x8000_0000_8000_000a,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8080,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8008,
+    ];
+    const ROTATION: [u32; 24] = [
+        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
+    ];
+    const PERMUTATION: [usize; 24] = [
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
+    ];
+
+    for round_constant in ROUND_CONSTANTS {
+        let mut column = [0_u64; 5];
+        for x in 0..5 {
+            column[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+        }
+        for x in 0..5 {
+            let delta = column[(x + 4) % 5] ^ column[(x + 1) % 5].rotate_left(1);
+            for y in 0..5 {
+                state[x + 5 * y] ^= delta;
+            }
+        }
+
+        let mut current = state[1];
+        for index in 0..24 {
+            let target = PERMUTATION[index];
+            let next = state[target];
+            state[target] = current.rotate_left(ROTATION[index]);
+            current = next;
+        }
+
+        for y in 0..5 {
+            let offset = y * 5;
+            let row = [
+                state[offset],
+                state[offset + 1],
+                state[offset + 2],
+                state[offset + 3],
+                state[offset + 4],
+            ];
+            for x in 0..5 {
+                state[offset + x] = row[x] ^ ((!row[(x + 1) % 5]) & row[(x + 2) % 5]);
+            }
+        }
+        state[0] ^= round_constant;
+    }
+}
+
 fn limit_chars(value: &str, maximum: usize) -> String {
     value.chars().take(maximum).collect()
 }
@@ -1220,6 +1563,53 @@ mod tests {
     }
 
     #[test]
+    fn treasury_signature_and_ecrecover_request_are_strict() {
+        let encoded = format!("0x{}{}1b", "01".repeat(32), "02".repeat(32));
+        let signature: EthereumSignature = encoded.parse().unwrap();
+        assert!(
+            format!("0x{}{}02", "01".repeat(32), "02".repeat(32))
+                .parse::<EthereumSignature>()
+                .is_err()
+        );
+        assert!("0x00".parse::<EthereumSignature>().is_err());
+
+        let request = recover_personal_signer_rpc_request(9, b"cthuwu", signature);
+        assert_eq!(request["method"], "eth_call");
+        assert_eq!(request["params"][0]["to"], ECRECOVER_PRECOMPILE.to_string());
+        let data = request["params"][0]["data"].as_str().unwrap();
+        assert_eq!(data.len(), 2 + 128 * 2);
+        assert_eq!(&data[2 + 63 * 2..2 + 64 * 2], "1b");
+    }
+
+    #[test]
+    fn keccak_and_recovered_address_parsing_match_ethereum_encoding() {
+        assert_eq!(
+            keccak256(b""),
+            [
+                0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
+                0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04,
+                0x5d, 0x85, 0xa4, 0x70,
+            ]
+        );
+        let result = format!("0x{}{}", "00".repeat(12), &HOLDER.to_string()[2..]);
+        assert_eq!(
+            parse_recovered_address_rpc_response(
+                json!({"jsonrpc": "2.0", "id": 11, "result": result}),
+                11,
+            )
+            .unwrap(),
+            HOLDER
+        );
+        assert!(
+            parse_recovered_address_rpc_response(
+                json!({"jsonrpc": "2.0", "id": 11, "result": format!("0x{}", "00".repeat(32))}),
+                11,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn quantity_parsing_enforces_json_rpc_canonical_form() {
         assert_eq!(U256::from_quantity("0x0").unwrap(), U256::ZERO);
         assert_eq!(U256::from_quantity("0xf").unwrap(), U256::from_u64(15));
@@ -1256,6 +1646,13 @@ mod tests {
         assert!(U256::power_of_ten(77).is_some());
         assert!(U256::power_of_ten(78).is_none());
         assert!(maximum.checked_to_u64().is_none());
+    }
+
+    #[test]
+    fn checked_supply_scaling_rejects_uint256_overflow() {
+        let ten_to_77 = U256::power_of_ten(77).unwrap();
+        assert!(ten_to_77.checked_mul_u64(1).is_some());
+        assert!(ten_to_77.checked_mul_u64(2).is_none());
     }
 
     #[test]
@@ -1463,7 +1860,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_expiration_and_stale_fallback_are_graceful() {
+    async fn stale_diagnostics_are_retained_but_operations_hard_fail() {
         let transport = MockTransport::new(vec![
             Ok(U256::from_u64(25)),
             Err(TokenEyeError::Transport("chain unavailable".to_owned())),
@@ -1487,6 +1884,10 @@ mod tests {
         assert_eq!(stale.freshness, ObservationFreshness::Stale);
         assert_eq!(stale.observed_at, Some(100));
         assert!(stale.error.is_some());
+        assert_eq!(
+            stale.clone().require_operational().unwrap_err(),
+            TokenEyeError::EconomicDataUnavailable("token balance is stale after an RPC failure")
+        );
         assert_eq!(eye.last_seen[&HOLDER], 100);
         assert_eq!(transport.calls(), 2);
 
@@ -1516,6 +1917,10 @@ mod tests {
         let unknown = eye.observe(&transport, CONTRACT, HOLDER, 100).await;
         assert_eq!(unknown.freshness, ObservationFreshness::Unknown);
         assert_eq!(unknown.error, Some(outage.clone()));
+        assert_eq!(
+            unknown.require_operational().unwrap_err(),
+            TokenEyeError::EconomicDataUnavailable("token balance is unknown")
+        );
         assert_eq!(transport.calls(), 1);
 
         let backed_off = eye.observe(&transport, CONTRACT, HOLDER, 129).await;

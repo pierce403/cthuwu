@@ -4,10 +4,12 @@
 
 Cthuwu is a local-first companion process that receives and sends XMTP messages. A small browser application gives visitors a friendly way to open a DM without requiring an application server.
 
-The Council of Cthulhus extends that companion into an optional federation. A durable **Cthulhu**
+The Council of Cthulhus extends that companion into a federation. A durable **Cthulhu**
 identity may operate one or more **Tentacle** runtimes and participate in a **Council** coordination
-group. Standalone `uwubot` remains the default, and the already working browser-to-runtime DM path
-does not depend on Council membership.
+group. Council discovery and membership must be peer-to-peer, without a mandatory leader or
+central enrollment service. The already working browser-to-runtime DM path remains available. The
+repository has no production peer-discovery/XMTP Council-group adapter yet and therefore cannot
+claim that a running Tentacle has joined a live Council.
 
 ## Status and planes
 
@@ -19,15 +21,15 @@ does not depend on Council membership.
 - **Implemented — local:** `cthuwu-protocol`, deterministic Council domain logic, in-memory
   transport, local registry, protected snapshot persistence, and simulator are verified by the
   deterministic workspace suite.
-- **Implemented — local:** Tentacle Nature, signed awakening epochs, bounded Scales, lineage records,
-  and the Hermes-inspired anti-entropy core have owner-only persistence and focused Rust tests.
-  Nature/awakening signatures are local HMAC tags, and lineage judgments have no automatic process
-  effects.
-- **Implemented — local/pre-launch:** a read-only UWU ERC-20 observer verifies Base chain ID `8453`,
-  calls `balanceOf` for SDK-authenticated XMTP EVM addresses, keeps local balance/tier state, adjusts
-  response depth by Nature, and supplies a bounded per-conversation Engagement bonus averaged over
-  each period. Public balances never become Tentacle Wealth, starvation, stake, or reward state. No
-  contract has been deployed or configured in the repository.
+- **Implemented — local:** Tentacle Nature, signed awakening epochs, Scales, binding lifecycle
+  decisions, lineage records, durable execution intents/receipts, and the Hermes-inspired
+  anti-entropy core have owner-only persistence and focused Rust tests. Nature/awakening signatures
+  are local HMAC tags.
+- **Implemented — local/pre-launch:** the UWU ERC-20 observer verifies Base chain ID `8453`, calls
+  `balanceOf`, keeps local balance/tier state, and separates public entity observations from bound
+  treasury/stake/reward/spend economics. Node economics drive Wealth, starvation, Influence, Growth,
+  propagation, and survival. No contract, signer, or external lifecycle executor has been deployed
+  or configured in the repository.
 - **Experimental boundary:** XMTP Council-group and ERC-8004 adapters.
 - **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
   provisioning. The anti-entropy state machine is not evidence of network interoperability.
@@ -106,25 +108,23 @@ controls. Stale, active, and revoked operator paths never create or update conta
 
 ### Local Evolution layer
 
-The Evolution layer belongs to the local Tentacle runtime and remains usable in standalone mode. It
-does not require or implicitly join a Council. Eight modules keep policy, audit, measurement,
-economics, lineage, and exchange mechanics separate:
+The Evolution layer belongs to each Tentacle runtime. Eight modules keep policy, audit, measurement,
+economics, lineage, execution, and exchange mechanics separate:
 
 | Module | Local responsibility | Does not do |
 |---|---|---|
 | `personality.rs` | Generate, validate, mutate, render, and HMAC-authenticate a seven-slider Nature plus one Sacred Ban | Grant authority or provide a public signature |
-| `awakening.rs` | Gate normal work behind an audited active-operator decision and preserve signed, hash-chained epochs | Authenticate an inbox itself or terminate the process on `KILL` |
-| `scales.rs` | Accumulate bounded aggregate metrics bound to Nature/epoch/period/scoring availability and produce partial/final weighted judgments | Apply a judgment or grant rights from an open period |
-| `token_eye.rs` | Validate Base/ERC-20 observations, cache `balanceOf` locally, and calculate local percentile tiers | Hold keys, sign transactions, or provide a central balance registry |
-| `economics.rs` | Provide adapter-only deterministic policy for cryptographically bound future node/operator balance/stake/reward evidence | Treat a public sender's balance as Tentacle economics, rely on last-writer state, or execute an emergency spend |
-| `token_gov.rs` | Tally bounded address ballots with Nature-scaled UWU tier/holding weight for closed advisory subjects | Connect to a live Council, mutate Nature, persist ballots, or grant operator/process authority |
-| `evolution.rs` | Validate and persist spawn, family, lifecycle, and absorption records | Provision, launch, terminate, route, or merge private memory automatically |
+| `awakening.rs` | Gate normal work behind an audited active-operator decision and preserve signed, hash-chained epochs | Authenticate an inbox itself |
+| `scales.rs` | Accumulate aggregate metrics bound to Nature/epoch/period/economic provenance and produce provisional/final weighted judgments | Trigger an effect from an open period |
+| `token_eye.rs` | Validate Base/ERC-20 observations, cache `balanceOf` locally, and calculate local percentile tiers | Store a signer key or provide a central balance registry |
+| `economics.rs` | Apply bound treasury, stake, reward, spend, and revenue evidence to Scales/lifecycle state | Treat a public sender's balance as Tentacle economics or rely on last-writer state |
+| `token_gov.rs` | Tally holding/stake-weighted ballots and return binding dispositions/application records for closed subjects | Persist/apply ballots, grant operator/tool authority, or claim an absent subject adapter applied a result |
+| `evolution.rs` | Validate and persist spawn, family, lifecycle, absorption, execution intent, and receipt records | Claim an external effect without an executor receipt |
 | `hermes.rs` | Reconcile signed privacy-shaped knowledge through per-peer anti-entropy state | Send network traffic, discover peers, or distribute peer keys |
 
 Nature records four appetites—engagement, growth, wealth, and influence—and three methods—
-cooperation, stability, and transparency—on closed 0–100 scales. One Sacred Ban forbids recruitment,
-spawning, governance, profit, or memory sharing. A child records its parent Nature and generation;
-inheritance selects bounded similarity, drift, or radical mutation with a 70/20/10 split. Confirmed
+cooperation, stability, and transparency—on closed 0–100 scales. A child records its parent Nature
+and generation; inheritance selects similarity, drift, or radical mutation. Confirmed
 Nature affects a bounded model policy and local relationship observations, but cannot add a model
 tool, select an unconfigured remote provider, authorize a Council action, or weaken sender-role
 classification. Relationship signals stay in the local contact record and are excluded from the
@@ -146,8 +146,8 @@ already active XMTP operator supplies `YES`, `ADJUST <trait> <delta>`, `REROLL`,
 `senderInboxId` classification and the grant-time fence happen before ritual parsing. Journal entries
 contain normalized actions, timestamps, full authenticated operator identity, and hashes of opaque
 event IDs—not message bodies. `--skip-awakening` is recorded as a distinct local testing override.
-A forced CLI reroll begins a new epoch without truncating prior history. `KILL` records a request and
-keeps the gate closed; it never exits the process.
+A forced CLI reroll begins a new epoch without truncating prior history. `KILL` records a binding
+death request, closes admission, and enters the same 24-hour lifecycle path as a final Death judgment.
 
 Signed `POST_ADJUST` entries make the awakening chain the recovery source for the exact
 current-period adjustment-stress count. Startup and post-transition reconciliation repair a metrics
@@ -159,25 +159,46 @@ validly HMAC-authenticated Nature is still divergent and fails; backups cannot m
 versions. Before the first journal entry, a missing Nature can be generated only when no Evolution
 projections or alternate Nature exist; established projections force a consistent restore.
 
-The Scales core represents daily or weekly aggregate engagement, growth, optional economic
-efficiency, and influence. Metrics and judgments bind the exact Nature ID/fingerprint, awakening
-epoch, period bounds, and scored-scale availability. The current runtime scores Engagement only,
-and public UWU observations do not change that availability. A fresh or unexpired cached
-public-sender balance contributes one bounded Engagement adjustment for
-that conversation. The period sums those adjustments and averages them across every conversation,
-including observations with no usable balance, so ordering and the last writer cannot determine the
-result. Public balances do not enable Wealth, starvation relief, stake, Growth, Influence,
-propagation, or lifecycle authority. Weights are renormalized across active scales and unavailable
-dimensions get zero outcome weight. Repeated post-confirmation Nature changes add a bounded stress
-penalty. An evaluation before the period
-boundary is explicitly `PartialSnapshot`/`AdvisorySnapshotOnly`; it cannot authorize spawning. A
-final propagation,
-survival, starvation, or death result still says
-`AuthenticatedOperatorConfirmationRequired`. The runtime therefore treats every result as a
-recommendation. There is no automatic death, absorption, user rerouting, or child-process creation.
-The balance observer itself cannot transfer tokens or enact the optional emergency-survival
-recommendation. Local recruitment counts still produce neither money nor Council contribution
-credit or votes.
+The Scales core represents daily or weekly aggregate Engagement, Growth, Wealth, and Influence.
+Metrics and judgments bind the exact Nature ID/fingerprint, awakening epoch, period bounds, scored
+inputs, treasury/stake addresses, token configuration, and available observation metadata. Current
+live `balanceOf(..., "latest")` reads have no block number: they record local wall-clock observation
+time, set `observed_block_number` to `None` (omitted from JSON), and carry the attested configuration
+identity.
+Public-sender balances contribute only to that entity's tier and Engagement. A bound Tentacle
+treasury is the primary Wealth input; stake affects Influence and propagation eligibility; accepted
+reward records affect Growth; holdings lower starvation pressure; an accepted executor receipt for
+the bound survival spend can cancel pending death. Weights renormalize across available inputs.
+Open-period snapshots are provisional and cannot trigger effects. A persisted final result is
+binding. Aggregate Scales counters have no artificial policy ceiling; count fields saturate at
+`u32::MAX` and accumulated totals at `u64::MAX`, while per-sample validation and persistence bounds
+remain.
+
+Final `Death` immediately closes conversation admission, creates an absorption intent, and records a
+shutdown deadline 24 hours later. A configured signer can submit the policy-defined UWU survival
+spend; only a fresh, idempotently consumed executor receipt whose asserted fields match the intent
+cancels the death. Rust does not independently query that transaction or block. Without the receipt,
+the Rust supervisor/controller stops XMTP at the deadline, writes the native local Shutdown receipt,
+and allows the process to exit; it does not invoke the configured lifecycle executor for Shutdown.
+
+The current executor protocol returns one final JSON response and has no durable submitted-
+transaction reconciliation. A survival burn may reach Base before the grace deadline while its
+response is lost or preempted, leaving UWU spent without canceling Death. This is a
+production-value launch blocker. The signer/executor path needs idempotent replay keyed by the exact
+action ID, a durable two-phase `Submitted` state, and Base receipt plus reorg verification.
+
+Final `PropagationRights` requires fresh configured stake. When `Nature.growth > 70` and
+auto-spawn is enabled, the runtime durably queues child provisioning. Acolytes can configure manual
+mode, where `/spawn` uses the same grant. The active lifecycle has no artificial spawn rate,
+lineage-depth, child-count, grant-volume, or grant-expiry quota. A grant can authorize distinct
+children; the exact child/action identity is consumed once to prevent replay of that provisioning
+effect. This does not claim unbounded end-to-end Council/Hermes operation; their dormant engines
+retain flagged resource, depth, fan-out, campaign, and cache bounds.
+
+A binding Death preempts an in-flight Spawn locally: the executor future is dropped, its local Unix
+process group is killed, a late receipt is rejected, and no child lineage projection is accepted.
+That does not prove an external provisioner reversed work already performed. Without a provisioner
+lease or compensating teardown, an externally created child/resource can remain orphaned.
 
 Token behavior is also local. On the current public-DM path, the Agent SDK derives an optional EVM
 address from the authenticated XMTP sender inbox; the sidecar does not infer it from message text.
@@ -186,46 +207,86 @@ Tentacle's in-process cache
 classifies dust below one UWU as Initiate and uses only balances of at least one UWU for percentiles.
 Default Whale (top 1%) requires at least 100 eligible local holders; Elder (top 10%) requires 10;
 ties share a tier without address-order tie-breaking. Nature cooperation or an explicit 0–100
-override scales the response differences. Unknown and stale observations are neutral and ordinary
-conversation degrades gracefully when Base is unavailable. Token tier cannot authorize the operator
-lane or tools. Decimals and whole-token supply are configured normalization
-inputs so a deployment can explicitly select the requested one billion or current Clanker v4's
-standard 100 billion without pretending they are the same launch. See
+override scales the response differences. Unknown, stale, malformed, and wrong-chain observations
+block the affected interaction or lifecycle action. Token tier cannot authorize the operator
+lane or tools. Decimals and whole-token supply are configured and treasury-attested normalization
+assumptions; the runtime does not call ERC-20 `decimals()` or `totalSupply()`. A deployment can
+explicitly select the requested one billion or current Clanker v4's standard 100 billion without
+pretending they are the same launch. See
 [docs/token.md](docs/token.md).
 
 The RPC adapter validates a nonzero contract and rechecks Base chain ID before every balance call.
-Ordinary failures enter a per-holder negative-cache backoff bounded to 1–30 seconds while unrelated
-holders remain independent. Disabling observation ignores stale token-only values rather than making
-them startup blockers.
+Ordinary failures may enter a per-holder negative-cache backoff while unrelated holders remain
+independent, but backoff never turns unknown evidence into permission. After required evidence is
+fresh, no economic delay is added. It does not query the block containing a `latest` response,
+contract decimals, or total supply.
 
-`RecordedTokenEconomics` remains an adapter-only library surface. No live source currently binds the
-holder role/address, chain, contract, block, observed time, decimals/supply, and configuration
-fingerprint needed to treat a node/operator balance, stake, or reward as lifecycle-relevant evidence.
-Until such a source also supplies idempotent history rather than last-writer state, Wealth,
-starvation relief, stake/reward effects, and emergency expenditure remain inactive or advisory.
+Node economics is bound to `CTHUWU_TENTACLE_WALLET` without importing its private key. The operator
+runs `--print-treasury-attestation`, personal-signs that exact canonical output in an external
+wallet, and supplies the recoverable signature as
+`CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. The message binds chain, token/stake contracts, treasury,
+token metadata, propagation-stake policy, and configuration identity. Initial observation and every
+treasury/stake refresh call Base's `ecrecover` precompile and require the recovered signer to equal
+the configured treasury. No private key enters Rust.
 
-The token-governance core is a deterministic local library rather than a Council adapter. It
-content-addresses proposals, accepts one ballot per address, and calculates bounded quorum and
-approval for Nature-adjustment, Council-policy, economic-policy, or skill-propagation-priority
-subjects. It has no network, storage, RPC, signer, command, process, or operator-authority surface;
-no runtime path currently applies its advisory result.
+`RecordedTokenEconomics` is active node state. Its schema can carry holder role/address, chain,
+contract, optional block, observed time, configured token metadata, configuration identity, and a
+source label. The current live read path supplies local wall-clock time, no block number, and
+treasury-signed configured decimals/supply. It revalidates the chain ID and calls the configured
+nonzero contract address, but does not verify contract bytecode. Its local source label is not an
+independently authenticated external identity. Event IDs and receipts replace last-writer state.
+No authenticated revenue source or payout executor is wired, so the split core does not prove a
+payment.
 
-The policy and judgment persist propagation evidence floors and the observed/required counts. Daily
-policy requires eight observations and four prior-day returns; weekly policy requires 32 and 16. A
-score that reaches the propagation threshold without its evidence floor is capped at `Survival`.
+Token governance content-addresses proposals, accepts one ballot per authenticated address, and
+weights closed Nature-adjustment, Council-policy, economic-policy, and skill-propagation subjects by
+holding and stake. Accepted results produce binding dispositions and application records in the
+core. No persisted ballot adapter or application executor is wired; a result remains unapplied until
+a configured adapter durably stores it and returns a validated receipt.
+
+The policy and judgment persist observed counts and economic provenance for audit and recovery.
 
 Before releasing the runtime mutex for public inference, Rust reserves the signed Nature
 fingerprint, awakening epoch, and current metrics-period bounds. Nature mutation and period rollover
 wait for all reservations on that binding, and a returned observation is accepted only against the
-same reservation. `/spawn` additionally requires final propagation rights from the exact current
-policy, Nature ID/fingerprint, and awakening epoch, plus at least eight daily contact observations
-with four prior-day returns. It stores authenticated operator and hashed transport-event provenance
-and consumes the final judgment's content-derived ID once; partial snapshots never become grants.
-An unused right remains eligible only during the immediately following metrics period. Closing or
-skipping that period after missed cycles invalidates it.
-Loaded lineage is cross-checked against history: every spawn receipt must resolve to its exact Final
-PropagationRights record, match that record's parent Nature, and occur during that immediately
-following period.
+same reservation. Loaded lineage and lifecycle state cross-check every intent and receipt against its
+exact final judgment, parent Nature, treasury/stake evidence, and execution ID.
+
+The revenue-split core defaults to a 15% parent Tentacle share, 10% operating-acolyte share, 5%
+recruiter share, and 70% earning-Tentacle share. These percentages are configurable. The intended
+economic model rewards recruitment, but no authenticated revenue source, deployed contract/signer,
+or payout executor is committed. A future payout must bind unique event IDs, authenticated
+participants, immutable lineage, and transaction receipts without imposing an active-lineage event
+or growth quota.
+
+Base mutations, provisioning, and absorption cross the configured executor's durable intent/receipt
+boundary. The runtime persists the binding decision and unique intent, invokes the executor,
+validates its receipt, and marks it complete once. Shutdown is different: the Rust supervisor stops
+XMTP and records its own native local receipt before process exit. No UWU contract, signer, child
+provisioner, or absorption adapter is committed in the repository, so those external effects are
+reported as blocked until configured. Rust validates executor-supplied transaction, block, and
+timestamp fields structurally and against the intent; it does not independently fetch the Base
+transaction receipt or block.
+
+The runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; no raw signing key is accepted or forwarded.
+The lifecycle executor must use a separately isolated signer/key service. Its process starts with a
+cleared allowlisted environment and no caller-controlled loader paths. The only `CTHUWU_*` value Rust
+forwards is its already-validated exact `CTHUWU_RPC_ENDPOINT`; contract, wallet, amount,
+configuration, vault, payout, and child-root fields come from the exact durable intent rather than
+ambient variables. On Unix the executor receives a fixed system `PATH` and `/` as the working
+directory. Rust hashes and rechecks the top-level executor and launches the pinned file on Linux, but
+that does not attest its interpreter, shared libraries, subprocesses, or signer service. Operators
+must trust and pin that complete dependency chain separately. On Unix, both the XMTP sidecar and
+lifecycle executor run as process-group leaders; the supervisor kills the full group, including
+descendants, after completion, timeout, or teardown.
+
+Normal startup validates token configuration, treasury ownership, initial economics, and the
+lifecycle executor before creating or mutating Evolution state. The only outage exception is
+read-only inspection of existing lifecycle state; when it finds already-binding `Absorb` or
+`Shutdown` work, the runtime may open solely to drain it during a Base outage. `Spawn`, survival
+`Spend`, and new token-dependent decisions wait for fresh bound economics. Child/spawn/lineage
+lifecycle persistence has no fixed file-size ceiling and validates records and provenance
+individually; the dormant Council/Hermes collection bounds remain.
 
 Hermes is a decentralized state-machine pattern rather than an agent or traffic router. Each
 Tentacle maintains its own direct peers, digest view, bounded retry queue, and conflict resolution.
@@ -239,9 +300,10 @@ receive-only, including no digest emission.
 Hermes authorship and relay tags use configured HMAC identities and a local trusted-key ring. A live
 adapter would also have to bind the actual transport-authenticated peer to that configured key.
 Neither transport nor peer-key provisioning exists today, so bootstrap peer IDs do not create trusted
-connections and deterministic convergence tests make no live-network claim. A received skill remains
-inert, untrusted knowledge until a local authenticated operator reviews it and separately activates it
-through the existing compiled skill boundary.
+connections and deterministic convergence tests make no live-network claim. No automatic received-
+skill installer is currently implemented. A future activation path must validate a closed package,
+preserve the compiled authority boundary, and persist an activation receipt; skill prose cannot
+grant operator or shell authority.
 
 See [docs/evolution.md](docs/evolution.md) for operator commands, persisted state, and the exact
 implementation boundary.
@@ -499,22 +561,25 @@ sessions, user references, and conversation data never belong on-chain.
 ### Governance and propagation
 
 Governance separates rarely changed Constitution rules from versioned Agenda documents, competing
-Strategies, and typed bounded Actions. One Cthulhu has one vote even if it operates several
-Tentacles. Vote replacement is allowed before deadline; quorum, thresholds, Agenda parent hashes,
+Strategies, and typed bounded Actions. The deterministic Council domain still uses one Cthulhu per
+vote; the separate token-governance core calculates holding/stake weight but has no persisted/live
+Council adapter. Vote replacement is allowed before deadline; quorum, thresholds, Agenda parent hashes,
 competing parents, ratification, rejection, and expiry are explicit. Default rules require 50% quorum,
 more than 50% of non-abstaining votes for ordinary approval, and two-thirds approval for Constitution
 changes; no quorum expires the proposal. Initial Actions can request only capability refresh, protocol
 self-test, local resource summary, or routing scenario evaluation. Ratification never overrides local
 operator policy. Canonical hash-chained membership snapshots and proposal bindings preserve the
-historical one-Cthulhu-one-vote electorate across reload and membership churn.
+current Council-domain electorate across reload and membership churn.
 
-Propagation is a bounded referral tree or DAG for invitations and approved public/Council-visible
-information. Every hop validates provenance, policy, expiry, loop/duplicate state, depth, fan-out,
-rate, opt-out, block list, revocation, and visibility before forwarding. Contribution credit is
-non-financial and outcome-based; raw recruitment count earns nothing. Current credit is direct-only:
-the useful contributor needs a recipient acknowledgement, each acknowledgement is consumed once, and
-per-outcome/contributor/campaign caps prevent duplicate or descendant credit and limit simple Sybil
-amplification. They do not establish identity uniqueness or solve Sybil resistance generally.
+Propagation is a referral tree or DAG for invitations and approved public/Council-visible
+information. Every hop validates provenance, policy, loop/duplicate state, revocation, and visibility
+before forwarding. This Council propagation engine is dormant and still has local resource, depth,
+fan-out, campaign, throughput, and cache bounds; those remain flagged until a live peer-to-peer
+adapter replaces or configures them. The active child/spawn/lineage lifecycle has no volume or
+expiry quota on a valid propagation grant. The local split core proposes 15% parent, 10% operating
+acolyte, and 5% recruiter shares by default. No authenticated revenue source or payout executor is
+wired; a future payout consumes each unique event and receipt once without suppressing independently
+earned descendant rewards.
 Payload variants contain bounded summaries, so semantic privacy remains an operator/adapter policy:
 the current types have no dedicated private-message field and the simulator emits no private data,
 but the engine cannot infer whether arbitrary summary text contains sensitive information.
@@ -525,10 +590,11 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 |---|---|---|
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
-| XMTP SDK / Base RPC → token observer | Optional authenticated sender EVM address, configured RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict address/quantity/ABI validation, per-call chain ID `8453`, bounded timeout/response and per-holder retry backoff, sanitized errors, local cache, unknown/stale neutral fallback, no signer |
+| XMTP SDK / Base RPC → token observer | Authenticated entity EVM address, configured treasury/stake bindings, treasury attestation signature, RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict role/address/quantity/ABI validation, chain ID `8453`, local observation time, attested configuration identity, no observed block for `latest`, Base `ecrecover` on every treasury/stake refresh, recovered-signer equality with `CTHUWU_TENTACLE_WALLET`, sanitized errors, local cache, hard failure for missing/stale evidence; configured decimals/supply are assumptions and no private key enters Rust |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
-| Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, judgments, spawn/skill requests | Role classification before parsing, signed audit, partial/final distinction, explicit confirmation, no automatic process effects |
+| Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, manual-spawn/skill requests | Role classification before parsing, signed audit, provisional/final distinction; final lifecycle effects derive from persisted state, not message claims |
+| Evolution runtime → lifecycle/economic executor | Bound survival-spend, absorption, and spawn intents | Durable unique intent carries contract/wallet/amount/configuration fields; only Rust's validated exact RPC endpoint is forwarded as a `CTHUWU_*` variable; schema/intent validation of executor assertions, no independent Base receipt lookup yet; reject raw-key configuration, clear and allowlist the executor environment, pin the top-level executable, kill its Unix process group including descendants, and require a separately trusted signer/dependency chain; Shutdown stays in the Rust supervisor |
 | Runtime → public model/search | Conversation or selected search query | Explicit provider selection, bounded context/query, privacy disclosure |
 | Public model → runtime | Generated text or `web_search` call | Identity repair, closed one-tool schema, bounded results/output, no local tools |
 | Operator model → runtime | Generated text or local tool call | Current-message-derived closed schema/prompt inventory, exact-command or create-only effect binding, one effectful call, bounded agent loop, structured receipts, no role changes |
@@ -537,7 +603,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Council transport → domain | Envelopes, claimed sender, ordering | Size/version/type validation, authenticated sender binding, expiry, replay |
 | Registry → routing | Endpoints and trust signals | Provenance, bounds, active association, local trust policy |
 | Council → Tentacle | Awards, leases, votes, propagation | Incarnation/generation fencing, typed actions, final local policy check |
-| Hermes peer → local gossip core | Digests, envelopes, skills, authorship and relay claims | Authenticated peer/key binding, HMAC verification, closed privacy-shaped payloads, bounds, inert received skills; no live adapter yet |
+| Hermes peer → local gossip core | Digests, envelopes, skills, authorship and relay claims | Authenticated asymmetric peer/operator key binding, HMAC verification, closed payloads, compiled activation boundary and receipts; no live adapter/installer yet |
 | Disk | Keys, databases, history | Encryption where supported, restrictive permissions, backups |
 
 ## Identity and persistence
@@ -580,16 +646,18 @@ commit sets a sticky fail-closed runtime state: public work and operator effects
 restart performs signed recovery, or the operator restores a consistent backup if recovery cannot
 reconcile the state. Error receipts therefore make no claim that nothing was persisted.
 
-UWU balance and percentile caches are local in-process observations rather than a persisted central
-registry. `state/metrics.json` may persist only the sum of bounded public-sender Engagement bonuses
-alongside the full conversation count used as its denominator. Current public observations leave
-`token_economics` absent and cannot enable Wealth, starvation relief, stake, Growth, or Influence;
-stale or unknown RPC state contributes zero.
+UWU balance and percentile caches are local Tentacle observations rather than a persisted central
+registry. Public-sender observations remain entity-scoped. Bound treasury, stake, reward, spend, and
+revenue records persist their role/address/chain/contract/block/configuration provenance and drive
+Wealth, starvation, Growth, Influence, propagation, and survival. Lifecycle intents and executor
+receipts use owner-only atomic state and idempotent event IDs. Token governance returns application
+records, but no persisted ballot/application adapter is committed. Stale or unknown RPC state blocks
+new token-dependent decisions while the existing lifecycle outbox continues to drain.
 
 The local simulator stores Council identity, membership, capabilities, affinity, leases and
 generation fences, processed message IDs, Constitution, Agenda history, proposals, votes, campaigns,
 referrals, acknowledgements, and contribution events together below `state/council/`. Its combined
-snapshot uses bounded state, a fixed safe name, symlink rejection, restrictive permissions, a
+snapshot uses bounded state, a fixed validated name, symlink rejection, restrictive permissions, a
 temporary file plus atomic rename, file sync, and directory sync where supported. A live coordinator
 still needs a per-message transaction coupling every domain effect to its replay marker.
 

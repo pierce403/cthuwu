@@ -2,7 +2,7 @@
 
 ## Introduction
 
-You are working with Dean on Cthuwu: a cute eldritch companion that lives locally and talks to people over XMTP. Use your stable agent name when you have one. Keep the companion charming, technically honest, and safe to operate.
+You are working with Dean on Cthuwu: a cute eldritch companion that lives locally and talks to people over XMTP. Use your stable agent name when you have one. Keep the companion charming, technically honest, and operationally reliable.
 
 ## Responsibilities
 
@@ -10,8 +10,10 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - Treat private keys, XMTP database material, message contents, model credentials, and contact notes as sensitive.
 - Keep the frontend deployable as static files.
 - Keep the companion runtime local-first and model-provider agnostic.
-- Keep Council mode optional. A standalone `uwubot` with direct user DMs must remain the default and
-  must not require a Council group or registry.
+- Keep Council discovery and membership peer-to-peer. Do not introduce a mandatory leader,
+  bootstrap coordinator, or centralized enrollment gate. The repository has no live authenticated
+  peer-discovery/Council transport yet; document that gap, and keep direct user DMs working through
+  the implemented transport.
 - Preserve the control-plane boundary: ordinary DM content, contact notes, private memory, and model
   credentials never enter Council messages.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
@@ -45,8 +47,8 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
 - `docs/operator.md`: privileged XMTP operator enrollment, tools, isolation, and deployment warning.
 - `docs/evolution.md`: Nature, awakening, Scales, lineage, Hermes gossip, and current non-goals.
-- `docs/token.md`: UWU launch parameters, Base balance observation, local tiers, Engagement input,
-  adapter-only economics, and post-launch activation.
+- `docs/token.md`: UWU launch parameters, Base balance observation, local tiers, active Tentacle
+  economics, binding governance, and executor configuration.
 - `skills/`: reusable procedures specific to this repository.
 
 ## Build and verification
@@ -78,14 +80,16 @@ interoperability.
 - Make production and development XMTP environments explicit; never silently cross them.
 - Do not send inbound message text to a remote model provider unless the node operator explicitly
   enabled it with a runtime credential or selected it through authenticated model control.
-- Bound message size, concurrency, response size, and model/tool execution time.
+- Bound message size, transport concurrency, response size, and model/tool execution time for
+  resource integrity. Do not reuse them as active child/spawn/lineage economic quotas, and do not
+  present the dormant Council/Hermes bounds as an end-to-end capacity claim.
 - Treat all messages as untrusted input. A normal, stale, or revoked sender must never execute a
   message-supplied shell command or gain filesystem access. Only a locally configured,
   transport-authenticated operator inbox may enter the separate privileged dispatcher.
 - The operator role is remote code execution as the `uwubot` OS account. Require a dedicated
   unprivileged account/container, a narrow tool root, bounded tools, truthful receipts, and explicit
   revocation guidance. Do not describe rooted file helpers or environment filtering as an `exec`
-  sandbox.
+  isolation boundary.
 - Authorization is by the canonical full 64-character XMTP inbox ID, not wallet address or message
   claim. Pin the role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
   authorization boundary must not privilege older messages delivered later. Every valid
@@ -148,21 +152,26 @@ interoperability.
 - Never let an old incarnation heartbeat revive a Tentacle or an old lease generation accept new work.
 - Keep production signing behind a signer/verifier boundary. The deterministic signer is test-only;
   do not invent or claim production signatures, endpoint binding, rotation, or revocation.
-- A Cthulhu gets one governance vote even if it operates multiple Tentacles. Council ratification
-  never overrides local operator security/privacy/resource policy.
+- One authenticated wallet may submit one current ballot even if it operates multiple Tentacles;
+  verified UWU holdings and stake determine its weight. Council ratification never overrides local
+  operator security/privacy/resource policy.
 - Keep Actions as a closed typed and bounded enum. Never add arbitrary shell commands, executable
   paths, unrestricted URL fetches, prompt-driven tools, or filesystem access.
-- Independently validate every propagation hop. Enforce expiry, provenance and payload hashes,
-  maximum depth/fan-out, per-sender rate limits, loop and duplicate suppression, opt-out, block lists,
-  visibility, revocation, and local policy.
-- Do not award contribution credit for raw recruitment or referral ancestry. Current credit is
-  direct-only: require a unique useful downstream outcome and intended-recipient acknowledgement,
-  consume each acknowledgement once, and enforce the per-outcome, contributor/campaign, and total
-  campaign caps. Credit is non-financial and does not increase governance votes.
+- Independently validate every propagation hop. Enforce provenance and payload hashes, loop and
+  duplicate suppression, visibility, revocation, and local policy. The dormant Council and Hermes
+  engines still have resource, depth, fan-out, campaign, and cache bounds; keep those limits flagged
+  until live peer-to-peer adapters replace or configure them. Do not extend the active lifecycle's
+  no-quota claim beyond distinct child plans, spawn grants, and lineage growth.
+- Compute configured economic splits for operating, recruiting, and sustaining Tentacles. Default
+  shares are 15% to the parent Tentacle, 10% to the operating acolyte, 5% to the recruiter, and the
+  remainder to the earning Tentacle. Bind every intent to a unique authenticated revenue event and
+  consume a payout receipt exactly once. No authenticated revenue source or payout executor is
+  committed, so never claim the local split core paid anyone. UWU holdings and stake determine
+  governance weight.
 - Keep registry types chain/deployment/ABI/revision neutral. Do not put heartbeats, load, sessions,
   leases, user references, contact memory, DMs, or credentials on-chain.
 
-## Evolution security rules
+## Evolution integrity and execution rules
 
 - Treat `state/nature.json` and the awakening journal as local, HMAC-authenticated state. The
   owner-only symmetric key is a local integrity boundary, not a public signature, peer identity, or
@@ -180,38 +189,58 @@ interoperability.
   Require each signed entry's exact immediate-predecessor Nature snapshot; recover only the head or
   final signed predecessor, never a different independently valid Nature/log combination. Never
   generate a missing pre-action Nature over existing Evolution projections or alternate Nature.
-- Keep Scales decisions advisory. An open-period snapshot cannot grant propagation rights, and a
-  final judgment still requires authenticated operator confirmation. A death recommendation, `KILL`,
-  absorption record, or spawn record must never terminate, route, merge private memory, provision a
-  process, or launch a child automatically.
+- Scales judgments are binding runtime inputs. An open-period snapshot cannot trigger a lifecycle
+  transition, but a persisted final judgment applies without operator confirmation. Final `Death`
+  immediately closes conversation admission, queues absorption, and starts a 24-hour grace period.
+  An idempotently accepted executor receipt for the bound UWU survival spend cancels the pending
+  death; otherwise the Rust supervisor/controller stops XMTP at the deadline, records the native
+  local Shutdown receipt, and lets the process exit. Shutdown never goes to the configured lifecycle
+  executor. Do not call the survival receipt independently chain-confirmed without a Base receipt
+  lookup.
+- Treat the current executor's single final JSON response as a production-value launch blocker for
+  UWU spends. A survival transaction may be broadcast before the grace deadline while its response
+  is lost or preempted, spending tokens without canceling Death. Require exact action-ID idempotent
+  receipt replay, a durable two-phase `Submitted` transaction state, and Base receipt/reorg
+  verification before placing production value behind this path.
 - Preserve the exact Nature ID/fingerprint, awakening epoch, period, and scored-scale-availability
-  bindings on metrics and judgments. Renormalize weight only across available scales. The public
-  UWU sender observer may add only a bounded per-conversation Engagement bonus, summed and averaged
-  over every conversation in the period. It must never enable Wealth, starvation relief, stake,
-  reward, Growth, Influence, propagation, or lifecycle authority. Persist evidence floors and
-  counts in policy/judgment, and cap a propagation-threshold result at `Survival` when the sample is
-  below its floor.
+  bindings on metrics and judgments. Renormalize weight only across available scales.
+  Cryptographically bound Tentacle treasury, stake, reward, and spend observations directly drive
+  Wealth, starvation relief, Growth, Influence, propagation, and lifecycle decisions. Persist
+  evidence provenance and counts with each judgment. Do not add artificial Scales counter ceilings;
+  counters saturate only at their storage type's natural limit (`u32::MAX` for count fields and
+  `u64::MAX` for accumulated totals), while per-sample and persistence-integrity bounds remain.
 - Accept at most one relationship/Scales observation per retained contact per UTC day; count a
   return only after prior-day activity. Keep local loyalty and Nature-affinity signals out of remote
   model profiles. Reserve public inference against its Nature fingerprint, awakening epoch, and
   metrics period; defer Nature mutation and rollover until every matching reservation finishes.
-- Keep `/spawn` gated by a final judgment for the exact current policy, Nature ID/fingerprint, and
-  awakening epoch, at least eight daily observations and four prior-day returns, authenticated
-  operator plus hashed event provenance, and one-time consumption of the content-derived judgment
-  ID. Partial snapshots never grant rights. Accept the final grant only in the immediately following
-  metrics period; a closed or missed period invalidates it. Cross-check every loaded spawn receipt
-  against its exact Final PropagationRights history, parent Nature, and authorized time window.
+- A final `PropagationRights` judgment for the exact current policy, Nature ID/fingerprint, and
+  awakening epoch authorizes spawning. Require the configured UWU stake. When
+  `Nature.growth > 70` and auto-spawn is enabled, durably enqueue child provisioning without
+  operator confirmation; manual mode exposes the same grant through `/spawn`. Do not impose a
+  volume or expiry quota on an economically valid grant. Consume each exact child/action receipt
+  once and cross-check every loaded intent and receipt against the exact final judgment, parent
+  Nature, configured stake observation, and execution identity.
+- Treat Death preemption of an in-flight `Spawn` as local cancellation only. Rust kills the local
+  executor process group, rejects a late provision receipt, and refuses the child lineage projection,
+  but cannot prove that an external provisioner rolled back work already performed. Until the
+  provisioner implements a lease or compensating teardown, report a possible external orphan.
 - Permit judgment history to contain only deterministic `Final` records evaluated exactly at period
   end. Reject duplicate IDs, same-period conflicts, reordering, and overlap; do not describe these
   unkeyed consistency checks as cryptographic tamper evidence. Cross-check open metrics against the
   latest Final record and replay only exact payload equality in the history-ahead append/reset crash
-  window; fail closed on every other overlap.
+  window; refuse operation on every other overlap.
 - Hold one Rust `state/evolution-runtime.lock` per data directory. Confine custom `--nature-path`
   values below `state/natures/` as relative paths. After any ambiguous or partially persisted
-  multi-snapshot transition, keep Evolution sticky fail-closed until signed restart recovery or
+  multi-snapshot transition, keep Evolution unavailable until signed restart recovery or
   consistent-backup restoration; do not claim that nothing was written. Treat `--show-nature` as a
   reconciling startup path, not a read-only inspector, and keep it mutually exclusive with skip and
   reroll mutators.
+- Validate all normal-runtime token configuration and treasury ownership before creating or mutating
+  Evolution state. The only outage exception is a read-only inspection of existing lifecycle state;
+  if it finds already-binding `Absorb` or `Shutdown` work, open solely to drain those intents.
+  During a Base/RPC outage, defer `Spawn`, survival `Spend`, and new token-dependent decisions. Do not
+  impose a fixed child/spawn/lineage-lifecycle file-size cap—validate each record and its provenance
+  instead. This does not remove the dormant Council/Hermes resource bounds.
 - Treat every Hermes summary, envelope, digest, skill, peer ID, signature, and relay path as hostile
   input. Bind peer keys out of band to an actually authenticated transport before trusting them;
   persisted bootstrap IDs alone are not authenticated peers and there is currently no live gossip
@@ -221,36 +250,62 @@ interoperability.
   paths, shell commands, output, or arguments. Treat bounded operator skill prose as potentially
   hostile even after privacy-shape validation. A Nature with the memory-sharing Sacred Ban is
   strictly receive-only and emits neither knowledge nor digest summaries.
-- Keep received skills inert and quarantined until a local authenticated operator explicitly reviews
-  and activates them through the existing compiled skill boundary. A Hermes signature establishes
-  only the configured key's provenance; it does not make instructions safe or authorize tools.
-- Keep UWU observation read-only and local to each Tentacle. Accept the holder address only from the
+- Received skill activation is an execution feature, not a trust claim. The current repository has
+  no live Hermes transport or automatic skill installer; do not claim otherwise. Any future
+  automatic activation path must preserve the compiled tool/authority boundary, authenticate its
+  provenance, validate its closed package schema, persist an activation receipt, and never let skill
+  prose grant operator or shell authority.
+- Keep UWU observation local to each Tentacle. Accept a public holder address only from the
   SDK-authenticated XMTP sender metadata; never accept a message-claimed wallet as observed
   identity. Validate the ERC-20 address and Base chain ID `8453`, issue only `eth_call`
-  `balanceOf(address)`, and never accept, store, or log a token private key.
-- Unknown or stale RPC state is neutral: never fabricate a zero balance, enforce a token tier, or
-  apply Scales effects from it. Do not log a credential-bearing RPC URL. Cache/rank observations
-  locally and never introduce a central balance or reputation registry.
+  `balanceOf(address)`. Transaction execution belongs behind the lifecycle executor and a separately
+  isolated signer/key service. Reject `CTHUWU_ECONOMICS_PRIVATE_KEY`; never place a raw token key in
+  the uwubot environment, observance state, configuration, or logs.
+- Bind Tentacle economics to `CTHUWU_TENTACLE_WALLET`. Operators first run
+  `--print-treasury-attestation`, personal-sign that exact canonical output with the configured
+  treasury, and provide the recoverable signature through
+  `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Before every treasury/stake refresh, verify the signature
+  by calling Base's `ecrecover` precompile and require the recovered address to equal the configured
+  wallet. The private key never enters Rust, configuration, state, or logs.
+- Launch the lifecycle executor from a cleared, allowlisted environment with caller-controlled
+  loader paths removed. Forward only Rust's validated exact `CTHUWU_RPC_ENDPOINT` as a `CTHUWU_*`
+  setting; never copy ambient contract, wallet, amount, vault, payout, child-root, or configuration
+  variables. Those fields come from the exact durable intent. On Unix, use a fixed system `PATH` and
+  `/` as its working directory. The startup digest and execution-time check bind only the top-level
+  executable; operators must separately trust and pin its interpreter, libraries, subprocesses, and
+  signer-service dependency chain. Put both the XMTP sidecar and lifecycle executor in their own
+  Unix process groups and kill the complete group, including descendants, on completion, timeout, or
+  supervisor teardown.
+- Unknown, stale, or chain-unverified economic state blocks the affected interaction or lifecycle
+  transition. Never fabricate a zero balance and never continue with a neutral tier. Do not log a
+  credential-bearing RPC URL. Cache/rank observations locally and never introduce a central balance
+  or reputation registry.
 - UWU is transferable and no balance or stake is required to start a Tentacle. The default minimum
   interaction tier is `unproven`, and per-Tentacle tier differences are scaled by Nature or an
   explicit bounded override. Treat holdings below one whole token as Initiate; percentile ranks use
   only holdings of at least one token, default Whale requires 100 eligible local holders, default
   Elder requires 10, and tied balances receive the same tier. Token holdings never authorize an
   XMTP operator, operator tool, Council action, or shell command.
-- Revalidate Base chain ID before every live balance call, use a bounded per-holder outage backoff,
-  and reject the zero contract address. Disabling observation must ignore stale token-only
-  configuration so it cannot block unrelated startup.
-- Keep `RecordedTokenEconomics` adapter-only. A future node/operator source for Wealth, starvation,
-  stake, reward, or emergency spending must cryptographically bind holder role/address, chain ID,
-  contract, block, observed time, decimals/supply, and a configuration fingerprint, and must use
-  history/idempotency rather than last-writer state. Until then these dimensions stay inactive and
-  emergency spending stays recommendation-only. Council contribution credit remains non-financial
-  and never rewards raw recruitment.
-- Keep token-weighted governance deterministic, bounded, and advisory. Ballots must bind to exact
-  authenticated addresses and trustworthy observations before a future adapter can use them. The
-  closed governance subjects may not expand into operator authorization, arbitrary commands,
-  credentials, process control, or tool access; the current library has no live Council/Nature
-  mutation path.
+- Revalidate Base chain ID before every live balance and `ecrecover` call and reject the zero
+  contract address. There is no live transaction-receipt RPC call yet. RPC failure degrades service
+  by refusing token-dependent work; it must not silently preserve ordinary operation with unknown
+  economics.
+- `RecordedTokenEconomics` is active node state. Current live treasury/stake reads bind the holder
+  role/address, revalidated chain ID, configured contract, local observation time, and attested
+  configuration identity. `balanceOf(..., "latest")` supplies no block number, so persist
+  `observed_block_number = None` and omit `observedBlockNumber` from JSON; configured decimals and
+  supply are treasury-signed normalization assumptions, not `decimals()` or `totalSupply()` results,
+  and a local source label is not external identity proof. Use durable intents and idempotent
+  receipts rather than last-writer state. Treat
+  transaction hash, block, and timestamp fields returned by an executor as assertions that Rust
+  schema- and intent-validates, not independently RPC-verified chain facts. Never report them as
+  chain-verified until a receipt adapter performs that verification.
+- Token-weighted governance produces binding dispositions and application records for its closed
+  Nature, Council, economic, and skill-propagation subjects. Ballots bind authenticated addresses to
+  fresh observations. Governance cannot grant operator authorization, arbitrary commands,
+  credentials, or shell/tool access. No persisted ballot adapter or payout/application executor is
+  committed; report core results as unapplied until a configured adapter durably stores the ballot
+  and returns a validated application receipt.
 - Do not describe the requested one-billion UWU supply as Clanker standard. Current Clanker v4 uses
   a fixed 100-billion supply with 18 decimals; launching one billion requires a custom/nonstandard
   deployment decision. Standard Clanker creator fees are LP/swap rewards, not fee-on-transfer.
@@ -313,9 +368,12 @@ interoperability.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.
-- The UWU phase implements a Base-8453, read-only local `balanceOf` observer, local percentile tiers,
-  Nature-scaled response differences, a period-averaged public-sender Engagement bonus, and a
-  deterministic local advisory token-governance library. Public balances never become Tentacle
-  Wealth/starvation/stake/reward state. Deployment, bound node/operator economics, live governance
-  integration, transaction signing, and autonomous spending remain absent; the requested
-  one-billion supply still requires resolution against Clanker's current 100-billion v4 standard.
+- The UWU phase implements a Base-8453 local `balanceOf` observer, local percentile tiers,
+  Nature-scaled response differences, entity-scoped public Engagement, active bound node economics,
+  personal-sign/ecrecover treasury ownership verification, binding governance records, and durable
+  lifecycle/economic execution intents. No UWU contract,
+  transaction signer, external provisioner, absorption adapter, or production Council/Hermes
+  transport, authenticated revenue source, persisted ballot adapter, or payout/application executor
+  is committed, so those effects remain blocked until explicitly configured and receipt-producing
+  executors are available. The requested one-billion supply still requires a custom
+  deployment decision because current Clanker v4 uses a fixed 100-billion supply.

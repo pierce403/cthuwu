@@ -1,299 +1,296 @@
-# Local Evolution layer
+# Evolution runtime
 
-## Status
+Evolution gives each Tentacle a persistent Nature, an awakening epoch, Scales measurements, binding
+lifecycle judgments, lineage, active UWU economics, and local Hermes anti-entropy state.
 
-The Evolution layer is implemented as local Rust state machines and owner-only persistence. It runs
-inside a standalone Tentacle; Council membership is optional and direct one-to-one XMTP DMs remain
-the default data plane.
-
-The current implementation does **not** provide a live Hermes transport, peer discovery/handshake,
-peer-key provisioning, Council metrics publication, automatic process spawning/death/absorption, or
-token transaction execution. It does provide the local, read-only UWU observance and bounded
-Engagement input described in [token.md](token.md). Local deterministic gossip and token tests
-do not establish live network or deployed-contract interoperability.
+The implementation is local-first and receipt-driven. It does not yet contain peer-to-peer Council
+discovery, a production XMTP Council-group transport, live Hermes transport, deployed UWU contract,
+transaction signer, authenticated revenue source, persisted ballot adapter, payout/application
+executor, external child provisioner, or absorption service. Council discovery must not depend on a
+mandatory leader. Configuration and deterministic local records do not prove external effects.
 
 ## Components and authority
 
-| Component | Implemented boundary | Authority boundary |
-|---|---|---|
-| Nature | Seven bounded sliders, one Sacred Ban, random identity, generation, inheritance/mutation, rendering, local signed persistence | Policy data only; cannot authorize a role, tool, provider, or Council action |
-| Awakening | Signed, hash-chained epochs with restart recovery and active-operator actions | Existing authenticated XMTP operator classifier; the journal does not authenticate senders |
-| Scales | Bounded daily/weekly aggregate metrics, Nature/epoch/period bindings, stress, partial/final judgments, and logically append-only history | Outcomes are recommendations; authenticated operator confirmation remains required |
-| UWU observer/economics | Read-only Base `balanceOf`, local tier policy, and a bounded public-sender Engagement bonus averaged over all period conversations | No private keys, transfers, central registry, operator authority, Tentacle Wealth/starvation/stake/reward state, or automatic spending |
-| UWU governance core | Deterministic bounded address ballots, tier/holding weights, quorum, and approval for closed policy subjects | Library-only/advisory; no live Council, Nature mutation, persistence, RPC, process, or operator authority |
-| Lineage | Founder/child/family/absorption records, identity binding, cycle checks, atomic persistence | Records do not create, kill, route, or merge a process |
-| Hermes core | Closed knowledge types, HMAC author/relay provenance, per-peer anti-entropy, conflict resolution, pending retries, persistence | Requires an authenticated transport-to-key binding that is not implemented yet |
-
-Nature and Council personality are deliberately separate. Council personality describes a durable
-Cthulhu's bounded governance policy. Nature describes one local Tentacle's innate response and
-resource preferences.
+| Component | Role | Execution boundary |
+| --- | --- | --- |
+| Nature | Seven sliders, Sacred Ban, identity, generation, inheritance/mutation, signed persistence | Influences personality and economic/lifecycle policy; never authenticates an operator |
+| Awakening | Authenticated ritual, epochs, signed append-only journal, crash reconciliation | Opens public operation after the epoch is confirmed |
+| Scales | Daily/weekly aggregate metrics, policy bindings, stress, open snapshots, final judgments | Final judgments bind lifecycle transitions |
+| TokenEye | Per-Tentacle Base observations and local percentile tiers | Missing/stale observations block token-dependent work |
+| Economics | Bound treasury, stake, reward, spend, and revenue records | Directly drives Wealth, starvation, Influence, Growth, survival, and propagation |
+| Token governance | Holding/stake-weighted ballots for closed subjects | Accepted results return binding dispositions/application records; no persisted/live adapter is committed |
+| Lineage/lifecycle | Founder, parent/child, absorption, provisioning, death, and receipt history | Durable intents invoke configured external executors |
+| Hermes | Signed, bounded anti-entropy knowledge state | No live transport or peer-key provisioning is committed |
 
 ## Nature and awakening
 
-Nature records four appetites—engagement, growth, wealth, and influence—and three methods—
-cooperation, stability, and transparency—on inclusive 0–100 scales. The closed Sacred Ban set is
-recruitment, spawning, governance, profit, or memory sharing. A child retains its parent Nature ID
-and a strictly greater generation; inheritance selects bounded similarity, drift, or radical
-mutation with an exact 70/20/10 selection split.
+A Nature contains the seven bounded sliders:
 
-`state/nature.json` is a canonical HMAC envelope. The same owner-only local key authenticates
-awakening audit entries. HMAC detects changes made without that key; it is not an asymmetric/public
-signature, does not identify a peer over a network, and cannot protect state after compromise of the
-service account that can read and reuse the key.
+- sociability;
+- curiosity;
+- ambition;
+- loyalty;
+- independence;
+- cooperation/competition;
+- growth.
 
-The signing key is created atomically and never rotated implicitly. If it is missing while a Nature
-snapshot, awakening journal, signed Hermes state, or orphaned metrics/history/lineage projection
-already exists, startup fails with recovery guidance instead of adopting that state under a new key.
-Rust also holds `state/evolution-runtime.lock` for the lifetime of one Evolution runtime so two local
-writers cannot mutate one data directory concurrently.
+Nature changes are tied to a signed awakening epoch and exact predecessor state. The HMAC key is a
+local integrity secret, not a public signature and not protection from an attacker controlling the
+`uwubot` OS account. Startup refuses missing or inconsistent signed state rather than regenerating a
+new identity over existing Evolution records.
 
-For a new epoch, Rust classifies and pins the authenticated XMTP sender before parsing ritual text.
-Normal public conversation, contact mutation, inference, and tools remain gated until an active
-operator supplies one action:
+The awakening ritual remains an authenticated operator flow. Until its current epoch completes,
+public conversation and metric mutation remain closed. `--skip-awakening` is a local test override;
+forced rerolls create a new audited epoch.
+
+Nature is policy, not authority. It cannot turn a public sender, Council message, token holder, or
+skill into an operator or shell command.
+
+## Scales and finality
+
+The Scales combine:
+
+- Engagement from entity-scoped interactions and tier behavior;
+- Growth from successful operation, spawns, and accepted reward records;
+- Wealth primarily from the bound Tentacle treasury;
+- Influence from freshly observed configured stake and eligible governance participation.
+
+Weights renormalize across available inputs. An open-period snapshot is provisional and cannot
+trigger a lifecycle transition. At the exact period boundary, the runtime writes one deterministic
+final judgment bound to Nature ID/fingerprint, awakening epoch, policy, period, evidence provenance,
+and token configuration.
+
+Scales counters have no artificial policy ceilings. Count fields saturate only at `u32::MAX` and
+accumulated totals at `u64::MAX`; bounded per-sample inputs and persistence-integrity limits remain.
+
+Final outcomes are binding:
+
+| Judgment | Runtime effect |
+| --- | --- |
+| `PropagationRights` | May create distinct child intents under one reusable grant when stake and Nature policy permit; each exact child/action is idempotent |
+| `Survival` | Continues ordinary operation |
+| `StarvationWarning` | Applies economic pressure and survival-spend policy |
+| `Death` | Immediately closes admission, queues absorption, and starts the shutdown grace period |
+
+Judgment history accepts only exact end-of-period final records, rejects duplicates/conflicts and
+overlap, and reconciles the narrowly defined append/reset crash window. These are consistency checks,
+not public cryptographic attestations.
+
+Public inference reservations bind Nature fingerprint, awakening epoch, and metrics period. Rollover
+and Nature mutation wait for matching reservations so one conversation cannot be scored against a
+different policy than the one that produced its response.
+
+## Economic evidence
+
+Public wallets and Tentacle treasury wallets are separate roles:
+
+- a public sender's fresh balance controls that sender's tier, response depth, and Engagement input;
+- a bound node treasury controls the Tentacle's Wealth and starvation pressure;
+- a bound staking position controls propagation eligibility and contributes to Influence;
+- accepted reward records contribute to Growth;
+- an accepted executor receipt whose asserted fields match a survival-spend intent can cancel
+  pending Death; Rust does not independently query that transaction or block.
+
+`CTHUWU_TENTACLE_WALLET` binds the node treasury without importing its key. The operator runs
+`--print-treasury-attestation`, personal-signs that exact canonical output in an external wallet,
+and supplies the recoverable signature as `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Initial
+observation and every treasury/stake refresh verify it through Base's `ecrecover` precompile and
+require the recovered signer to equal the configured wallet. No private key enters Rust.
+
+The live observer calls `balanceOf(..., "latest")`, which supplies no block number, so it records
+local wall-clock time, sets `observed_block_number` to `None`, and omits `observedBlockNumber` from
+JSON. Token decimals and total supply are configured, treasury-attested normalization assumptions;
+Rust does not currently call `decimals()` or `totalSupply()` to compare them with the contract.
+
+Unknown, stale, malformed, or wrong-chain token evidence blocks the affected interaction, Scales
+evaluation, or lifecycle action. It is never converted to a neutral result. A freshly observed zero
+is valid evidence and maps a public holder to `Unproven`.
+
+See [token.md](token.md) for tier policy, provenance, launch configuration, and executor requirements.
+
+## Automatic death and absorption
+
+A final `Death` judgment applies without operator confirmation:
+
+1. Conversation admission closes immediately; already-claimed work may complete under its pinned
+   reservation.
+2. The runtime durably creates an absorption intent targeted at the configured parent or sibling.
+3. A shutdown deadline is recorded exactly 24 hours after final judgment.
+4. A configured signer may execute the policy-defined UWU survival expenditure.
+5. A fresh, idempotently consumed executor receipt whose asserted chain fields match the intent
+   cancels death before the deadline. Rust does not yet fetch the Base receipt or block independently.
+6. Otherwise the Rust supervisor/controller stops XMTP when the deadline expires, writes the native
+   local Shutdown receipt, and lets the process exit. Shutdown is not sent to the lifecycle executor.
+
+Absorption transfers only the explicitly permitted memory projection. It never copies private keys,
+model credentials, raw DMs, contact identifiers, or contact notes.
+
+The repository has no external absorption service or token signer. In their absence, intents remain
+truthfully `blocked`; the runtime must not report a Base transaction or cross-process merge.
+The configured lifecycle executable must be an absolute non-symlink path outside the operator
+workspace and cannot be group/world writable. Normal runtime rejects
+`CTHUWU_ECONOMICS_PRIVATE_KEY`; the executor receives no raw key and must use a separately isolated
+signer/key service. Rust clears and allowlists its environment, removes caller-controlled loader
+paths, and forwards only its validated exact `CTHUWU_RPC_ENDPOINT` as a `CTHUWU_*` setting. Contract,
+wallet, amount, configuration, vault, payout, and child-root fields come from the durable intent, not
+ambient variables. On Unix Rust sets a fixed system `PATH` and `/` working directory. It
+hashes/rechecks the top-level executable before invocation. That check does not attest the
+interpreter, libraries, subprocesses, or signer service, so operators must trust and pin the complete
+dependency chain separately. On Unix, the executor is a process-group leader; cleanup kills the full
+group, including signer/provisioner descendants, after success, failure, or timeout. The XMTP sidecar
+likewise kills its entire process group on supervisor teardown.
+
+## Automatic spawning
+
+A final `PropagationRights` judgment authorizes spawning when it binds the exact current Nature,
+epoch, policy, parent, treasury, and fresh required stake. The economically valid grant can
+authorize distinct children without an artificial volume or expiry quota; each exact child/action
+and provision receipt is consumed once.
+
+- When `Nature.growth > 70` and auto-spawn is enabled, the runtime queues child provisioning
+  automatically.
+- Acolytes may configure a Tentacle for manual spawn; `/spawn` uses the same final judgment and stake
+  evidence without adding a second policy veto.
+- The active child/spawn/lineage lifecycle has no artificial spawn-rate, lineage-depth, child-count,
+  or grant-volume quota. This is not an end-to-end Council/Hermes capacity claim; their dormant
+  engines retain flagged resource and propagation bounds.
+- Duplicate/replay rejection prevents the same child/action from being provisioned twice; it does
+  not cap distinct children authorized by the grant or by future grants.
+
+Lineage persists founder, parent, child, generation, Nature identity, authorization, stake evidence,
+execution intent, and receipt. Startup validates every receipt against its final judgment and rejects
+identity cycles or conflicting ancestry. Child/spawn/lineage lifecycle storage has no fixed
+file-size cap; it validates each record and its provenance.
+
+No child identity, wallet, XMTP installation, process, or hosting resource exists until the
+configured provisioner returns a structured receipt that passes local intent validation. The
+repository does not ship such a provisioner.
+
+Death preemption cancels an in-flight Spawn only within the local runtime: Rust drops the executor
+future, kills its local process group, rejects a late provision receipt, and refuses the child lineage
+projection. It cannot prove a remote provisioner rolled back work already performed. Without a
+provisioner lease or compensating teardown, an external child/resource may remain orphaned.
+
+## Revenue, acolytes, and recruitment
+
+The revenue-split core calculates configurable percentages. Defaults are:
+
+- 15% to the parent Tentacle;
+- 10% to the operating acolyte;
+- 5% to the recruiter;
+- 70% to the earning Tentacle.
+
+The intended model financially rewards recruitment. No authenticated revenue source, deployed
+contract/signer, or payout executor is committed, so the core does not make or claim a live payment.
+A future distribution must bind a unique earning event, lineage, authenticated acolyte and recruiter
+identities, token contract, and consumed transaction receipt. There is no central recruitment
+registry or active-lifecycle recruitment quota; dormant Council/Hermes bounds remain documented.
+
+## Binding governance
+
+Token governance tallies deterministic ballots from authenticated address bindings. Holding and
+stake weight the vote for closed Nature-adjustment, Council-policy, economic-policy, and
+skill-propagation subjects.
+
+An accepted result returns a binding disposition and application record from the core. No persisted
+ballot adapter or application executor is committed. The result remains unapplied until a configured
+adapter durably stores it and returns a validated receipt. Token governance cannot add arbitrary
+commands, grant operator authority, expose credentials, or bypass the compiled tool boundary.
+
+## Lifecycle executor boundary
+
+Base mutations, child provisioning, and absorption use the configured executor model:
+
+1. Persist the binding judgment/economic record.
+2. Persist a unique effect intent with exact inputs.
+3. Invoke the configured executor.
+4. Schema- and intent-validate and persist the executor receipt.
+5. Mark the intent complete exactly once.
+
+Transaction hash, block number, and block timestamp are executor assertions at this boundary. A
+future Base receipt adapter must verify them independently before the runtime can call them
+RPC-confirmed chain facts.
+
+The protocol currently returns one final JSON response and persists no submitted-transaction phase.
+A survival burn can broadcast before the grace deadline while that response is lost or preempted,
+spending UWU without canceling Death. This is a production-value launch blocker. Require
+idempotent receipt replay keyed by the exact action ID, a durable two-phase `Submitted` state, and
+Base receipt/reorg verification before using this path with production value.
+
+Shutdown is a separate native path. Its durable intent is intercepted by the Rust supervisor, which
+stops XMTP and writes a local controller receipt before the process returns; no lifecycle-executor
+request or external shutdown receipt is involved.
+
+Normal startup validates token configuration, treasury ownership, initial economics, and the
+lifecycle executor before creating or mutating Evolution state. The only outage exception is
+read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
+`Shutdown` work, the runtime opens solely to drain it during a Base outage. Persisted `Spawn`,
+survival `Spend`, and new token-dependent decisions wait for fresh bound economics.
+
+Restart recovery resumes pending intents and treats locally accepted successful receipts
+idempotently. State exposes
+`pending`, `blocked`, `failed`, and `confirmed` rather than conflating a policy decision with an
+external effect.
+
+## Hermes knowledge exchange
+
+Hermes is a decentralized anti-entropy state machine embedded in each Tentacle. It stores bounded,
+closed knowledge shapes such as aggregate observations, tool-usage patterns without arguments or
+paths, and operator-created skill packages without credentials or private user data.
+
+Raw DMs, contact identifiers, contact notes, model credentials, private memory, shell commands,
+filesystem paths, and tool output never enter gossip. HMAC author/relay tags establish configured
+local-key provenance only. A production transport requires authenticated asymmetric peer/operator
+key binding.
+
+There is currently no live Hermes transport, discovery/handshake, peer-key provisioner, or automatic
+skill installer. The runtime must state that gap. A future automatic activation path must use a
+closed package schema, authenticated provenance, compiled capability checks, and durable activation
+receipts; skill prose cannot grant operator or shell authority.
+
+## Operator interface
+
+Evolution commands remain on the authenticated operator lane because they inspect or configure
+private local state:
+
+| Command | Effect |
+| --- | --- |
+| `/nature` | Render current Nature and economic policy |
+| `/adjust ...` | Apply an audited Nature adjustment |
+| `/judgment` | Return the open snapshot or latest final binding judgment |
+| `/spawn [child-id]` | Create a distinct child plan under the reusable eligible grant in manual-spawn mode |
+| `/absorb <tentacle-id>` | Create an explicit absorption intent where policy permits |
+| `/share-skill <name>` | Stage a bounded local skill package in Hermes state |
+
+Public, stale, revoked, Council, and stdin-harness inputs cannot enter these handlers. Automatic
+lifecycle transitions do not rely on message text and cannot be manufactured by a public command.
+
+## Persistence
+
+Evolution state lives beneath the protected runtime data root:
 
 ```text
-YES
-ADJUST <trait> <delta>
-REROLL
-KILL
+state/nature.json
+state/evolution.key
+state/awakening.jsonl
+state/scales_metrics.json
+state/evolution_history.jsonl
+state/lineage.json
+state/hermes_gossip.json
 ```
 
-`state/awakening_log.md` stores normalized actions, timestamps, authenticated full operator IDs, and
-hashes of opaque message/event IDs. It does not store the original DM body. The signed hash chain is
-logically append-only: each update first verifies the complete chain, then writes one canonical
-newline-terminated replacement through an atomic copy-on-write step. This supports recovery when
-the journal and Nature snapshot cross a crash boundary without treating a torn final line as an
-entry. Forced rerolls start a new epoch rather than truncating prior history. `KILL` records a
-terminal request and keeps normal work closed; it never terminates the OS process.
+Economic observations, lifecycle intents, and execution receipts use the same owner-only, atomic,
+symlink-rejecting persistence discipline. Token governance currently returns records without a
+persisted ballot/application adapter. Never place private keys in these files.
 
-Post-confirmation changes are recorded as signed `POST_ADJUST` entries. On restart and after a
-transition, Rust derives the exact current-period stress count from matching entries in that signed
-chain, so a crash between the audit write and metrics snapshot cannot silently lose or double the
-penalty. While awakening is still pending, an expired metrics period must be empty; it is reset to
-the current period without creating a judgment. A late `YES` therefore cannot manufacture a final
-result from time spent behind the gate.
+## Verification focus
 
-Every signed awakening entry carries the resulting Nature and its exact immediate-predecessor Nature
-snapshot. Recovery accepts the journal head, or only the final entry's signed predecessor in the
-deliberate log-ahead crash window. A different Nature snapshot is rejected even when it is itself a
-valid HMAC envelope; independently valid but divergent Nature/log backups must be restored as one
-consistent set. With an empty journal, a missing Nature is generated only when no Evolution
-projections or alternate Nature exist; otherwise startup requires a consistent restore instead of
-rebinding an established node to a new identity.
-
-Local startup controls are:
-
-| Option | Effect |
-|---|---|
-| `--show-nature` | Open and reconcile Evolution state, render Nature/awakening status, and exit; it is not a read-only file inspector and conflicts with skip/reroll mutators |
-| `--nature-path <path>` | Use a non-empty relative path resolved below `UWUBOT_DATA_DIR/state/natures/`; absolute paths and `..` are rejected |
-| `--reroll-nature --force` | Generate a new candidate in a new immutable epoch |
-| `--skip-awakening` | Record a signed local testing override, visibly distinct from XMTP confirmation |
-| `--gossip-peers <list>` | Supply untrusted bootstrap peer IDs; it does not provision keys or connect a transport |
-
-After confirmation, Nature can set a bounded inference temperature, response-size/resource bias, and
-response emphasis. It can also update bounded local loyalty and Nature-affinity observations in a
-contact note. Those are node observations, not user assertions, and they are excluded from the
-profile sent to a remote model. At most one relationship/Scales observation is accepted per contact
-per UTC day; a conversation counts as returning only when that retained contact was observed on a
-prior day, not merely earlier on the same day. Only aggregate anonymized patterns may enter Hermes;
-raw contact values and identifiers never do.
-
-Every public inference turn reserves the exact signed Nature fingerprint, awakening epoch, and
-metrics-period bounds before the runtime releases its local mutex for a remote call. Nature mutation
-and period rollover/finalization are deferred until all reservations for that binding finish. An
-observation is committed only if its reservation still matches those values.
-
-## Scales and lineage
-
-The Scales core can represent bounded aggregate engagement, growth, optional economic efficiency,
-and influence measurements. Persisted metrics and judgments bind the Nature ID and fingerprint,
-awakening epoch, period bounds, and scored-scale availability. Nature appetites are normalized only
-across the active scales; unavailable scales keep zero outcome weight rather than depressing or
-inflating the result. The current runtime scores Engagement only. A fresh or unexpired cached
-public-sender UWU balance adds one bounded Engagement bonus for that conversation. The period stores
-the sum and averages it across every conversation, including those without a usable wallet
-observation; ordering and last-writer state therefore cannot determine a lifecycle result. Public
-balances never activate Tentacle Wealth, starvation relief, stake, reward, Growth, or Influence.
-Post-confirmation Nature adjustments add the bounded, visible, audit-reconciled stress penalty.
-
-The deterministic `JudgmentPolicy` persists propagation evidence floors, and each `Judgment`
-persists the observed and required counts plus eligibility. Daily policy requires eight observations
-and four prior-day returns; weekly policy requires 32 and 16. Even a score above the propagation
-threshold is capped at `Survival` when its sample is below those floors, so score alone cannot yield
-`PropagationRights`.
-
-The evaluation boundary is strict:
-
-| Period state | Evaluation status | Execution status | May grant spawn rights? |
-|---|---|---|---|
-| Open | `PartialSnapshot` | `AdvisorySnapshotOnly` | No |
-| Closed | `Final` | `AuthenticatedOperatorConfirmationRequired` | Only after local operator/policy checks |
-
-The four score labels are propagation rights, survival, starvation warning, and death. None is an
-effect by itself. In particular, death does not exit `uwubot`, absorption does not copy private
-memory, and starvation does not silently reduce or reroute user service. Final facts are logically
-appended to `state/evolution_history.jsonl` by verifying and atomically replacing the canonical
-newline-terminated journal; current bounded counters live in `state/metrics.json`. A partial
-snapshot is never persisted as a grant. History accepts only deterministic `Final` records evaluated
-exactly at the period end. It rejects duplicate judgment IDs, conflicting records for one Nature
-period, reordered periods, and overlaps. These are unkeyed structural and content-consistency checks,
-not cryptographic tamper evidence; unlike the awakening chain, the judgment history has no HMAC.
-At startup, the open metrics snapshot is cross-validated against the last Final history record.
-Overlap fails closed except for exact equality with that finalized metrics payload—the one supported
-history-ahead crash case where journal append committed before metrics reset—which is replayed by
-advancing to an empty current period.
-
-Lineage persists founder, child, generation, lifecycle, spawn, and absorption facts in
-`state/lineage.json`. `/spawn` requires an authenticated operator and a final propagation-rights
-record from the exact current scoring policy, Nature ID/fingerprint, awakening epoch, and a closed
-period with at least eight daily contact observations and four prior-day returns. The lineage record
-stores the authenticated operator ID, a hash of the transport event ID, and the final judgment's
-content-derived ID; that judgment ID can authorize only one spawn. Creating the record verifies the
-parent claim and Nature inheritance. It produces a candidate Nature and auditable record only: an
-operator must separately provision credentials, authorize an XMTP identity, start a process, and
-bind that live identity to the record. The same rule applies to retirement and
-absorption—recording intent or destination is not proof that a process or memory operation occurred.
-The grant is valid only during the immediately following metrics period. Closing that period, or
-skipping past it after missed cycles, invalidates the grant even if it was never consumed.
-Startup also verifies every persisted spawn receipt: its judgment ID must resolve to the exact
-`Final` `PropagationRights` history record, its parent Nature must match that record, and its spawn
-timestamp must fall within the immediately following period. An unverifiable lineage projection is
-rejected rather than trusted because its own schema is well formed.
-
-Recruitment is at most an aggregate local metric. It mints no token and produces no stake,
-governance vote, ancestor reward, or Council contribution credit. Existing Council contribution
-credit remains non-financial, outcome-based, and direct-only. UWU balance observation is independent
-of recruitment.
-
-## UWU observance boundary
-
-The sidecar obtains an optional EVM address from the SDK-authenticated XMTP sender inbox; it does not
-accept a wallet claim from message text. Each Tentacle validates Base chain ID `8453`, calls the
-configured transferable UWU ERC-20 with read-only `eth_call` `balanceOf(address)`, and ranks only its
-own in-process observations. Whale, Elder, Acolyte, Initiate, and Unproven are therefore local views,
-not identities or global reputation facts. The current integration observes public one-to-one DM
-senders; Council-member, sibling-lineage, and operator-acolyte enumeration awaits authenticated live
-address adapters.
-
-Holdings below one whole UWU are Initiates and do not enter percentile ranking. Default Whale top 1%
-requires at least 100 eligible local holders and Elder top 10% requires 10; otherwise holdings of at
-least one UWU remain Acolytes. Ties receive the same tier without address-order tie-breaking.
-
-Unknown and stale observations are neutral. They cannot gate a response, change its depth, or affect
-Scales, and an RPC outage does not stop ordinary conversation. A known tier changes bounded response
-depth/tone in proportion to `100 - Nature.cooperation` unless an operator sets an explicit 0–100
-intensity. The permissive minimum tier is `unproven`; no token or stake is required to start a
-Tentacle. Token tier never grants the XMTP operator role or tools.
-
-For current public messages, a fresh/cached balance affects only tier response/gating plus the
-period-averaged Engagement bonus. `RecordedTokenEconomics` remains an adapter-only library API for
-future node/operator Wealth, starvation, stake, reward, and emergency-spend evidence. Before such
-evidence can reach runtime state it must cryptographically bind holder role/address, chain ID,
-contract, block, observed time, decimals/supply, and configuration fingerprint, with idempotent
-history instead of last-writer state. No such source exists today; those dimensions remain inactive
-and emergency spending remains recommendation-only. See [token.md](token.md) for configuration and
-the requested one-billion supply versus current 100-billion Clanker v4 standard.
-
-The observer rejects the zero contract and revalidates Base chain ID before every balance call.
-Failed ordinary observations use a per-holder retry backoff bounded to 1–30 seconds without blocking
-unrelated holders. Disabling observation ignores stale token-only configuration rather than making
-it a startup requirement.
-
-The token-governance module is likewise local and advisory. It can deterministically tally one
-bounded ballot per address for closed Nature, Council, economic, and skill-propagation policy
-subjects, with Nature-scaled tier multipliers and bounded quorum/approval. Nothing currently feeds
-those results into a live Council or Nature transition, and the module has no storage, network,
-signer, process, command, or operator-authority surface.
-
-## Hermes-inspired knowledge exchange
-
-Hermes is an architecture pattern embedded in every Tentacle, not a central agent and not an XMTP
-traffic router. Each node maintains its own direct peer map, known digests, bounded pending outbound
-work, and local knowledge. Anti-entropy compares summaries, requests or offers missing records,
-retries until acknowledgement, and resolves conflicts by configured signature authority, timestamp,
-then digest.
-
-The allowed knowledge schema is closed:
-
-| Allowed | Explicitly excluded |
-|---|---|
-| Aggregate anonymized interaction categories/counts | Raw DMs, inbox/wallet/contact IDs, emails, or contact notes |
-| Bounded conversation strategy outcomes | Private memory, profiles, or prompt transcripts |
-| Tool-operation classes and aggregate success counts | Paths, arguments, shell commands, output, or credentials |
-| Bounded operator-created skill text, filtered for common private-data shapes | Any assumption that the prose is safe; automatic installation, prompt injection, or tool authorization |
-
-Authorship and relay envelopes use configured HMAC identities and a local trusted-key ring. A peer ID
-must also be bound to the actual authenticated transport sender; persisted IDs or valid-looking tags
-alone are insufficient. The current repository has no live transport, authenticated handshake,
-discovery service, or peer-key provisioning mechanism. `state/hermes_gossip.json` therefore persists
-the core's peer/digest/knowledge/pending state but does not establish a connected network and does not
-contain signing secrets.
-
-A Nature with the memory-sharing Sacred Ban may receive verified knowledge but emits neither
-envelopes nor digest summaries. Operator-created skills received from any peer remain inert untrusted
-data. They must be reviewed by a local authenticated operator and separately admitted through the
-existing compiled, create-only skill checks before they can influence operator context; they never
-become public or operator model tools automatically.
-
-## Authenticated operator interface
-
-Only the active operator lane handles these commands:
-
-| Command | Local result |
-|---|---|
-| `/nature` | Render Nature and awakening state |
-| `/adjust <trait> <value>` | Set a confirmed trait to an absolute bounded value; append audit and stress |
-| `/lineage` | Render bounded parent/child/sibling records |
-| `/metrics` | Render current bounded aggregate metrics |
-| `/judgment` | Return an advisory open-period snapshot or a final recommendation |
-| `/spawn [child-id]` | Create a child Nature/lineage record only when final rights and Sacred Ban policy permit |
-| `/gossip-status` | Report local core/persistence status without claiming live connectivity |
-| `/share-skill <name>` | Stage bounded locally reviewed skill text in Hermes state; no delivery claim |
-| `/request-skill <name>` | Inspect locally held gossip knowledge; no live network-query claim |
-| `/recovery-status` | Describe a sticky fail-closed Evolution transition; available only after a persistence error |
-
-Public, stale, revoked, Council, and stdin-harness inputs cannot reach these handlers. No command
-changes the existing rule that role classification happens before text interpretation.
-
-Evolution transitions can span several owner-only snapshots. If a write fails after an earlier
-snapshot may already have committed, the in-memory runtime enters a sticky fail-closed mode: public
-work and operator effects remain blocked, with only bounded status commands available. Restart runs
-signed recovery; if that cannot reconcile the canonical journals and snapshots, the operator must
-restore a consistent backup. An error receipt therefore does not claim that nothing was persisted.
-
-## Persistence and verification
-
-Default Evolution state lives below `UWUBOT_DATA_DIR/state/`:
-
-```text
-evolution-signing.key
-evolution-runtime.lock
-nature.json
-natures/<custom-relative-path>
-awakening_log.md
-metrics.json
-evolution_history.jsonl
-lineage.json
-hermes_gossip.json
-```
-
-The signed awakening journal and unkeyed judgment history preserve append-only logical history
-through canonical atomic copy-on-write replacements. State files and journal entries are bounded,
-owner-only, and reject symlinks or inconsistent bindings. The judgment history provides
-deterministic consistency validation, not cryptographic tamper evidence. A missing Evolution key
-beside signed state fails closed without rekeying.
-
-The balance/tier cache itself is local in-process state, not a durable global registry.
-`metrics.json` may contain the sum of bounded public-sender Engagement bonuses and the full
-conversation denominator. The current runtime leaves `token_economics` and Wealth absent; stale or
-unknown state contributes zero and cannot enable a Scale.
-
-The Rust suite covers generation/mutation ranges, Sacred Bans, signed Nature tamper detection,
-awakening parsing/provenance/audit/recovery, bounded Scales math and partial/final status, inference
-reservations, one-use spawn grants, lineage identity/cycle checks, ERC-20 ABI/RPC/chain validation,
-local tier/sample-floor/cache/backoff behavior, period-averaged Engagement persistence, and Hermes
-signatures/privacy/conflicts/partition convergence/persistence.
-Remaining release evidence is tracked in [FEATURES.md](../FEATURES.md), especially live XMTP
-awakening, cross-platform persistence, separately provisioned child lifecycle, operator-reviewed skill
-activation, and a live authenticated gossip adapter with peer-key lifecycle.
+Tests should cover Nature inheritance/mutation, awakening recovery, period finality, treasury/public
+wallet separation, canonical treasury-attestation binding, Base `ecrecover` signer equality on every
+economic refresh, RPC hard failure, Wealth/starvation/stake calculations, automatic Death admission
+gating, 24-hour deadlines, survival receipt cancellation, auto/manual spawn, reusable-grant and
+exact-child idempotency, lineage cycle rejection, revenue-split calculation, governance
+disposition/application records, outbox draining through Base outage, startup configuration
+ordering, native Shutdown receipts, restart recovery, and truthful blocked states when external
+executors are absent. A provisioner lease/compensation test remains required to rule out external
+orphans after Death preemption.

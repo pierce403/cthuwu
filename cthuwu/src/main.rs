@@ -1,4 +1,5 @@
 mod agent_context;
+mod autonomy;
 pub mod awakening;
 mod bot;
 mod config;
@@ -24,16 +25,22 @@ mod web_search;
 
 use agent_context::AgentContext;
 use anyhow::{Context, Result, bail};
+use autonomy::LifecycleExecutor;
 use bot::UwUBot;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use config::{
-    BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
+    BASE_MAINNET_CHAIN_ID, BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
     DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS, REQUESTED_UWU_TOTAL_SUPPLY, UWU_TOKEN_DECIMALS,
 };
 use contact::ContactStore;
 use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
-use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions};
+use economics::{
+    DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS, EconomicHolderRole, EconomicObservationProvenance,
+    TokenEconomicSnapshot,
+};
+use evolution::{LifecycleAction, LifecycleReceipt, LifecycleReceiptStatus};
+use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions, MandatoryRecoveryKind};
 use inference::{
     DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
     DEFAULT_VENICE_MODEL, DEFAULT_VENICE_TIMEOUT_SECONDS, InferenceConfig, InferenceRouter,
@@ -44,6 +51,8 @@ use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
 use sidecar::run_xmtp_sidecar;
 use std::{
+    collections::BTreeSet,
+    env,
     fs::{self, OpenOptions},
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
@@ -51,8 +60,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage::{ensure_private_directory, sync_directory};
-use token_eye::ReputationTier;
-use tracing::info;
+use token_eye::{EthereumSignature, JsonRpcTokenTransport, ReputationTier, TokenEye};
+use tokio::sync::watch;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use web_search::{BraveSafeSearch, BraveWebSearch, WebSearch};
 
@@ -143,7 +153,7 @@ struct Cli {
     )]
     web_search_safesearch: BraveSafeSearch,
 
-    /// Base JSON-RPC endpoint used only for read-only ERC-20 observations.
+    /// Base JSON-RPC endpoint used for holder/stake reads and passed exactly to the lifecycle executor.
     #[arg(
         long,
         env = "CTHUWU_RPC_ENDPOINT",
@@ -152,9 +162,25 @@ struct Cli {
     )]
     rpc_endpoint: String,
 
-    /// Deployed UWU ERC-20 address. Omit before launch; ordinary interaction remains available.
+    /// Deployed UWU ERC-20 address. Required while token economics are enabled.
     #[arg(long, env = "CTHUWU_TOKEN_CONTRACT")]
     token_contract: Option<String>,
+
+    /// Treasury address whose UWU balance drives this Tentacle's Wealth and survival.
+    #[arg(long, env = "CTHUWU_TENTACLE_WALLET")]
+    tentacle_wallet: Option<String>,
+
+    /// Personal-sign proof over the printed canonical treasury-attestation message.
+    #[arg(
+        long,
+        env = "CTHUWU_TREASURY_ATTESTATION_SIGNATURE",
+        hide_env_values = true
+    )]
+    treasury_attestation_signature: Option<String>,
+
+    /// Optional ERC-20-compatible staking receipt contract queried for propagation stake.
+    #[arg(long, env = "CTHUWU_STAKE_CONTRACT")]
+    stake_contract: Option<String>,
 
     /// ERC-20 decimals used to normalize raw balances (Clanker standard: 18).
     #[arg(long, env = "CTHUWU_TOKEN_DECIMALS", default_value_t = UWU_TOKEN_DECIMALS)]
@@ -168,7 +194,7 @@ struct Cli {
     )]
     token_total_supply: u64,
 
-    /// Enable local token observation. Use `--observe-tokens false` to disable it.
+    /// Enable mandatory local token economics. Missing/failed observations block normal work.
     #[arg(
         long,
         env = "CTHUWU_OBSERVE_TOKENS",
@@ -177,7 +203,7 @@ struct Cli {
     )]
     observe_tokens: bool,
 
-    /// Cache lifetime for ordinary balance observations. Economic admission uses a fresh read.
+    /// Cache lifetime for balance observations and maximum node-economics refresh interval.
     #[arg(
         long,
         env = "CTHUWU_OBSERVE_INTERVAL",
@@ -185,13 +211,37 @@ struct Cli {
     )]
     observe_interval: u64,
 
-    /// Minimum known UWU tier for public interaction. Unknown RPC state degrades neutrally.
+    /// Minimum UWU tier for public interaction. Unknown/stale RPC state blocks normal work.
     #[arg(long, env = "CTHUWU_MIN_TIER", value_enum, default_value_t = TokenTierArg::Unproven)]
     min_tier: TokenTierArg,
 
     /// Override Nature-derived tier differentiation (0 ignores tiers; 100 uses full effects).
     #[arg(long, env = "CTHUWU_TOKEN_TIER_INTENSITY")]
     token_tier_intensity: Option<u8>,
+
+    /// Normalized staking-receipt balance required for propagation rights.
+    #[arg(
+        long,
+        env = "CTHUWU_PROPAGATION_MINIMUM_STAKE_BPS",
+        default_value_t = DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS
+    )]
+    propagation_minimum_stake_basis_points: u16,
+
+    /// Override persisted automatic spawning. New Tentacles default to enabled.
+    #[arg(long, env = "CTHUWU_AUTO_SPAWN", action = ArgAction::Set)]
+    auto_spawn: Option<bool>,
+
+    /// Death-to-shutdown grace period. Production default is 24 hours.
+    #[arg(
+        long,
+        env = "CTHUWU_DEATH_GRACE_SECONDS",
+        default_value_t = 24 * 60 * 60
+    )]
+    death_grace_seconds: u64,
+
+    /// Executable that consumes one JSON lifecycle intent and returns one JSON receipt.
+    #[arg(long, env = "CTHUWU_LIFECYCLE_EXECUTOR")]
+    lifecycle_executor: Option<PathBuf>,
 
     /// Root available to authenticated operator file tools and used as the exec working directory.
     #[arg(long, env = "UWUBOT_OPERATOR_ROOT", default_value = ".")]
@@ -247,6 +297,10 @@ struct Cli {
         default_value_t = false
     )]
     show_nature: bool,
+
+    /// Print the exact treasury-ownership message to personal-sign, then exit without state writes.
+    #[arg(long, default_value_t = false)]
+    print_treasury_attestation: bool,
 
     /// Untrusted bootstrap peer hints. Live gossip still requires authenticated key binding.
     #[arg(long, env = "UWUBOT_GOSSIP_PEERS", value_delimiter = ',')]
@@ -333,6 +387,44 @@ impl From<TokenTierArg> for ReputationTier {
     }
 }
 
+struct EconomicDependencies {
+    blockchain: BlockchainConfig,
+    token_eye: Option<Arc<TokenEye>>,
+    stake_eye: Option<Arc<TokenEye>>,
+    attestor: Arc<JsonRpcTokenTransport>,
+    treasury_signature: EthereumSignature,
+    propagation_minimum_stake_basis_points: u16,
+    initial_node_economics: Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>,
+}
+
+struct AutonomyDependencies {
+    blockchain: BlockchainConfig,
+    token_eye: Option<Arc<TokenEye>>,
+    stake_eye: Option<Arc<TokenEye>>,
+    attestor: Arc<JsonRpcTokenTransport>,
+    treasury_signature: EthereumSignature,
+    propagation_minimum_stake_basis_points: u16,
+    executor: Arc<LifecycleExecutor>,
+}
+
+impl EconomicDependencies {
+    fn into_autonomy(
+        self,
+        propagation_minimum_stake_basis_points: u16,
+        executor: Arc<LifecycleExecutor>,
+    ) -> AutonomyDependencies {
+        AutonomyDependencies {
+            blockchain: self.blockchain,
+            token_eye: self.token_eye,
+            stake_eye: self.stake_eye,
+            attestor: self.attestor,
+            treasury_signature: self.treasury_signature,
+            propagation_minimum_stake_basis_points,
+            executor,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -341,11 +433,127 @@ async fn main() -> Result<()> {
         .init();
 
     let mut cli = Cli::parse();
-    enforce_environment(&cli.data_dir, cli.xmtp_env)?;
+    if cli.print_treasury_attestation {
+        let blockchain = blockchain_config_from_cli(&cli)?;
+        println!(
+            "{}",
+            blockchain.treasury_attestation_message(cli.propagation_minimum_stake_basis_points)?
+        );
+        return Ok(());
+    }
+    let starts_normal_runtime = cli.command.is_none() && !cli.council_simulate && !cli.show_nature;
+    let mut mandatory_recovery = if starts_normal_runtime {
+        EvolutionRuntime::mandatory_recovery_kind(&cli.data_dir)?
+    } else {
+        MandatoryRecoveryKind::None
+    };
+    if mandatory_recovery == MandatoryRecoveryKind::CompletedShutdown {
+        info!("binding lifecycle shutdown is already complete; refusing restart");
+        return Ok(());
+    }
+    if mandatory_recovery == MandatoryRecoveryKind::ShutdownDueOrPending
+        && EvolutionRuntime::try_complete_due_native_shutdown(
+            &cli.data_dir,
+            current_unix_seconds()?,
+        )?
+        .is_some()
+    {
+        mandatory_recovery = EvolutionRuntime::mandatory_recovery_kind(&cli.data_dir)?;
+        if mandatory_recovery == MandatoryRecoveryKind::AbsorptionProjectionRequired {
+            info!(
+                "completed fixed-deadline native shutdown; opening only to repair the durable absorption lineage projection"
+            );
+        } else {
+            info!(
+                "completed fixed-deadline native shutdown before constructing unrelated runtime dependencies"
+            );
+            return Ok(());
+        }
+    }
+    if mandatory_recovery == MandatoryRecoveryKind::AbsorptionProjectionRequired {
+        EvolutionRuntime::repair_absorption_projection(&cli.data_dir)?;
+        info!(
+            "repaired the terminal absorption lineage projection without opening Nature, metrics, economics, or operator state"
+        );
+        return Ok(());
+    }
+    let mut economic_dependencies = None;
+    let mut lifecycle_executor = None;
+    if starts_normal_runtime {
+        if mandatory_recovery == MandatoryRecoveryKind::None
+            && cli.stdin_inbox.is_some()
+            && !cfg!(debug_assertions)
+        {
+            bail!(
+                "--stdin-inbox is a debug-build test harness and is unavailable in release nodes"
+            );
+        }
+        if mandatory_recovery == MandatoryRecoveryKind::None && !cli.observe_tokens {
+            bail!(
+                "normal runtime requires token observation; --observe-tokens=false is limited to non-runtime management and simulation paths"
+            );
+        }
+        if mandatory_recovery == MandatoryRecoveryKind::None && cli.death_grace_seconds == 0 {
+            bail!("CTHUWU_DEATH_GRACE_SECONDS must be positive (default: 86400)");
+        }
+        if mandatory_recovery == MandatoryRecoveryKind::None
+            && cli.propagation_minimum_stake_basis_points > 10_000
+        {
+            bail!("CTHUWU_PROPAGATION_MINIMUM_STAKE_BPS must not exceed 10000");
+        }
+        if !matches!(
+            mandatory_recovery,
+            MandatoryRecoveryKind::CompletedShutdown
+                | MandatoryRecoveryKind::AbsorptionProjectionRequired
+        ) {
+            if env::var_os("CTHUWU_ECONOMICS_PRIVATE_KEY").is_some() {
+                if mandatory_recovery == MandatoryRecoveryKind::None {
+                    bail!(
+                        "uwubot does not accept CTHUWU_ECONOMICS_PRIVATE_KEY; configure the lifecycle executor to use a separately isolated signer service"
+                    );
+                }
+                warn!(
+                    "ignoring CTHUWU_ECONOMICS_PRIVATE_KEY while draining binding recovery; uwubot never forwards raw signing keys"
+                );
+            }
+            match build_economic_dependencies(
+                &cli,
+                mandatory_recovery == MandatoryRecoveryKind::None,
+            )
+            .await
+            {
+                Ok(dependencies) => economic_dependencies = Some(dependencies),
+                Err(error) if mandatory_recovery != MandatoryRecoveryKind::None => {
+                    warn!(
+                        %error,
+                        "treasury economics are unavailable; binding absorption/shutdown recovery will continue without token admission"
+                    );
+                }
+                Err(error) => {
+                    return Err(error).context(
+                        "mandatory Tentacle economics preflight failed before local state mutation",
+                    );
+                }
+            }
+            match build_lifecycle_executor(&cli) {
+                Ok(executor) => lifecycle_executor = Some(executor),
+                Err(error) if mandatory_recovery != MandatoryRecoveryKind::None => {
+                    warn!(
+                        %error,
+                        "lifecycle executor is unavailable; fixed-deadline native shutdown remains authoritative"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    if mandatory_recovery != MandatoryRecoveryKind::AbsorptionProjectionRequired {
+        enforce_environment(&cli.data_dir, cli.xmtp_env)?;
+    }
     cli.data_dir = fs::canonicalize(&cli.data_dir)
         .with_context(|| format!("resolving data directory {}", cli.data_dir.display()))?;
-    let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     if let Some(command) = cli.command.take() {
+        let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
         return run_management_command(operators, command);
     }
     if cli.council_simulate {
@@ -354,35 +562,108 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
-    let operator_root = resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?;
-    let evolution = EvolutionRuntime::open(
-        &cli.data_dir,
-        &operator_root,
-        EvolutionStartupOptions {
-            skip_awakening: cli.skip_awakening,
-            reroll_nature: cli.reroll_nature,
-            force: cli.force,
-            nature_path: cli.nature_path.clone(),
-            gossip_peers: cli.gossip_peers.clone(),
+    let recovering_binding_death = mandatory_recovery != MandatoryRecoveryKind::None;
+    // Binding lifecycle recovery must not be stranded by an unrelated operator-workspace
+    // configuration error. Evolution stores this path but does not touch it while admission is
+    // closed; resolve and enforce isolation only if the Tentacle survives into normal operation.
+    let mut operator_root = if recovering_binding_death {
+        cli.operator_root.clone()
+    } else {
+        resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?
+    };
+    let mut evolution_options = EvolutionStartupOptions {
+        skip_awakening: cli.skip_awakening && !recovering_binding_death,
+        reroll_nature: cli.reroll_nature && !recovering_binding_death,
+        force: cli.force && !recovering_binding_death,
+        nature_path: cli.nature_path.clone(),
+        gossip_peers: cli.gossip_peers.clone(),
+        auto_spawn: (!recovering_binding_death)
+            .then_some(cli.auto_spawn)
+            .flatten(),
+        death_grace_period_seconds: if recovering_binding_death && cli.death_grace_seconds == 0 {
+            24 * 60 * 60
+        } else {
+            cli.death_grace_seconds
         },
-    )?;
+        propagation_minimum_stake_basis_points: if recovering_binding_death {
+            cli.propagation_minimum_stake_basis_points.min(10_000)
+        } else {
+            cli.propagation_minimum_stake_basis_points
+        },
+        node_economics_ttl_seconds: cli.observe_interval.saturating_mul(2).max(1),
+        survival_total_supply_whole: if recovering_binding_death && cli.token_total_supply == 0 {
+            REQUESTED_UWU_TOTAL_SUPPLY
+        } else {
+            cli.token_total_supply
+        },
+        survival_token_decimals: if recovering_binding_death {
+            cli.token_decimals.min(77)
+        } else {
+            cli.token_decimals
+        },
+        ..EvolutionStartupOptions::default()
+    };
     if cli.show_nature {
+        let evolution = EvolutionRuntime::open(&cli.data_dir, &operator_root, evolution_options)?;
         println!("{}", evolution.nature_status());
         return Ok(());
     }
+    evolution_options.initial_node_economics = if recovering_binding_death {
+        None
+    } else {
+        economic_dependencies
+            .as_ref()
+            .and_then(|dependencies| dependencies.initial_node_economics)
+    };
+    evolution_options.require_node_economics = true;
+    let evolution = Arc::new(Mutex::new(EvolutionRuntime::open(
+        &cli.data_dir,
+        &operator_root,
+        evolution_options,
+    )?));
+    if evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+        .is_shutdown_complete()
+    {
+        info!("binding lifecycle shutdown is already complete; refusing supervised restart");
+        return Ok(());
+    }
+    let recovery_pending_after_open = evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+        .pending_death_deadline_ms()
+        .is_some();
+    if mandatory_recovery != MandatoryRecoveryKind::None || recovery_pending_after_open {
+        match drain_startup_recovery(
+            evolution.clone(),
+            economic_dependencies.as_ref(),
+            lifecycle_executor.as_ref(),
+        )
+        .await?
+        {
+            StartupRecoveryOutcome::ShutdownComplete => return Ok(()),
+            StartupRecoveryOutcome::Survived => {
+                info!("binding Death was canceled by a confirmed survival expenditure");
+            }
+        }
+    }
+    if recovering_binding_death {
+        operator_root = resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?;
+    }
+    let economic_dependencies = economic_dependencies
+        .context("normal runtime economics are unavailable after startup recovery")?;
+    let lifecycle_executor = lifecycle_executor
+        .context("normal runtime lifecycle executor is unavailable after startup recovery")?;
+    let blockchain = economic_dependencies.blockchain.clone();
+    let token_eye = economic_dependencies.token_eye.clone();
+    let autonomy_dependencies = economic_dependencies.into_autonomy(
+        cli.propagation_minimum_stake_basis_points,
+        lifecycle_executor,
+    );
+    let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
-    let blockchain = BlockchainConfig::from_values(BlockchainConfigInput {
-        observe_tokens: cli.observe_tokens,
-        rpc_endpoint: cli.rpc_endpoint.clone(),
-        token_contract: cli.token_contract.as_deref(),
-        token_decimals: cli.token_decimals,
-        total_supply_whole: cli.token_total_supply,
-        observe_interval_seconds: cli.observe_interval,
-        minimum_tier: cli.min_tier.into(),
-        tier_intensity_override: cli.token_tier_intensity,
-    })?;
-    let token_eye = blockchain.build_token_eye()?;
     let search = build_web_search(&cli)?;
     let router = Arc::new(InferenceRouter::new(build_inference_config(&cli, search)?)?);
     let model: Arc<dyn Model> = router.clone();
@@ -406,9 +687,9 @@ async fn main() -> Result<()> {
         model,
         Arc::new(Mutex::new(operators)),
         operator_harness,
-        Arc::new(Mutex::new(evolution)),
+        evolution.clone(),
     )
-    .with_token_observance(token_eye, blockchain.clone());
+    .with_token_observance(token_eye.clone(), blockchain.clone());
 
     info!(
         xmtp_env = cli.xmtp_env.as_str(),
@@ -418,28 +699,679 @@ async fn main() -> Result<()> {
         "starting uwubot"
     );
 
-    if let Some(inbox_id) = cli.stdin_inbox {
-        return run_stdin(bot, &inbox_id).await;
+    if let Some(inbox_id) = cli.stdin_inbox.as_deref() {
+        return run_stdin(bot, inbox_id).await;
     }
 
-    run_xmtp_sidecar(
+    let (lifecycle_shutdown_tx, lifecycle_shutdown_rx) = watch::channel(false);
+    let mut supervisor = tokio::spawn(run_autonomy_supervisor(
+        evolution.clone(),
+        autonomy_dependencies,
+        lifecycle_shutdown_tx.clone(),
+    ));
+    let transport = run_xmtp_sidecar(
         bot,
         &cli.node,
         &cli.sidecar,
         &cli.data_dir,
         cli.xmtp_env.as_str(),
+        lifecycle_shutdown_rx,
+    );
+    tokio::pin!(transport);
+    tokio::select! {
+        transport_result = &mut transport => {
+            if *lifecycle_shutdown_tx.borrow() {
+                let shutdown_intent = supervisor
+                    .await
+                    .context("autonomous Evolution supervisor task failed")??;
+                transport_result?;
+                acknowledge_native_shutdown(&evolution, &shutdown_intent)?;
+                Ok(())
+            } else {
+                supervisor.abort();
+                let _ = supervisor.await;
+                transport_result
+            }
+        }
+        supervisor_result = &mut supervisor => {
+            let shutdown_intent = supervisor_result
+                .context("autonomous Evolution supervisor task failed")??;
+            transport.await?;
+            acknowledge_native_shutdown(&evolution, &shutdown_intent)?;
+            Ok(())
+        }
+    }
+}
+
+async fn build_economic_dependencies(
+    cli: &Cli,
+    require_initial_observation: bool,
+) -> Result<EconomicDependencies> {
+    let blockchain = blockchain_config_from_cli(cli)?;
+    let token_eye = blockchain.build_token_eye()?;
+    let stake_eye = blockchain.build_stake_eye()?;
+    let treasury_signature: EthereumSignature = cli
+        .treasury_attestation_signature
+        .as_deref()
+        .context(
+            "CTHUWU_TREASURY_ATTESTATION_SIGNATURE is required; run --print-treasury-attestation and personal-sign its exact output with the configured treasury",
+        )?
+        .parse()
+        .map_err(anyhow::Error::new)?;
+    let attestor = Arc::new(
+        JsonRpcTokenTransport::for_chain(&blockchain.rpc_endpoint, BASE_MAINNET_CHAIN_ID)
+            .map_err(anyhow::Error::new)?,
+    );
+    let initial_node_economics = match observe_node_economics(
+        &blockchain,
+        token_eye.as_ref(),
+        stake_eye.as_ref(),
+        &attestor,
+        treasury_signature,
+        cli.propagation_minimum_stake_basis_points,
     )
     .await
+    {
+        Ok(observation) => observation,
+        Err(error) if !require_initial_observation => {
+            warn!(
+                %error,
+                "initial treasury observation failed during binding recovery; token admission remains unavailable"
+            );
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(EconomicDependencies {
+        blockchain,
+        token_eye,
+        stake_eye,
+        attestor,
+        treasury_signature,
+        propagation_minimum_stake_basis_points: cli.propagation_minimum_stake_basis_points,
+        initial_node_economics,
+    })
+}
+
+fn build_lifecycle_executor(cli: &Cli) -> Result<Arc<LifecycleExecutor>> {
+    let executor = LifecycleExecutor::new(
+        cli.lifecycle_executor
+            .clone()
+            .context("CTHUWU_LIFECYCLE_EXECUTOR is required for autonomous Evolution")?,
+    )?;
+    executor.ensure_outside_operator_root(&cli.operator_root)?;
+    Ok(Arc::new(executor))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupRecoveryOutcome {
+    Survived,
+    ShutdownComplete,
+}
+
+async fn drain_startup_recovery(
+    evolution: Arc<Mutex<EvolutionRuntime>>,
+    economics: Option<&EconomicDependencies>,
+    executor: Option<&Arc<LifecycleExecutor>>,
+) -> Result<StartupRecoveryOutcome> {
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        if evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .pending_death_deadline_ms()
+            .is_none()
+        {
+            return Ok(StartupRecoveryOutcome::Survived);
+        }
+
+        let mut attempted = BTreeSet::new();
+        loop {
+            let now = current_unix_seconds()?;
+            let intent = evolution
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                .next_due_lifecycle_action_excluding(now, &attempted)?;
+            let Some(intent) = intent else {
+                break;
+            };
+            attempted.insert(intent.action_id.clone());
+            if matches!(intent.action, LifecycleAction::Shutdown { .. }) {
+                acknowledge_native_shutdown_with_detail(
+                    &evolution,
+                    &intent,
+                    "native-xmtp-transport-never-started",
+                    "Rust completed binding shutdown before constructing or starting XMTP transport",
+                )?;
+                return Ok(StartupRecoveryOutcome::ShutdownComplete);
+            }
+            if matches!(intent.action, LifecycleAction::Spawn { .. }) {
+                continue;
+            }
+            let Some(executor) = executor else {
+                warn!(
+                    action_id = %intent.action_id,
+                    "binding recovery action has no executor; it will retry while native shutdown keeps its fixed deadline"
+                );
+                continue;
+            };
+            if matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
+                && !evolution
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                    .node_economics_is_current(now)
+            {
+                continue;
+            }
+            match execute_with_death_preemption(
+                &evolution,
+                executor,
+                economics.map(|dependencies| dependencies.blockchain.rpc_endpoint.as_str()),
+                &intent,
+            )
+            .await?
+            {
+                Some(Ok(receipt)) => {
+                    acknowledge_executor_receipt(&evolution, &intent, receipt)?;
+                }
+                Some(Err(error)) => warn!(
+                    action_id = %intent.action_id,
+                    %error,
+                    "recovery executor returned no receipt; preserving the action for retry"
+                ),
+                None => continue,
+            }
+        }
+
+        if let Some(economics) = economics {
+            match observe_with_death_preemption(
+                &evolution,
+                &economics.blockchain,
+                economics.token_eye.as_ref(),
+                economics.stake_eye.as_ref(),
+                &economics.attestor,
+                economics.treasury_signature,
+                economics.propagation_minimum_stake_basis_points,
+            )
+            .await?
+            {
+                Some(Ok(Some((snapshot, provenance)))) => {
+                    if let Err(error) = evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                        .record_node_economic_observation(snapshot, provenance)
+                    {
+                        warn!(%error, "could not bind recovery treasury observation");
+                    }
+                }
+                Some(Ok(None)) => {}
+                Some(Err(error)) => {
+                    evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                        .mark_node_economics_unavailable();
+                    warn!(%error, "recovery treasury observation failed");
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+async fn execute_with_death_preemption(
+    evolution: &Arc<Mutex<EvolutionRuntime>>,
+    executor: &LifecycleExecutor,
+    rpc_endpoint: Option<&str>,
+    intent: &evolution::LifecycleIntent,
+) -> Result<Option<Result<LifecycleReceipt>>> {
+    let mut executor_future = Box::pin(executor.execute_with_rpc(intent, rpc_endpoint));
+    loop {
+        let deadline_ms = evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .pending_death_deadline_ms();
+        if deadline_ms.is_some() && matches!(intent.action, LifecycleAction::Spawn { .. }) {
+            warn!(
+                action_id = %intent.action_id,
+                "binding Death preempted an in-flight child provision"
+            );
+            return Ok(None);
+        }
+        let current_ms = current_unix_millis()?;
+        if deadline_ms.is_some_and(|deadline| current_ms >= deadline) {
+            warn!(
+                action_id = %intent.action_id,
+                "death deadline preempted an in-flight lifecycle executor"
+            );
+            return Ok(None);
+        }
+        let poll_millis = deadline_ms
+            .map(|deadline| deadline.saturating_sub(current_ms).min(100))
+            .unwrap_or(100)
+            .max(1);
+        tokio::select! {
+            result = &mut executor_future => return Ok(Some(result)),
+            () = tokio::time::sleep(Duration::from_millis(poll_millis)) => {}
+        }
+    }
+}
+
+async fn observe_with_death_preemption(
+    evolution: &Arc<Mutex<EvolutionRuntime>>,
+    blockchain: &BlockchainConfig,
+    token_eye: Option<&Arc<TokenEye>>,
+    stake_eye: Option<&Arc<TokenEye>>,
+    attestor: &JsonRpcTokenTransport,
+    treasury_signature: EthereumSignature,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<Option<Result<Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>>>> {
+    let mut observation = Box::pin(observe_node_economics(
+        blockchain,
+        token_eye,
+        stake_eye,
+        attestor,
+        treasury_signature,
+        propagation_minimum_stake_basis_points,
+    ));
+    let death_was_pending = evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+        .pending_death_deadline_ms()
+        .is_some();
+    loop {
+        let deadline_ms = evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .pending_death_deadline_ms();
+        if !death_was_pending && deadline_ms.is_some() {
+            warn!("binding Death preempted an in-flight economics refresh");
+            return Ok(None);
+        }
+        let current_ms = current_unix_millis()?;
+        if deadline_ms.is_some_and(|deadline| current_ms >= deadline) {
+            return Ok(None);
+        }
+        let poll_millis = deadline_ms
+            .map(|deadline| deadline.saturating_sub(current_ms).min(100))
+            .unwrap_or(100)
+            .max(1);
+        tokio::select! {
+            result = &mut observation => return Ok(Some(result)),
+            () = tokio::time::sleep(Duration::from_millis(poll_millis)) => {}
+        }
+    }
+}
+
+fn acknowledge_executor_receipt(
+    evolution: &Arc<Mutex<EvolutionRuntime>>,
+    intent: &evolution::LifecycleIntent,
+    receipt: LifecycleReceipt,
+) -> Result<bool> {
+    let mut runtime = evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
+    if matches!(intent.action, LifecycleAction::Spawn { .. })
+        && runtime.pending_death_deadline_ms().is_some()
+    {
+        warn!(
+            action_id = %intent.action_id,
+            "discarding a child-provision receipt that raced a binding Death"
+        );
+        return Ok(false);
+    }
+    match runtime.ack_lifecycle_action(receipt) {
+        Ok(changed) => Ok(changed),
+        Err(error) if runtime.requires_recovery() => Err(error).context(
+            "lifecycle receipt reached an ambiguous persistence/projection failure; restart is required for durable recovery",
+        ),
+        Err(error) => {
+            // Malformed, conflicting, late, or replayed external receipts are hostile executor
+            // output. Preserve the durable intent and keep the fixed Death deadline authoritative.
+            warn!(
+                action_id = %intent.action_id,
+                %error,
+                "lifecycle executor receipt was rejected; preserving recovery/outbox state"
+            );
+            Ok(false)
+        }
+    }
+}
+
+fn acknowledge_native_shutdown(
+    evolution: &Arc<Mutex<EvolutionRuntime>>,
+    intent: &evolution::LifecycleIntent,
+) -> Result<()> {
+    acknowledge_native_shutdown_with_detail(
+        evolution,
+        intent,
+        "native-xmtp-transport-stopped",
+        "Rust stopped the XMTP transport after closing admission",
+    )
+}
+
+fn acknowledge_native_shutdown_with_detail(
+    evolution: &Arc<Mutex<EvolutionRuntime>>,
+    intent: &evolution::LifecycleIntent,
+    external_reference: &str,
+    detail: &str,
+) -> Result<()> {
+    let completed_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock predates the Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("shutdown completion timestamp exceeds the supported range")?;
+    evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+        .ack_lifecycle_action(LifecycleReceipt {
+            action_id: intent.action_id.clone(),
+            completed_at_ms,
+            status: LifecycleReceiptStatus::Succeeded,
+            external_reference: Some(external_reference.to_owned()),
+            detail: Some(detail.to_owned()),
+            confirmed_chain_receipt: None,
+            provision_receipt: None,
+        })?;
+    Ok(())
+}
+
+fn blockchain_config_from_cli(cli: &Cli) -> Result<BlockchainConfig> {
+    BlockchainConfig::from_values(BlockchainConfigInput {
+        observe_tokens: cli.observe_tokens,
+        rpc_endpoint: cli.rpc_endpoint.clone(),
+        token_contract: cli.token_contract.as_deref(),
+        tentacle_wallet: cli.tentacle_wallet.as_deref(),
+        stake_contract: cli.stake_contract.as_deref(),
+        token_decimals: cli.token_decimals,
+        total_supply_whole: cli.token_total_supply,
+        observe_interval_seconds: cli.observe_interval,
+        minimum_tier: cli.min_tier.into(),
+        tier_intensity_override: cli.token_tier_intensity,
+    })
 }
 
 fn token_observation_status(config: &BlockchainConfig) -> &'static str {
     if !config.observe_tokens {
         "disabled"
-    } else if config.token_contract.is_none() {
-        "waiting-for-contract"
     } else {
-        "enabled"
+        "enabled-hardfail"
     }
+}
+
+async fn observe_node_economics(
+    config: &BlockchainConfig,
+    token_eye: Option<&Arc<TokenEye>>,
+    stake_eye: Option<&Arc<TokenEye>>,
+    attestor: &JsonRpcTokenTransport,
+    treasury_signature: EthereumSignature,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>> {
+    if !config.observe_tokens {
+        return Ok(None);
+    }
+    let observer = token_eye.context("token economics are enabled without an UWU observer")?;
+    let holder = config
+        .tentacle_wallet
+        .context("token economics are enabled without CTHUWU_TENTACLE_WALLET")?;
+    let contract = config
+        .token_contract
+        .context("token economics are enabled without CTHUWU_TOKEN_CONTRACT")?;
+    let attestation_message =
+        config.treasury_attestation_message(propagation_minimum_stake_basis_points)?;
+    attestor
+        .verify_personal_signature(attestation_message.as_bytes(), treasury_signature, holder)
+        .await
+        .map_err(anyhow::Error::new)
+        .context("configured Tentacle treasury ownership proof failed")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock predates the Unix epoch")?
+        .as_secs();
+    let treasury = observer
+        .observe_fresh_required(holder, now)
+        .await
+        .map_err(anyhow::Error::new)
+        .context("mandatory Tentacle treasury observation failed")?;
+    let stake = match stake_eye {
+        Some(stake_eye) => Some(
+            stake_eye
+                .observe_fresh_required(holder, now)
+                .await
+                .map_err(anyhow::Error::new)
+                .context("mandatory Tentacle stake observation failed")?,
+        ),
+        None => None,
+    };
+    let snapshot = TokenEconomicSnapshot {
+        balance_basis_points: config.normalize_balance_basis_points(treasury.balance),
+        stake_basis_points: stake
+            .map(|observation| config.normalize_balance_basis_points(observation.balance))
+            .unwrap_or(0),
+        // Rewards enter through verified revenue/reward events, never a public sender or an
+        // invented RPC value.
+        reward_basis_points: 0,
+        trustworthy: true,
+    };
+    let provenance = EconomicObservationProvenance::base(
+        *holder.as_bytes(),
+        EconomicHolderRole::TentacleTreasury,
+        *contract.as_bytes(),
+        treasury
+            .observed_at
+            .max(stake.map_or(0, |observation| observation.observed_at)),
+        None,
+        config.economic_configuration_identity(propagation_minimum_stake_basis_points),
+    )?;
+    Ok(Some((snapshot, provenance)))
+}
+
+async fn run_autonomy_supervisor(
+    evolution: Arc<Mutex<EvolutionRuntime>>,
+    dependencies: AutonomyDependencies,
+    shutdown: watch::Sender<bool>,
+) -> Result<evolution::LifecycleIntent> {
+    let AutonomyDependencies {
+        blockchain,
+        token_eye,
+        stake_eye,
+        attestor,
+        treasury_signature,
+        propagation_minimum_stake_basis_points,
+        executor,
+    } = dependencies;
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_economic_refresh = 0_u64;
+
+    loop {
+        ticker.tick().await;
+        let mut now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock predates the Unix epoch")?
+            .as_secs();
+
+        if evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .is_shutdown_complete()
+        {
+            bail!("binding lifecycle shutdown was completed while the runtime was active");
+        }
+
+        // Existing binding outbox work takes precedence over a potentially slow/unavailable RPC,
+        // so restart can still absorb or terminate a dead Tentacle during a Base outage.
+        let mut attempted_action_ids = BTreeSet::new();
+        loop {
+            let action_now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock predates the Unix epoch")?
+                .as_secs();
+            let intent = evolution
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                .next_due_lifecycle_action_excluding(action_now, &attempted_action_ids)?;
+            let Some(intent) = intent else {
+                break;
+            };
+            attempted_action_ids.insert(intent.action_id.clone());
+
+            if matches!(intent.action, LifecycleAction::Shutdown { .. }) {
+                shutdown
+                    .send(true)
+                    .context("sending autonomous lifecycle shutdown")?;
+                return Ok(intent);
+            }
+
+            let requires_current_economics = matches!(
+                intent.action,
+                LifecycleAction::SpendForSurvival { .. } | LifecycleAction::Spawn { .. }
+            );
+            if requires_current_economics
+                && !evolution
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                    .node_economics_is_current(action_now)
+            {
+                warn!(
+                    action_id = %intent.action_id,
+                    "economic lifecycle action is deferred until fresh Tentacle economics are bound"
+                );
+                continue;
+            }
+
+            let execution = execute_with_death_preemption(
+                &evolution,
+                &executor,
+                Some(&blockchain.rpc_endpoint),
+                &intent,
+            )
+            .await?;
+            match execution {
+                None => {
+                    // Dropping `execute` kills its process group. Re-select immediately so the
+                    // fixed-deadline Shutdown action preempts the incomplete external work.
+                    continue;
+                }
+                Some(Ok(receipt)) => {
+                    let refresh_after_spend =
+                        matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
+                            && receipt.status == LifecycleReceiptStatus::Succeeded;
+                    if acknowledge_executor_receipt(&evolution, &intent, receipt)?
+                        && refresh_after_spend
+                    {
+                        next_economic_refresh = 0;
+                    }
+                }
+                Some(Err(error)) => {
+                    warn!(
+                        action_id = %intent.action_id,
+                        %error,
+                        "lifecycle executor returned no receipt; preserving the intent for retry"
+                    );
+                    // This action retries next tick, while the exclusion set lets independent due
+                    // work (including the fixed death deadline) continue during this tick.
+                }
+            }
+
+            now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock predates the Unix epoch")?
+                .as_secs();
+            if blockchain.observe_tokens && now >= next_economic_refresh {
+                break;
+            }
+        }
+
+        if blockchain.observe_tokens && now >= next_economic_refresh {
+            let observation = observe_with_death_preemption(
+                &evolution,
+                &blockchain,
+                token_eye.as_ref(),
+                stake_eye.as_ref(),
+                &attestor,
+                treasury_signature,
+                propagation_minimum_stake_basis_points,
+            )
+            .await?;
+            let Some(observation) = observation else {
+                evolution
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                    .mark_node_economics_unavailable();
+                let deadline_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .context("system clock predates the Unix epoch")?
+                    .as_secs();
+                loop {
+                    let deadline_action = evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                        .next_due_lifecycle_action_excluding(deadline_now, &attempted_action_ids)?;
+                    let Some(intent) = deadline_action else {
+                        break;
+                    };
+                    if matches!(intent.action, LifecycleAction::Shutdown { .. }) {
+                        shutdown
+                            .send(true)
+                            .context("sending autonomous lifecycle shutdown")?;
+                        return Ok(intent);
+                    }
+                    attempted_action_ids.insert(intent.action_id);
+                }
+                next_economic_refresh = deadline_now.saturating_add(1);
+                continue;
+            };
+            let refresh_succeeded = match observation {
+                Ok(Some((snapshot, provenance))) => {
+                    match evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                        .record_node_economic_observation(snapshot, provenance)
+                    {
+                        Ok(_) => true,
+                        Err(error) => {
+                            warn!(%error, "could not bind refreshed Tentacle economics");
+                            false
+                        }
+                    }
+                }
+                Ok(None) => true,
+                Err(error) => {
+                    evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                        .mark_node_economics_unavailable();
+                    warn!(%error, "mandatory Tentacle economics refresh failed");
+                    false
+                }
+            };
+            next_economic_refresh = now.saturating_add(if refresh_succeeded {
+                blockchain.observe_interval.as_secs()
+            } else {
+                1
+            });
+        }
+    }
+}
+
+fn current_unix_millis() -> Result<u64> {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock predates the Unix epoch")?
+            .as_millis(),
+    )
+    .context("system clock exceeds the lifecycle timestamp range")
+}
+
+fn current_unix_seconds() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock predates the Unix epoch")?
+        .as_secs())
 }
 
 fn resolve_isolated_operator_root(data_dir: &Path, operator_root: &Path) -> Result<PathBuf> {
@@ -647,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    fn council_mode_is_opt_in_and_preserves_standalone_defaults() {
+    fn council_simulation_is_explicit_and_runtime_defaults_remain_peer_to_peer() {
         let standalone = Cli::try_parse_from(["uwubot"]).unwrap();
         assert!(!standalone.council_simulate);
         assert!(standalone.stdin_inbox.is_none());
@@ -678,6 +1610,7 @@ mod tests {
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);
+        assert!(blockchain_config_from_cli(&standalone).is_err());
     }
 
     #[test]

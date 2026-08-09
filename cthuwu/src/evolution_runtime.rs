@@ -1,23 +1,33 @@
+#[cfg(test)]
+use crate::personality::SacredBan;
 use crate::{
     awakening::{
         AwakeningAction, AwakeningLog, AwakeningOutcome, AwakeningPhase, AwakeningProvenance,
         AwakeningRitual,
     },
-    economics::{TokenEconomicPolicy, TokenEconomicSnapshot},
-    evolution::{Lineage, LineageStore, SpawnAuthorization},
+    economics::{
+        DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS, EconomicHolderRole, EconomicObservationProvenance,
+        NORMALIZED_ECONOMIC_MAX, TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot,
+    },
+    evolution::{
+        DEATH_GRACE_PERIOD_MS, LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent,
+        LifecycleReceipt, LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage,
+        LineageStore, SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle,
+        exact_raw_token_amount,
+    },
     hermes::{
         HermesNode, HermesStore, KnowledgeItem, KnowledgePayload, MAX_GOSSIP_PEERS,
         MAX_SKILL_BYTES, OperatorSkill, SignatureAuthority, SigningIdentity, TrustedKeyring,
     },
     model::{ModelPolicy, ResponseBias},
     personality::{
-        NatureStore, NatureTrait, SacredBan, TentacleNature, assert_owner_only,
-        open_read_no_follow, reject_unsafe_target,
+        NatureStore, NatureTrait, TentacleNature, assert_owner_only, open_read_no_follow,
+        reject_unsafe_target,
     },
     scales::{
-        DAILY_PROPAGATION_MIN_CONVERSATIONS, DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
         EvaluationPeriod, EvaluationStatus, EvolutionHistoryRecord, Judgment, JudgmentOutcome,
         JudgmentPolicy, ScalesStore, ScoredScaleAvailability, TentacleMetrics,
+        ValidatedHistoryCatalog,
     },
     storage::{ensure_private_directory, restrict_file, sync_directory},
 };
@@ -26,7 +36,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     path::{Component, Path, PathBuf},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
@@ -45,18 +55,66 @@ const RUNTIME_SCORED_SCALES: ScoredScaleAvailability = ScoredScaleAvailability {
     influence: false,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MandatoryRecoveryKind {
+    None,
+    CompletedShutdown,
+    AbsorptionProjectionRequired,
+    ShutdownDueOrPending,
+    AbsorptionRequired,
+}
+
+#[derive(Clone, Debug)]
 pub struct EvolutionStartupOptions {
     pub skip_awakening: bool,
     pub reroll_nature: bool,
     pub force: bool,
     pub nature_path: Option<PathBuf>,
     pub gossip_peers: Vec<String>,
+    /// `None` keeps persisted policy; a fresh Tentacle defaults to automatic spawning.
+    pub auto_spawn: Option<bool>,
+    pub death_grace_period_seconds: u64,
+    pub propagation_minimum_stake_basis_points: u16,
+    pub require_node_economics: bool,
+    pub node_economics_ttl_seconds: u64,
+    pub initial_node_economics: Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>,
+    pub child_bootstrap: Option<ChildBootstrap>,
+    pub survival_total_supply_whole: u64,
+    pub survival_token_decimals: u8,
 }
 
-/// Owns the local Evolution state machines. It intentionally contains no process-control or live
-/// peer transport capability: lifecycle outcomes remain recommendations, and Hermes records stay
-/// local until an authenticated asymmetric peer-key adapter exists.
+impl Default for EvolutionStartupOptions {
+    fn default() -> Self {
+        Self {
+            skip_awakening: false,
+            reroll_nature: false,
+            force: false,
+            nature_path: None,
+            gossip_peers: Vec::new(),
+            auto_spawn: None,
+            death_grace_period_seconds: DEATH_GRACE_PERIOD_MS / 1_000,
+            propagation_minimum_stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+            require_node_economics: false,
+            node_economics_ttl_seconds: 120,
+            initial_node_economics: None,
+            child_bootstrap: None,
+            survival_total_supply_whole: 1_000_000_000,
+            survival_token_decimals: 18,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChildBootstrap {
+    pub provisioning_action_id: String,
+    pub tentacle_id: String,
+    pub parent_id: String,
+    pub inherited_nature: TentacleNature,
+}
+
+/// Owns the local Evolution state machines and emits durable lifecycle actions for an external
+/// executor. Process control, token transactions, provisioning, and memory transfer never occur
+/// inside this state machine.
 pub struct EvolutionRuntime {
     _runtime_lock: File,
     operator_root: PathBuf,
@@ -64,11 +122,21 @@ pub struct EvolutionRuntime {
     awakening_log: AwakeningLog,
     ritual: AwakeningRitual,
     scales_store: ScalesStore,
+    history_catalog: ValidatedHistoryCatalog,
     metrics: TentacleMetrics,
     last_final_judgment: Option<EvolutionHistoryRecord>,
     lineage_store: LineageStore,
     lineage: Lineage,
     local_tentacle_id: String,
+    lifecycle_store: LifecycleStore,
+    lifecycle: LifecycleState,
+    death_grace_period_ms: u64,
+    propagation_minimum_stake_basis_points: u16,
+    require_node_economics: bool,
+    node_economics_ttl_seconds: u64,
+    node_economics_available: bool,
+    survival_total_supply_whole: u64,
+    survival_token_decimals: u8,
     hermes_store: HermesStore,
     hermes: HermesNode,
     operator_identity: SigningIdentity,
@@ -116,6 +184,366 @@ pub(crate) struct ConversationObservation {
 }
 
 impl EvolutionRuntime {
+    /// Read-only preflight used before an RPC failure is allowed to open mutable Evolution state.
+    /// Missing state is not recovery work; malformed, symlinked, or overly broad-permission state
+    /// is rejected without creating directories or changing modes.
+    pub fn has_mandatory_recovery_work(data_dir: &Path) -> Result<bool> {
+        Ok(Self::mandatory_recovery_kind(data_dir)? != MandatoryRecoveryKind::None)
+    }
+
+    /// Classifies which recovery dependency must be available before mutable startup. Absorption
+    /// needs the configured external executor; pending/native Shutdown and terminal exit do not
+    /// require an economic signer or Base RPC.
+    pub fn mandatory_recovery_kind(data_dir: &Path) -> Result<MandatoryRecoveryKind> {
+        let data_metadata = match fs::symlink_metadata(data_dir) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(MandatoryRecoveryKind::None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(
+            data_metadata.is_dir() && !data_metadata.file_type().is_symlink(),
+            "Evolution data path must be a real directory"
+        );
+        assert_owner_only(&data_metadata, "Evolution data directory")?;
+
+        let state_directory = data_dir.join("state");
+        let state_metadata = match fs::symlink_metadata(&state_directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(MandatoryRecoveryKind::None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(
+            state_metadata.is_dir() && !state_metadata.file_type().is_symlink(),
+            "Evolution state path must be a real directory"
+        );
+        assert_owner_only(&state_metadata, "Evolution state directory")?;
+
+        let path = state_directory.join("lifecycle.json");
+        let path_metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(MandatoryRecoveryKind::None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(
+            path_metadata.is_file() && !path_metadata.file_type().is_symlink(),
+            "Evolution lifecycle path must be a regular file"
+        );
+        assert_owner_only(&path_metadata, "Evolution lifecycle state")?;
+        let file = open_read_no_follow(&path)?;
+        let opened_metadata = file.metadata()?;
+        ensure!(
+            opened_metadata.is_file(),
+            "Evolution lifecycle path must remain a regular file"
+        );
+        assert_owner_only(&opened_metadata, "Evolution lifecycle state")?;
+        let lifecycle: LifecycleState = serde_json::from_reader(BufReader::new(file))?;
+        lifecycle.validate()?;
+        if lifecycle.shutdown_completed_at_ms.is_some()
+            && lifecycle.has_unapplied_absorption_projection()
+        {
+            return Ok(MandatoryRecoveryKind::AbsorptionProjectionRequired);
+        }
+        if lifecycle.shutdown_completed_at_ms.is_some() {
+            return Ok(MandatoryRecoveryKind::CompletedShutdown);
+        }
+        let now_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock predates the Unix epoch during recovery preflight")?
+            .as_millis()
+            .try_into()
+            .context("recovery preflight timestamp exceeds the lifecycle range")?;
+        if lifecycle
+            .pending_death
+            .as_ref()
+            .is_some_and(|death| now_ms >= death.grace_ends_at_ms)
+        {
+            return Ok(MandatoryRecoveryKind::ShutdownDueOrPending);
+        }
+        let has_shutdown = lifecycle.intents.values().any(|intent| {
+            lifecycle.receipt(&intent.action_id).is_none()
+                && !lifecycle.canceled_action_ids.contains(&intent.action_id)
+                && matches!(intent.action, LifecycleAction::Shutdown { .. })
+        });
+        if has_shutdown {
+            return Ok(MandatoryRecoveryKind::ShutdownDueOrPending);
+        }
+        let has_absorption = lifecycle.intents.values().any(|intent| {
+            lifecycle.receipt(&intent.action_id).is_none()
+                && !lifecycle.canceled_action_ids.contains(&intent.action_id)
+                && matches!(intent.action, LifecycleAction::Absorb { .. })
+        });
+        if has_absorption {
+            return Ok(MandatoryRecoveryKind::AbsorptionRequired);
+        }
+        if lifecycle.pending_death.is_some() {
+            return Ok(MandatoryRecoveryKind::ShutdownDueOrPending);
+        }
+        Ok(MandatoryRecoveryKind::None)
+    }
+
+    /// Completes an already-due native Shutdown without opening Nature, metrics, economics, or
+    /// transport state. This is the fixed-deadline startup path for a process whose transport was
+    /// never started. It remains serialized by the Evolution writer lock and validates the full
+    /// lifecycle schema plus the exact local Tentacle/death binding before atomically persisting
+    /// the controller receipt.
+    pub fn complete_due_native_shutdown(
+        data_dir: &Path,
+        now_unix_seconds: u64,
+    ) -> Result<LifecycleReceipt> {
+        Self::try_complete_due_native_shutdown(data_dir, now_unix_seconds)?
+            .context("native Shutdown cannot complete before the binding Death grace deadline")
+    }
+
+    /// Non-stringly startup probe for the fixed-deadline native Shutdown path. `None` means no
+    /// local Shutdown is due at `now_unix_seconds`; `Some` is the newly persisted receipt or the
+    /// exact receipt from an already completed idempotent replay.
+    pub fn try_complete_due_native_shutdown(
+        data_dir: &Path,
+        now_unix_seconds: u64,
+    ) -> Result<Option<LifecycleReceipt>> {
+        if Self::mandatory_recovery_kind(data_dir)? == MandatoryRecoveryKind::None {
+            return Ok(None);
+        }
+        let _runtime_lock = acquire_evolution_lock(data_dir)?;
+        if Self::mandatory_recovery_kind(data_dir)? == MandatoryRecoveryKind::None {
+            return Ok(None);
+        }
+
+        let lifecycle_store = LifecycleStore::new(data_dir)?;
+        let mut lifecycle = lifecycle_store
+            .load()?
+            .context("lifecycle-only native Shutdown requires persisted lifecycle state")?;
+        lifecycle.validate()?;
+        let tracking_changed = lifecycle.reconcile_absorption_projection_tracking()?;
+
+        if let Some(completed_at_ms) = lifecycle.shutdown_completed_at_ms {
+            let pending = lifecycle
+                .pending_death
+                .as_ref()
+                .context("completed native Shutdown has no binding pending Death")?;
+            let receipt = lifecycle
+                .receipts
+                .iter()
+                .find(|receipt| {
+                    receipt.completed_at_ms == completed_at_ms
+                        && receipt.status == LifecycleReceiptStatus::Succeeded
+                        && lifecycle
+                            .intents
+                            .get(&receipt.action_id)
+                            .is_some_and(|intent| {
+                                matches!(
+                                    &intent.action,
+                                    LifecycleAction::Shutdown {
+                                        tentacle_id,
+                                        judgment_id,
+                                        ..
+                                    } if tentacle_id == &lifecycle.tentacle_id
+                                        && judgment_id == &pending.judgment_id
+                                )
+                            })
+                })
+                .cloned()
+                .context("completed native Shutdown lacks an exact local controller receipt")?;
+            if tracking_changed {
+                lifecycle_store.save(&lifecycle)?;
+            }
+            return Ok(Some(receipt));
+        }
+
+        let now_ms = now_unix_seconds
+            .checked_mul(1_000)
+            .context("native Shutdown timestamp exceeds the lifecycle range")?;
+        let pending = lifecycle
+            .pending_death
+            .clone()
+            .context("lifecycle recovery work has no binding pending Death")?;
+        if now_ms < pending.grace_ends_at_ms {
+            if tracking_changed {
+                lifecycle_store.save(&lifecycle)?;
+            }
+            return Ok(None);
+        }
+
+        lifecycle.reconcile_expired_death(now_ms, None)?;
+        let absorption_action_id = lifecycle.intents.values().find_map(|intent| {
+            matches!(
+                &intent.action,
+                LifecycleAction::Absorb { source_id, judgment_id, .. }
+                    if source_id == &lifecycle.tentacle_id
+                        && judgment_id == &pending.judgment_id
+            )
+            .then(|| intent.action_id.clone())
+        });
+        let expected_action = LifecycleAction::Shutdown {
+            tentacle_id: lifecycle.tentacle_id.clone(),
+            judgment_id: pending.judgment_id,
+            after_action_id: absorption_action_id,
+        };
+        let intent = lifecycle
+            .intents
+            .values()
+            .find(|intent| intent.action == expected_action)
+            .cloned()
+            .context("expired Death did not produce its exact canonical native Shutdown")?;
+        ensure!(
+            !lifecycle.canceled_action_ids.contains(&intent.action_id),
+            "exact native Shutdown action is canceled"
+        );
+        ensure!(
+            lifecycle.receipt(&intent.action_id).is_none(),
+            "exact native Shutdown action already has a terminal non-success receipt"
+        );
+        ensure!(
+            intent.created_at_ms <= now_ms,
+            "exact native Shutdown intent was created after the controller timestamp"
+        );
+
+        let receipt = LifecycleReceipt {
+            action_id: intent.action_id,
+            completed_at_ms: now_ms,
+            status: LifecycleReceiptStatus::Succeeded,
+            external_reference: Some("native-transport-never-started".to_owned()),
+            detail: Some("fixed-deadline startup shutdown".to_owned()),
+            confirmed_chain_receipt: None,
+            provision_receipt: None,
+        };
+        let (action, changed) = lifecycle.acknowledge_action(receipt.clone())?;
+        ensure!(
+            changed && action == expected_action,
+            "native Shutdown receipt was not applied"
+        );
+        lifecycle_store.save(&lifecycle)?;
+        Ok(Some(receipt))
+    }
+
+    /// Repairs the local lineage half of a successful absorption after a crash between receipt
+    /// persistence and projection. This recovery boundary loads only lifecycle and lineage state;
+    /// it does not inspect Nature, metrics, economics, operator roots, or current CLI policy.
+    pub fn repair_absorption_projection(data_dir: &Path) -> Result<bool> {
+        if Self::mandatory_recovery_kind(data_dir)?
+            != MandatoryRecoveryKind::AbsorptionProjectionRequired
+        {
+            return Ok(false);
+        }
+        let _runtime_lock = acquire_evolution_lock(data_dir)?;
+        if Self::mandatory_recovery_kind(data_dir)?
+            != MandatoryRecoveryKind::AbsorptionProjectionRequired
+        {
+            return Ok(false);
+        }
+
+        let lifecycle_store = LifecycleStore::new(data_dir)?;
+        let mut lifecycle = lifecycle_store
+            .load()?
+            .context("absorption projection repair requires persisted lifecycle state")?;
+        lifecycle.validate()?;
+        lifecycle.reconcile_absorption_projection_tracking()?;
+        let shutdown_completed_at_ms = lifecycle
+            .shutdown_completed_at_ms
+            .context("absorption projection repair requires completed native Shutdown")?;
+        let pending_death = lifecycle
+            .pending_death
+            .clone()
+            .context("absorption projection repair requires its binding pending Death")?;
+        ensure!(
+            shutdown_completed_at_ms >= pending_death.grace_ends_at_ms,
+            "completed native Shutdown predates its binding Death deadline"
+        );
+        let repair_observed_at_ms = now_unix_seconds()?
+            .checked_mul(1_000)
+            .context("absorption repair observation timestamp exceeds the range")?;
+
+        let lineage_store = LineageStore::new(data_dir)?;
+        let mut lineage = lineage_store
+            .load()?
+            .context("absorption projection repair requires persisted lineage state")?;
+        ensure!(
+            lifecycle.tentacle_id == lineage.state().root_id,
+            "lifecycle and lineage state belong to different local Tentacles"
+        );
+        let family = lineage.family(&lifecycle.tentacle_id)?;
+        let valid_targets = family
+            .parent
+            .into_iter()
+            .chain(family.siblings)
+            .chain(family.children)
+            .collect::<BTreeSet<_>>();
+        let pending_action_ids = lifecycle
+            .pending_absorption_projection_action_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure!(
+            !pending_action_ids.is_empty(),
+            "absorption projection preflight has no exact pending action"
+        );
+        let projections = pending_action_ids
+            .iter()
+            .map(|action_id| {
+                let intent = lifecycle
+                    .intents
+                    .get(action_id)
+                    .context("pending absorption projection references a missing intent")?;
+                let receipt = lifecycle
+                    .receipt(action_id)
+                    .context("pending absorption projection references a missing receipt")?;
+                let LifecycleAction::Absorb {
+                    source_id,
+                    target_id,
+                    judgment_id,
+                } = &intent.action
+                else {
+                    bail!("pending absorption projection references a non-Absorb action")
+                };
+                ensure!(
+                    source_id == &lifecycle.tentacle_id
+                        && valid_targets.contains(target_id)
+                        && judgment_id == &pending_death.judgment_id
+                        && receipt.status == LifecycleReceiptStatus::Succeeded
+                        && !lifecycle.canceled_action_ids.contains(action_id),
+                    "pending absorption projection is not bound to the exact local Death and lineage target"
+                );
+                Ok((action_id.clone(), intent.action.clone(), receipt.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut lineage_changed = false;
+        let mut applied = Vec::with_capacity(projections.len());
+        for (action_id, action, receipt) in projections {
+            let (projected_at_ms, changed) = apply_absorption_lineage_projection(
+                &mut lineage,
+                &action,
+                &receipt,
+                pending_death.grace_ends_at_ms,
+                repair_observed_at_ms,
+            )?;
+            lineage_changed |= changed;
+            applied.push((action_id, projected_at_ms));
+        }
+        if lineage_changed {
+            lineage_store.save(&lineage)?;
+        }
+        let mut lifecycle_changed = false;
+        for (action_id, projected_at_ms) in applied {
+            lifecycle_changed |=
+                lifecycle.record_absorption_projection(&action_id, projected_at_ms)?;
+        }
+        if lifecycle_changed {
+            lifecycle_store.save(&lifecycle)?;
+        }
+        ensure!(
+            !lifecycle.has_unapplied_absorption_projection(),
+            "absorption projection repair left lifecycle work unapplied"
+        );
+        Ok(lineage_changed || lifecycle_changed)
+    }
+
     pub fn open(
         data_dir: &Path,
         operator_root: &Path,
@@ -127,6 +555,27 @@ impl EvolutionRuntime {
         if options.reroll_nature && !options.force {
             bail!("--reroll-nature requires --force or an authenticated XMTP ritual action");
         }
+        let death_grace_period_ms = options
+            .death_grace_period_seconds
+            .checked_mul(1_000)
+            .context("death grace period exceeds the timestamp range")?;
+        ensure!(
+            options.propagation_minimum_stake_basis_points <= 10_000,
+            "propagation minimum stake exceeds 10000 basis points"
+        );
+        ensure!(
+            !options.require_node_economics || options.node_economics_ttl_seconds > 0,
+            "required node economics must have a positive freshness TTL"
+        );
+        ensure!(
+            options.survival_total_supply_whole > 0 && options.survival_token_decimals <= 77,
+            "survival spend normalization requires positive supply and ERC-20 decimals <= 77"
+        );
+        exact_raw_token_amount(
+            options.survival_total_supply_whole,
+            options.survival_token_decimals,
+            10_000,
+        )?;
         ensure_private_directory(data_dir)?;
         let runtime_lock = acquire_evolution_lock(data_dir)?;
         let now = now_unix_seconds()?;
@@ -134,18 +583,70 @@ impl EvolutionRuntime {
         let signing_key = load_or_create_evolution_key(data_dir, &nature_path)?;
         let nature_store = NatureStore::with_path(nature_path.clone(), &signing_key)?;
         let awakening_log = AwakeningLog::new(data_dir, &signing_key)?;
+        let lifecycle_store = LifecycleStore::new(data_dir)?;
+        let preloaded_lifecycle = lifecycle_store.load()?;
+        if options.reroll_nature {
+            ensure!(
+                preloaded_lifecycle.as_ref().is_none_or(|lifecycle| {
+                    !lifecycle.intents.values().any(|intent| {
+                        lifecycle.receipt(&intent.action_id).is_none()
+                            && !lifecycle.canceled_action_ids.contains(&intent.action_id)
+                            && matches!(intent.action, LifecycleAction::Spawn { .. })
+                    })
+                }),
+                "forced Nature reroll is blocked while child provisioning is pending"
+            );
+        }
+        let terminal_shutdown = preloaded_lifecycle
+            .as_ref()
+            .is_some_and(|state| state.shutdown_completed_at_ms.is_some());
 
         let mut persisted_nature = nature_store.load()?;
         let awakening_entries = awakening_log.entries()?;
+        if let Some(bootstrap) = options.child_bootstrap.as_ref() {
+            ensure!(
+                persisted_nature.is_none() && awakening_entries.is_empty(),
+                "child bootstrap is accepted only by a fresh data directory"
+            );
+            ensure!(
+                bootstrap.provisioning_action_id.len() == 64
+                    && bootstrap
+                        .provisioning_action_id
+                        .bytes()
+                        .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) }),
+                "child bootstrap provisioning action ID must be lowercase SHA-256 hex"
+            );
+            ensure!(
+                !bootstrap.tentacle_id.is_empty()
+                    && !bootstrap.parent_id.is_empty()
+                    && bootstrap.tentacle_id != bootstrap.parent_id,
+                "child bootstrap requires distinct nonempty parent and child IDs"
+            );
+            bootstrap.inherited_nature.validate()?;
+            ensure!(
+                bootstrap.inherited_nature.generation > 0
+                    && bootstrap.inherited_nature.parent_nature_id.is_some(),
+                "child bootstrap Nature must contain inherited parent metadata"
+            );
+        }
         if persisted_nature.is_none() && awakening_entries.is_empty() {
+            ensure!(
+                !terminal_shutdown,
+                "completed lifecycle shutdown is missing its persisted signed Nature"
+            );
             ensure_fresh_nature_initialization(data_dir, &nature_path)?;
-            let generated = TentacleNature::random()?;
+            let generated = options
+                .child_bootstrap
+                .as_ref()
+                .map_or_else(TentacleNature::random, |bootstrap| {
+                    Ok(bootstrap.inherited_nature.clone())
+                })?;
             nature_store.save(&generated)?;
             persisted_nature = Some(generated);
         }
         let recovery = AwakeningRitual::resume_or_recover(persisted_nature, now, &awakening_log)?;
         let mut ritual = recovery.ritual;
-        if recovery.nature_recovered_from_log {
+        if recovery.nature_recovered_from_log && !terminal_shutdown {
             nature_store.save(ritual.nature())?;
         }
 
@@ -153,6 +654,10 @@ impl EvolutionRuntime {
         let mut metrics = match scales_store.load_metrics()? {
             Some(metrics) => metrics,
             None => {
+                ensure!(
+                    !terminal_shutdown,
+                    "completed lifecycle shutdown is missing its persisted metrics"
+                );
                 let metrics = new_runtime_metrics(
                     EvaluationPeriod::Daily,
                     aligned_period_start(now)?,
@@ -163,106 +668,160 @@ impl EvolutionRuntime {
                 metrics
             }
         };
-        let history = scales_store.load_history()?;
-        let mut last_final_judgment = history.last().cloned();
+        let mut last_final_judgment = scales_store.history_catalog()?.last().cloned();
 
-        let history_boundary_changed = reconcile_metrics_history_boundary(
-            &mut metrics,
-            last_final_judgment.as_ref(),
-            &ritual,
-            now,
-        )?;
-        let binding_changed =
-            reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
-        let availability_changed = restrict_runtime_scales(&mut metrics, ritual.nature())?;
-        let stress_changed = reconcile_adjustment_stress(&mut metrics, &awakening_log)?;
-        if history_boundary_changed || binding_changed || availability_changed || stress_changed {
-            scales_store.save_metrics(&metrics)?;
-        }
-
-        if options.reroll_nature {
-            finalize_closed_metrics(
-                &scales_store,
+        if !terminal_shutdown {
+            let history_boundary_changed = reconcile_metrics_history_boundary(
                 &mut metrics,
-                &mut last_final_judgment,
+                last_final_judgment.as_ref(),
                 &ritual,
                 now,
             )?;
-            ensure!(
-                !metrics.has_behavior_observations(),
-                "forced Nature reroll is deferred until the current observed metrics period closes"
-            );
-            let provenance = AwakeningProvenance::local_cli(
-                LOCAL_CLI_ACTOR,
-                &format!("forced-reroll-{now}-{}", std::process::id()),
+            let binding_changed =
+                reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
+            let availability_changed = restrict_runtime_scales(
+                &mut metrics,
+                ritual.nature(),
+                options.propagation_minimum_stake_basis_points,
             )?;
-            match ritual.phase() {
-                AwakeningPhase::AwaitingConfirmation => {
-                    ritual.apply(AwakeningAction::Reroll, now, &provenance, &awakening_log)?;
-                }
-                AwakeningPhase::Confirmed { .. }
-                | AwakeningPhase::SkippedForTesting { .. }
-                | AwakeningPhase::Killed { .. } => {
-                    ritual.force_reroll_epoch(now, &provenance, &awakening_log)?;
-                }
-            }
-            nature_store.save(ritual.nature())?;
-            reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
-            scales_store.save_metrics(&metrics)?;
-        }
-        if options.skip_awakening {
-            match ritual.phase() {
-                AwakeningPhase::AwaitingConfirmation => {
-                    if i64::try_from(now)
-                        .is_ok_and(|now| now >= metrics.period_ends_at_unix_seconds)
-                    {
-                        ensure!(
-                            !metrics.has_behavior_observations(),
-                            "testing skip cannot finalize pre-confirmation observations"
-                        );
-                        metrics = new_runtime_metrics(
-                            EvaluationPeriod::Daily,
-                            aligned_period_start(now)?,
-                            ritual.nature(),
-                            ritual.epoch(),
-                        )?;
-                        scales_store.save_metrics(&metrics)?;
-                    }
-                    let provenance = AwakeningProvenance::local_cli(
-                        LOCAL_CLI_ACTOR,
-                        &format!("skip-awakening-{now}-{}", std::process::id()),
-                    )?;
-                    ritual.skip_for_testing(now, &provenance, &awakening_log)?;
-                    nature_store.save(ritual.nature())?;
-                }
-                AwakeningPhase::Killed { .. } => {
-                    bail!(
-                        "a killed awakening cannot be skipped; use --reroll-nature --force to begin a new signed epoch"
+            let stress_changed = reconcile_adjustment_stress(&mut metrics, &awakening_log)?;
+            let initial_economics_changed =
+                if let Some((snapshot, provenance)) = options.initial_node_economics {
+                    ensure!(
+                        provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+                        "initial lifecycle economics must belong to the Tentacle treasury"
                     );
-                }
-                AwakeningPhase::Confirmed { .. } | AwakeningPhase::SkippedForTesting { .. } => {}
+                    ensure_economic_configuration_continuity(&metrics, provenance)?;
+                    metrics.record_node_token_economic_observation(
+                        snapshot,
+                        runtime_token_policy(
+                            ritual.nature(),
+                            options.propagation_minimum_stake_basis_points,
+                        )?,
+                        provenance,
+                    )?;
+                    true
+                } else {
+                    false
+                };
+            if history_boundary_changed
+                || binding_changed
+                || availability_changed
+                || stress_changed
+                || initial_economics_changed
+            {
+                scales_store.save_metrics(&metrics)?;
             }
+
+            if options.reroll_nature {
+                finalize_closed_metrics(
+                    &scales_store,
+                    &mut metrics,
+                    &mut last_final_judgment,
+                    &ritual,
+                    now,
+                )?;
+                ensure!(
+                    !metrics.has_behavior_observations(),
+                    "forced Nature reroll is deferred until the current observed metrics period closes"
+                );
+                let provenance = AwakeningProvenance::local_cli(
+                    LOCAL_CLI_ACTOR,
+                    &format!("forced-reroll-{now}-{}", std::process::id()),
+                )?;
+                match ritual.phase() {
+                    AwakeningPhase::AwaitingConfirmation => {
+                        ritual.apply(AwakeningAction::Reroll, now, &provenance, &awakening_log)?;
+                    }
+                    AwakeningPhase::Confirmed { .. }
+                    | AwakeningPhase::SkippedForTesting { .. }
+                    | AwakeningPhase::Killed { .. } => {
+                        ritual.force_reroll_epoch(now, &provenance, &awakening_log)?;
+                    }
+                }
+                nature_store.save(ritual.nature())?;
+                reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
+                scales_store.save_metrics(&metrics)?;
+            }
+            if options.skip_awakening {
+                match ritual.phase() {
+                    AwakeningPhase::AwaitingConfirmation => {
+                        if i64::try_from(now)
+                            .is_ok_and(|now| now >= metrics.period_ends_at_unix_seconds)
+                        {
+                            ensure!(
+                                !metrics.has_behavior_observations(),
+                                "testing skip cannot finalize pre-confirmation observations"
+                            );
+                            metrics = new_runtime_metrics(
+                                EvaluationPeriod::Daily,
+                                aligned_period_start(now)?,
+                                ritual.nature(),
+                                ritual.epoch(),
+                            )?;
+                            scales_store.save_metrics(&metrics)?;
+                        }
+                        let provenance = AwakeningProvenance::local_cli(
+                            LOCAL_CLI_ACTOR,
+                            &format!("skip-awakening-{now}-{}", std::process::id()),
+                        )?;
+                        ritual.skip_for_testing(now, &provenance, &awakening_log)?;
+                        nature_store.save(ritual.nature())?;
+                    }
+                    AwakeningPhase::Killed { .. } => {
+                        bail!(
+                            "a killed awakening cannot be skipped; use --reroll-nature --force to begin a new signed epoch"
+                        );
+                    }
+                    AwakeningPhase::Confirmed { .. } | AwakeningPhase::SkippedForTesting { .. } => {
+                    }
+                }
+            }
+        } else {
+            ensure!(
+                metrics.nature_id == ritual.nature().nature_id
+                    && metrics.nature_fingerprint == ritual.nature().fingerprint()?
+                    && metrics.awakening_epoch == ritual.epoch(),
+                "completed lifecycle shutdown has inconsistent Nature-bound metrics"
+            );
         }
 
         let lineage_store = LineageStore::new(data_dir)?;
         let mut lineage = match lineage_store.load()? {
             Some(lineage) => lineage,
             None => {
-                let founder_id = format!("tentacle-{}", ritual.nature().nature_id);
-                let lineage = Lineage::new(
-                    founder_id,
-                    ritual.nature().clone(),
-                    now.saturating_mul(1_000),
-                )?;
+                ensure!(
+                    !terminal_shutdown,
+                    "completed lifecycle shutdown is missing its persisted lineage"
+                );
+                let lineage = if let Some(bootstrap) = options.child_bootstrap.as_ref() {
+                    Lineage::new_child_root(
+                        bootstrap.tentacle_id.clone(),
+                        bootstrap.parent_id.clone(),
+                        ritual.nature().clone(),
+                        now.saturating_mul(1_000),
+                    )?
+                } else {
+                    let founder_id = format!("tentacle-{}", ritual.nature().nature_id);
+                    Lineage::new(
+                        founder_id,
+                        ritual.nature().clone(),
+                        now.saturating_mul(1_000),
+                    )?
+                };
                 lineage_store.save(&lineage)?;
                 lineage
             }
         };
-        validate_lineage_spawn_authorizations(&lineage, &history)?;
+        // Startup transitions above may have finalized one closed period. Rebuild the disk-backed
+        // catalog after those writes and retain it for bounded-heap judgment lookup at runtime.
+        let history_catalog = scales_store.history_catalog()?;
+        validate_lineage_spawn_authorizations(&lineage, &history_catalog)?;
         let local_tentacle_id = lineage.state().root_id.clone();
-        if lineage
-            .node(&local_tentacle_id)
-            .is_none_or(|node| node.nature != *ritual.nature())
+        if !terminal_shutdown
+            && lineage
+                .node(&local_tentacle_id)
+                .is_none_or(|node| node.nature != *ritual.nature())
         {
             lineage.update_root_nature(
                 &local_tentacle_id,
@@ -270,6 +829,53 @@ impl EvolutionRuntime {
                 ritual.nature().clone(),
             )?;
             lineage_store.save(&lineage)?;
+        }
+        if terminal_shutdown {
+            ensure!(
+                lineage
+                    .node(&local_tentacle_id)
+                    .is_some_and(|node| node.nature == *ritual.nature()),
+                "completed lifecycle shutdown has inconsistent signed Nature and lineage"
+            );
+        }
+
+        let (mut lifecycle, lifecycle_was_new) = match preloaded_lifecycle {
+            Some(state) => {
+                ensure!(
+                    state.tentacle_id == local_tentacle_id,
+                    "lifecycle state belongs to a different local Tentacle"
+                );
+                (state, false)
+            }
+            None => (
+                LifecycleState::new(
+                    local_tentacle_id.clone(),
+                    options.auto_spawn.unwrap_or(true),
+                )?,
+                true,
+            ),
+        };
+        validate_pending_lifecycle_intents(
+            &lifecycle,
+            &lineage,
+            PendingLifecycleValidation {
+                history: &history_catalog,
+                current_metrics: &metrics,
+                nature: ritual.nature(),
+                awakening_epoch: ritual.epoch(),
+                propagation_minimum_stake_basis_points: options
+                    .propagation_minimum_stake_basis_points,
+                survival_total_supply_whole: options.survival_total_supply_whole,
+                survival_token_decimals: options.survival_token_decimals,
+            },
+        )?;
+        let absorption_tracking_changed = lifecycle.reconcile_absorption_projection_tracking()?;
+        let auto_spawn_changed = match options.auto_spawn.filter(|_| !terminal_shutdown) {
+            Some(enabled) => lifecycle.set_auto_spawn_enabled(enabled)?,
+            None => false,
+        };
+        if auto_spawn_changed || lifecycle_was_new || absorption_tracking_changed {
+            lifecycle_store.save(&lifecycle)?;
         }
 
         let operator_identity = SigningIdentity::new(LOCAL_KEY_ID, signing_key)?;
@@ -290,7 +896,9 @@ impl EvolutionRuntime {
                     keyring,
                     ritual.nature().sacred_ban,
                 )?;
-                hermes_store.save(&node)?;
+                if !terminal_shutdown {
+                    hermes_store.save(&node)?;
+                }
                 node
             }
         };
@@ -308,11 +916,21 @@ impl EvolutionRuntime {
             awakening_log,
             ritual,
             scales_store,
+            history_catalog,
             metrics,
             last_final_judgment,
             lineage_store,
             lineage,
             local_tentacle_id,
+            lifecycle_store,
+            lifecycle,
+            death_grace_period_ms,
+            propagation_minimum_stake_basis_points: options.propagation_minimum_stake_basis_points,
+            require_node_economics: options.require_node_economics,
+            node_economics_ttl_seconds: options.node_economics_ttl_seconds,
+            node_economics_available: options.initial_node_economics.is_some(),
+            survival_total_supply_whole: options.survival_total_supply_whole,
+            survival_token_decimals: options.survival_token_decimals,
             hermes_store,
             hermes,
             operator_identity,
@@ -321,7 +939,27 @@ impl EvolutionRuntime {
             next_public_turn_id: 1,
             degraded: false,
         };
+        // A completed Shutdown receipt is terminal across restarts. Main inspects this flag and
+        // exits; do not replay projections, roll closed metrics, append judgments, or enqueue new
+        // lifecycle actions on the way there.
+        if runtime.lifecycle.shutdown_completed_at_ms.is_some() {
+            runtime.replay_completed_lifecycle_actions()?;
+            ensure!(
+                !runtime.lifecycle.has_unapplied_absorption_projection(),
+                "completed Shutdown retains an unapplied absorption projection"
+            );
+            return Ok(runtime);
+        }
+        runtime.replay_completed_lifecycle_actions()?;
+        runtime.reconcile_killed_awakening(now)?;
         runtime.roll_period_if_closed(now)?;
+        if let Some(record) = runtime.last_final_judgment.clone() {
+            let action_at_ms = u64::try_from(record.judgment.evaluated_at_unix_seconds)
+                .context("final judgment predates the Unix epoch")?
+                .saturating_mul(1_000);
+            runtime.apply_final_judgment_lifecycle(&record, action_at_ms)?;
+        }
+        runtime.reconcile_lifecycle_deadline(now.saturating_mul(1_000))?;
         Ok(runtime)
     }
 
@@ -338,15 +976,49 @@ impl EvolutionRuntime {
     }
 
     pub fn permits_normal_operation(&self) -> bool {
-        self.ritual.is_confirmed() && !self.degraded
+        self.ritual.is_confirmed()
+            && !self.degraded
+            && !self.lifecycle.death_pending()
+            && !self.is_shutdown_complete()
+            && self
+                .lineage
+                .node(&self.local_tentacle_id)
+                .is_some_and(|node| node.lifecycle == TentacleLifecycle::Active)
     }
 
     pub(crate) const fn requires_recovery(&self) -> bool {
         self.degraded
     }
 
+    pub fn is_shutdown_complete(&self) -> bool {
+        self.lifecycle.shutdown_completed_at_ms.is_some()
+            && !self.lifecycle.has_unapplied_absorption_projection()
+    }
+
+    pub fn pending_death_deadline_ms(&self) -> Option<u64> {
+        self.lifecycle
+            .pending_death
+            .as_ref()
+            .map(|death| death.grace_ends_at_ms)
+    }
+
     pub fn public_gate_response(&self) -> String {
-        if self.degraded {
+        if self.lifecycle.death_pending() {
+            let grace_ends = self
+                .lifecycle
+                .pending_death
+                .as_ref()
+                .map_or(0, |pending| pending.grace_ends_at_ms / 1_000);
+            format!(
+                "this Tentacle is under a binding Death judgment and accepts no new conversations. survival expenditure may cancel death before unix time {grace_ends}; otherwise absorption and shutdown proceed automatically."
+            )
+        } else if self
+            .lineage
+            .node(&self.local_tentacle_id)
+            .is_some_and(|node| node.lifecycle != TentacleLifecycle::Active)
+        {
+            "this Tentacle has completed absorption and no longer accepts conversations.".to_owned()
+        } else if self.degraded {
             "i'm paused safely on this node while my local operator reconciles signed state, fwiend. normal conversation is temporarily unavailable uwu."
                 .to_owned()
         } else {
@@ -421,10 +1093,18 @@ impl EvolutionRuntime {
     /// Reserves a public turn against the current signed Nature without holding the bot mutex
     /// across remote inference. Nature mutation is deferred until every reservation is finished.
     pub(crate) fn begin_public_turn(&mut self) -> Result<PublicTurnStart> {
+        let now = now_unix_seconds()?;
+        self.reconcile_lifecycle_deadline(now.saturating_mul(1_000))?;
+        if self.require_node_economics && !self.node_economics_is_current(now) {
+            self.node_economics_available = false;
+            return Ok(PublicTurnStart::Gated(
+                "current Base UWU treasury economics are unavailable; this Tentacle refuses to operate until RPC observation recovers."
+                    .to_owned(),
+            ));
+        }
         if !self.permits_normal_operation() {
             return Ok(PublicTurnStart::Gated(self.public_gate_response()));
         }
-        let now = now_unix_seconds()?;
         if i64::try_from(now).is_ok_and(|now| {
             now >= self.metrics.period_ends_at_unix_seconds && !self.active_public_turns.is_empty()
         }) {
@@ -434,6 +1114,20 @@ impl EvolutionRuntime {
             ));
         }
         self.roll_period_if_closed(now)?;
+        // Rollover deliberately opens a fresh metrics period without carrying the prior
+        // period's economic observation forward. Recheck after rolling so the boundary
+        // cannot admit a turn against an unobserved treasury (or a lifecycle outcome that
+        // the just-finalized judgment made binding).
+        if self.require_node_economics && !self.node_economics_is_current(now) {
+            self.node_economics_available = false;
+            return Ok(PublicTurnStart::Gated(
+                "current Base UWU treasury economics are unavailable; this Tentacle refuses to operate until RPC observation recovers."
+                    .to_owned(),
+            ));
+        }
+        if !self.permits_normal_operation() {
+            return Ok(PublicTurnStart::Gated(self.public_gate_response()));
+        }
         let fingerprint = self.ritual.nature().fingerprint()?;
         ensure!(
             self.metrics.nature_id == self.ritual.nature().nature_id
@@ -512,6 +1206,877 @@ impl EvolutionRuntime {
         self.scales_store.save_metrics(&self.metrics)
     }
 
+    /// Returns one durable external action at a time. Repeated polling yields the same action ID
+    /// until the executor supplies its terminal receipt, making retries idempotent across restarts.
+    pub fn next_due_lifecycle_action(
+        &mut self,
+        now_unix_seconds: u64,
+    ) -> Result<Option<LifecycleIntent>> {
+        self.next_due_lifecycle_action_excluding(now_unix_seconds, &BTreeSet::new())
+    }
+
+    /// Returns a fixed-deadline native Shutdown without requiring an unavailable absorption
+    /// executor. Startup uses this only after [`MandatoryRecoveryKind::ShutdownDueOrPending`];
+    /// normal supervision still offers an immediately queued Absorb before the deadline.
+    pub fn due_native_shutdown_action(
+        &mut self,
+        now_unix_seconds: u64,
+    ) -> Result<Option<LifecycleIntent>> {
+        self.roll_period_if_closed(now_unix_seconds)?;
+        self.reconcile_lifecycle_deadline(now_unix_seconds.saturating_mul(1_000))?;
+        Ok(self
+            .lifecycle
+            .intents
+            .values()
+            .filter(|intent| {
+                self.lifecycle.receipt(&intent.action_id).is_none()
+                    && !self
+                        .lifecycle
+                        .canceled_action_ids
+                        .contains(&intent.action_id)
+                    && matches!(intent.action, LifecycleAction::Shutdown { .. })
+            })
+            .min_by_key(|intent| intent.created_at_ms)
+            .cloned())
+    }
+
+    /// Returns the next due action excluding actions already attempted during the caller's current
+    /// supervisor tick. Reset the exclusion set on the next tick so unreceipted actions retry.
+    pub fn next_due_lifecycle_action_excluding(
+        &mut self,
+        now_unix_seconds: u64,
+        excluded_action_ids: &BTreeSet<String>,
+    ) -> Result<Option<LifecycleIntent>> {
+        self.roll_period_if_closed(now_unix_seconds)?;
+        self.reconcile_lifecycle_deadline(now_unix_seconds.saturating_mul(1_000))?;
+        let mut effective_exclusions = excluded_action_ids.clone();
+        for intent in self.lifecycle.intents.values() {
+            if self.lifecycle.receipt(&intent.action_id).is_some()
+                || self
+                    .lifecycle
+                    .canceled_action_ids
+                    .contains(&intent.action_id)
+            {
+                continue;
+            }
+            match &intent.action {
+                LifecycleAction::SpendForSurvival { .. } => {
+                    if !self.survival_spend_is_currently_executable(intent, now_unix_seconds)? {
+                        effective_exclusions.insert(intent.action_id.clone());
+                    }
+                }
+                LifecycleAction::Spawn { judgment_id, .. } => {
+                    let grant = self.history_catalog.get(judgment_id)?.with_context(|| {
+                        format!(
+                            "pending Spawn {} references missing final judgment {judgment_id}",
+                            intent.action_id
+                        )
+                    })?;
+                    if !self.propagation_grant_is_currently_executable(&grant, now_unix_seconds)? {
+                        effective_exclusions.insert(intent.action_id.clone());
+                    }
+                }
+                LifecycleAction::Absorb { .. } | LifecycleAction::Shutdown { .. } => {}
+            }
+        }
+        Ok(self
+            .lifecycle
+            .next_due_action_excluding(&effective_exclusions)
+            .cloned())
+    }
+
+    /// Persists an executor receipt before applying its local projection. A repeated identical
+    /// receipt is a no-op; a conflicting second receipt for the same action is rejected.
+    pub fn ack_lifecycle_action(&mut self, receipt: LifecycleReceipt) -> Result<bool> {
+        let receipt_observed_at_ms = now_unix_seconds()?
+            .checked_mul(1_000)
+            .context("local lifecycle receipt observation timestamp exceeds the range")?;
+        ensure!(
+            receipt.completed_at_ms
+                <= receipt_observed_at_ms.saturating_add(LIFECYCLE_RECEIPT_CLOCK_SKEW_MS),
+            "executor lifecycle receipt timestamp exceeds bounded local clock skew"
+        );
+        let intent = self
+            .lifecycle
+            .intents
+            .get(&receipt.action_id)
+            .cloned()
+            .context("lifecycle receipt references an unknown action")?;
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && matches!(intent.action, LifecycleAction::Absorb { .. })
+        {
+            let reference = receipt.external_reference.as_deref().context(
+                "a successful absorption receipt requires its lowercase SHA-256 transfer-manifest hash",
+            )?;
+            ensure!(
+                reference.len() == 64
+                    && reference
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "absorption transfer-manifest reference must be lowercase SHA-256 hex"
+            );
+        }
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && let LifecycleAction::SpendForSurvival { chain_id, .. } = &intent.action
+        {
+            let chain_receipt = receipt.confirmed_chain_receipt.as_ref().context(
+                "a successful survival expenditure requires a confirmed Base transaction receipt",
+            )?;
+            ensure!(
+                chain_receipt.chain_id == *chain_id && *chain_id == 8_453,
+                "survival expenditure must match its Base mainnet action binding"
+            );
+        }
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && let LifecycleAction::SpendForSurvival {
+                token_contract,
+                treasury_address,
+                burn_destination,
+                configuration_identity,
+                exact_amount,
+                ..
+            } = &intent.action
+        {
+            let chain_receipt = receipt
+                .confirmed_chain_receipt
+                .as_ref()
+                .context("successful survival spend is missing exact token receipt evidence")?;
+            ensure!(
+                chain_receipt.token_contract == *token_contract
+                    && chain_receipt.from_address == *treasury_address
+                    && chain_receipt.burn_destination == *burn_destination
+                    && chain_receipt.configuration_identity == *configuration_identity
+                    && chain_receipt.exact_amount == *exact_amount,
+                "survival transaction receipt does not match its exact token action binding"
+            );
+        }
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && let LifecycleAction::Spawn {
+                child_id,
+                child_nature,
+                ..
+            } = &intent.action
+        {
+            ensure!(
+                !self
+                    .lifecycle
+                    .canceled_action_ids
+                    .contains(&intent.action_id),
+                "canceled child provisioning cannot be accepted as a successful Spawn"
+            );
+            ensure!(
+                self.lifecycle
+                    .pending_death
+                    .as_ref()
+                    .is_none_or(|death| receipt_observed_at_ms < death.scheduled_at_ms),
+                "child provisioning completed after a binding Death began"
+            );
+            let provision = receipt
+                .provision_receipt
+                .as_ref()
+                .context("successful spawn requires structured provisioning evidence")?;
+            ensure!(
+                provision.child_id == *child_id
+                    && provision.child_nature_fingerprint == child_nature.fingerprint()?,
+                "provision receipt does not match the planned child identity and Nature"
+            );
+        }
+        let (action, changed) = self.lifecycle.acknowledge_action(receipt.clone())?;
+        if !changed {
+            return Ok(false);
+        }
+        if let Err(error) = self.lifecycle_store.save(&self.lifecycle) {
+            self.degraded = true;
+            return Err(error.into());
+        }
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && matches!(action, LifecycleAction::SpendForSurvival { .. })
+        {
+            self.node_economics_available = false;
+        }
+        if receipt.status == LifecycleReceiptStatus::Succeeded {
+            if let Err(error) = self.apply_completed_lifecycle_action(
+                &receipt.action_id,
+                &action,
+                receipt.completed_at_ms,
+                receipt.external_reference.as_deref(),
+                receipt_observed_at_ms,
+            ) {
+                self.degraded = true;
+                return Err(error);
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn auto_spawn_enabled(&self) -> bool {
+        self.lifecycle.auto_spawn_enabled
+    }
+
+    pub fn set_auto_spawn_enabled(&mut self, enabled: bool) -> Result<bool> {
+        let mut staged = self.lifecycle.clone();
+        let changed = staged.set_auto_spawn_enabled(enabled)?;
+        if changed {
+            if let Err(error) = self.lifecycle_store.save(&staged) {
+                self.degraded = true;
+                return Err(error.into());
+            }
+            self.lifecycle = staged;
+        }
+        Ok(changed)
+    }
+
+    pub fn record_node_economic_observation(
+        &mut self,
+        snapshot: TokenEconomicSnapshot,
+        provenance: EconomicObservationProvenance,
+    ) -> Result<TokenEconomicEffects> {
+        ensure!(
+            provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+            "lifecycle economics must belong to the Tentacle treasury"
+        );
+        ensure!(
+            self.active_public_turns.is_empty(),
+            "node economics cannot change while public turns are bound to the current metrics period"
+        );
+        let now = now_unix_seconds()?;
+        ensure!(
+            provenance.observed_at_unix_seconds <= now.saturating_add(60),
+            "node economics timestamp is too far in the future"
+        );
+        ensure!(
+            self.economics_provenance_follows_latest_survival_spend(provenance),
+            "node economics must be observed after the latest confirmed survival burn"
+        );
+        let policy = runtime_token_policy(
+            self.ritual.nature(),
+            self.propagation_minimum_stake_basis_points,
+        )?;
+        ensure_economic_configuration_continuity(&self.metrics, provenance)?;
+        let mut candidate_metrics = self.metrics.clone();
+        let effects = candidate_metrics
+            .record_node_token_economic_observation(snapshot, policy, provenance)?;
+        let mut candidate_lifecycle = self.lifecycle.clone();
+        let lifecycle_changed = match self.stage_pending_survival_spend(
+            &candidate_metrics,
+            &mut candidate_lifecycle,
+            now.saturating_mul(1_000),
+        ) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.node_economics_available = false;
+                self.degraded = true;
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.scales_store.save_metrics(&candidate_metrics) {
+            self.node_economics_available = false;
+            self.degraded = true;
+            return Err(error);
+        }
+        if lifecycle_changed && let Err(error) = self.lifecycle_store.save(&candidate_lifecycle) {
+            // Metrics may already be durable. Refuse every lane until restart reconciles that
+            // bounded history-ahead window rather than continuing with split in-memory stores.
+            self.node_economics_available = false;
+            self.degraded = true;
+            return Err(error.into());
+        }
+        self.metrics = candidate_metrics;
+        if lifecycle_changed {
+            self.lifecycle = candidate_lifecycle;
+        }
+        self.node_economics_available = true;
+        Ok(effects)
+    }
+
+    fn stage_pending_survival_spend(
+        &self,
+        metrics: &TentacleMetrics,
+        lifecycle: &mut LifecycleState,
+        now_ms: u64,
+    ) -> Result<bool> {
+        let Some(pending) = lifecycle.pending_death.clone() else {
+            return Ok(false);
+        };
+        if now_ms > pending.grace_ends_at_ms {
+            return Ok(lifecycle.cancel_pending_survival_spends(&pending.judgment_id)?);
+        }
+        let death_record = self.history_catalog.get(&pending.judgment_id)?;
+        let Some(death_record) = death_record else {
+            ensure!(
+                pending.grace_ends_at_ms == pending.scheduled_at_ms,
+                "pending autonomous Death is missing its final judgment history"
+            );
+            return Ok(false);
+        };
+        ensure!(
+            death_record.judgment.outcome == JudgmentOutcome::Death
+                && death_record.authorizes_automatic_lifecycle(),
+            "pending death references a non-Death final judgment"
+        );
+        let funded = match (
+            death_record.metrics.token_economics,
+            metrics.token_economics,
+        ) {
+            (Some(death_economics), Some(current_economics)) => {
+                match (death_economics.provenance, current_economics.provenance) {
+                    (Some(death_provenance), Some(current_provenance)) => {
+                        ensure!(
+                            death_provenance.chain_id == current_provenance.chain_id
+                                && death_provenance.holder_role == current_provenance.holder_role
+                                && death_provenance.holder_address
+                                    == current_provenance.holder_address
+                                && death_provenance.token_contract
+                                    == current_provenance.token_contract
+                                && death_provenance.configuration_identity
+                                    == current_provenance.configuration_identity,
+                            "survival funding observation changed the Death judgment's economic identity"
+                        );
+                        let effective_threshold = death_record
+                            .judgment
+                            .policy
+                            .thresholds
+                            .survival_min
+                            .saturating_sub(death_economics.effects.starvation_relief_basis_points);
+                        let score_shortfall =
+                            effective_threshold.saturating_sub(death_record.judgment.scores.total);
+                        let rate = u32::from(
+                            death_economics
+                                .policy
+                                .emergency_relief_per_expenditure_basis_points,
+                        );
+                        let required_basis_points = ((u32::from(score_shortfall)
+                            * u32::from(NORMALIZED_ECONOMIC_MAX))
+                        .div_ceil(rate)
+                        .min(u32::from(NORMALIZED_ECONOMIC_MAX)))
+                            as u16;
+                        let available_basis_points =
+                            current_economics.snapshot.balance_basis_points.min(
+                                death_economics
+                                    .policy
+                                    .max_emergency_expenditure_basis_points,
+                            );
+                        (required_basis_points > 0
+                            && required_basis_points <= available_basis_points)
+                            .then_some((current_provenance, required_basis_points))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let changed = if let Some((provenance, required_basis_points)) = funded {
+            lifecycle.enqueue_survival_spend_for_pending_death(
+                &pending.judgment_id,
+                now_ms,
+                SurvivalSpendBinding {
+                    expenditure_basis_points: required_basis_points,
+                    chain_id: provenance.chain_id,
+                    token_contract: provenance.token_contract,
+                    treasury_address: provenance.holder_address,
+                    configuration_identity: provenance.configuration_identity,
+                    exact_amount: crate::evolution::ExactTokenAmount {
+                        total_supply_whole: self.survival_total_supply_whole,
+                        token_decimals: self.survival_token_decimals,
+                        basis_points: required_basis_points,
+                        raw_amount: exact_raw_token_amount(
+                            self.survival_total_supply_whole,
+                            self.survival_token_decimals,
+                            required_basis_points,
+                        )?,
+                    },
+                },
+            )?
+        } else {
+            lifecycle.cancel_pending_survival_spends(&pending.judgment_id)?
+        };
+        Ok(changed)
+    }
+
+    pub fn mark_node_economics_unavailable(&mut self) {
+        self.node_economics_available = false;
+    }
+
+    pub fn node_economics_is_current(&self, now_unix_seconds: u64) -> bool {
+        if !self.node_economics_available {
+            return false;
+        }
+        self.metrics
+            .token_economics
+            .and_then(|economics| economics.provenance)
+            .is_some_and(|provenance| {
+                provenance.holder_role == EconomicHolderRole::TentacleTreasury
+                    && provenance.observed_at_unix_seconds <= now_unix_seconds
+                    && now_unix_seconds.saturating_sub(provenance.observed_at_unix_seconds)
+                        <= self.node_economics_ttl_seconds
+                    && self.economics_provenance_follows_latest_survival_spend(provenance)
+            })
+    }
+
+    fn economics_provenance_follows_latest_survival_spend(
+        &self,
+        provenance: EconomicObservationProvenance,
+    ) -> bool {
+        self.lifecycle
+            .receipts
+            .iter()
+            .filter(|receipt| receipt.status == LifecycleReceiptStatus::Succeeded)
+            .filter_map(|receipt| {
+                self.lifecycle
+                    .intents
+                    .get(&receipt.action_id)
+                    .filter(|intent| {
+                        matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
+                    })?;
+                receipt.confirmed_chain_receipt.as_ref()
+            })
+            .max_by_key(|receipt| (receipt.block_timestamp_unix_seconds, receipt.block_number))
+            .is_none_or(|receipt| {
+                provenance.observed_at_unix_seconds >= receipt.block_timestamp_unix_seconds
+                    && provenance
+                        .observed_block_number
+                        .is_none_or(|block| block >= receipt.block_number)
+            })
+    }
+
+    fn propagation_grant_is_currently_executable(
+        &self,
+        grant: &EvolutionHistoryRecord,
+        now_unix_seconds: u64,
+    ) -> Result<bool> {
+        let requires_current_economics = self.propagation_minimum_stake_basis_points > 0
+            || grant.metrics.token_economics.is_some();
+        if requires_current_economics && !self.node_economics_is_current(now_unix_seconds) {
+            return Ok(false);
+        }
+        is_accepted_propagation_grant_with_stake(
+            grant,
+            &self.metrics,
+            self.ritual.nature(),
+            self.ritual.epoch(),
+            i64::try_from(now_unix_seconds)
+                .context("spawn eligibility timestamp exceeds the supported range")?,
+            self.propagation_minimum_stake_basis_points,
+        )
+    }
+
+    fn survival_spend_is_currently_executable(
+        &self,
+        intent: &LifecycleIntent,
+        now_unix_seconds: u64,
+    ) -> Result<bool> {
+        let LifecycleAction::SpendForSurvival {
+            tentacle_id,
+            judgment_id,
+            grace_ends_at_ms,
+            expenditure_basis_points,
+            chain_id,
+            token_contract,
+            treasury_address,
+            configuration_identity,
+            exact_amount,
+            ..
+        } = &intent.action
+        else {
+            return Ok(false);
+        };
+        if !self.node_economics_is_current(now_unix_seconds)
+            || now_unix_seconds.saturating_mul(1_000) > *grace_ends_at_ms
+            || tentacle_id != &self.local_tentacle_id
+            || exact_amount.total_supply_whole != self.survival_total_supply_whole
+            || exact_amount.token_decimals != self.survival_token_decimals
+            || self.lifecycle.pending_death.as_ref().is_none_or(|pending| {
+                pending.judgment_id != *judgment_id || pending.grace_ends_at_ms != *grace_ends_at_ms
+            })
+        {
+            return Ok(false);
+        }
+        let Some(economics) = self.metrics.token_economics else {
+            return Ok(false);
+        };
+        let Some(provenance) = economics.provenance else {
+            return Ok(false);
+        };
+        Ok(economics.snapshot.trustworthy
+            && economics.validate().is_ok()
+            && economics.policy
+                == runtime_token_policy(
+                    self.ritual.nature(),
+                    self.propagation_minimum_stake_basis_points,
+                )?
+            && provenance.chain_id == *chain_id
+            && provenance.token_contract == *token_contract
+            && provenance.holder_address == *treasury_address
+            && provenance.configuration_identity == *configuration_identity
+            && economics.snapshot.balance_basis_points >= *expenditure_basis_points)
+    }
+
+    fn apply_completed_lifecycle_action(
+        &mut self,
+        action_id: &str,
+        action: &LifecycleAction,
+        receipt_completed_at_ms: u64,
+        external_reference: Option<&str>,
+        projection_at_ms: u64,
+    ) -> Result<()> {
+        if let LifecycleAction::Absorb { judgment_id, .. } = action {
+            if self
+                .lifecycle
+                .absorption_projections
+                .contains_key(action_id)
+            {
+                return Ok(());
+            }
+            let Some(pending_death) = self.lifecycle.pending_death.as_ref() else {
+                // A confirmed survival transaction canceled this death. Preserve the transfer
+                // receipt for audit without marking the source inactive.
+                return Ok(());
+            };
+            if pending_death.judgment_id != *judgment_id
+                || projection_at_ms < pending_death.grace_ends_at_ms
+            {
+                return Ok(());
+            }
+            let action_is_canceled = self.lifecycle.intents.values().any(|intent| {
+                intent.action == *action
+                    && self
+                        .lifecycle
+                        .canceled_action_ids
+                        .contains(&intent.action_id)
+            });
+            if action_is_canceled {
+                return Ok(());
+            }
+            let receipt = self
+                .lifecycle
+                .receipt(action_id)
+                .context("successful absorption projection is missing its receipt")?
+                .clone();
+            ensure!(
+                receipt.completed_at_ms == receipt_completed_at_ms
+                    && receipt.external_reference.as_deref() == external_reference,
+                "absorption projection inputs differ from its durable receipt"
+            );
+            let (projected_at_ms, lineage_changed) = apply_absorption_lineage_projection(
+                &mut self.lineage,
+                action,
+                &receipt,
+                pending_death.grace_ends_at_ms,
+                projection_at_ms,
+            )?;
+            if lineage_changed {
+                self.lineage_store.save(&self.lineage)?;
+            }
+            if self
+                .lifecycle
+                .record_absorption_projection(action_id, projected_at_ms)?
+            {
+                self.lifecycle_store.save(&self.lifecycle)?;
+            }
+        }
+        if let LifecycleAction::Spawn {
+            parent_id,
+            child_id,
+            judgment_id,
+            child_nature,
+            authorization_actor_id,
+            authorization_event_id_sha256,
+        } = action
+        {
+            if let Some(existing) = self.lineage.node(child_id) {
+                ensure!(
+                    existing.nature == *child_nature,
+                    "provisioned child ID already exists with a different Nature"
+                );
+            } else {
+                self.lineage.record_provisioned_child(
+                    parent_id,
+                    parent_id,
+                    child_id.clone(),
+                    child_nature.clone(),
+                    projection_at_ms,
+                    SpawnAuthorization {
+                        judgment_id: judgment_id.clone(),
+                        operator_id: authorization_actor_id.clone(),
+                        event_id_sha256: authorization_event_id_sha256.clone(),
+                    },
+                )?;
+                self.lineage_store.save(&self.lineage)?;
+            }
+            if self.lifecycle.record_spawn_projection(
+                action_id,
+                receipt_completed_at_ms,
+                self.metrics.period_started_at_unix_seconds,
+            )? {
+                self.lifecycle_store.save(&self.lifecycle)?;
+            }
+            self.reconcile_spawn_growth_credits()?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_spawn_growth_credits(&mut self) -> Result<()> {
+        let expected = self
+            .lifecycle
+            .spawn_projections
+            .values()
+            .filter(|projection| {
+                projection.metrics_period_started_at_unix_seconds
+                    == self.metrics.period_started_at_unix_seconds
+            })
+            .count();
+        let expected = u32::try_from(expected).unwrap_or(u32::MAX);
+        if self.metrics.growth.children_spawned != expected {
+            self.metrics.growth.children_spawned = expected;
+            self.metrics.validate()?;
+            self.scales_store.save_metrics(&self.metrics)?;
+        }
+        Ok(())
+    }
+
+    fn replay_completed_lifecycle_actions(&mut self) -> Result<()> {
+        let projection_at_ms = now_unix_seconds()?.saturating_mul(1_000);
+        let completed = self
+            .lifecycle
+            .receipts
+            .iter()
+            .filter(|receipt| receipt.status == LifecycleReceiptStatus::Succeeded)
+            .filter_map(|receipt| {
+                self.lifecycle
+                    .intents
+                    .get(&receipt.action_id)
+                    .map(|intent| (intent.action.clone(), receipt.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (action, receipt) in completed {
+            self.apply_completed_lifecycle_action(
+                &receipt.action_id,
+                &action,
+                receipt.completed_at_ms,
+                receipt.external_reference.as_deref(),
+                projection_at_ms,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_lifecycle_deadline(&mut self, now_ms: u64) -> Result<()> {
+        let target = self.absorption_target()?;
+        if self.lifecycle.reconcile_expired_death(now_ms, target)? {
+            self.lifecycle_store.save(&self.lifecycle)?;
+        }
+        let completed_absorptions = self
+            .lifecycle
+            .receipts
+            .iter()
+            .filter(|receipt| receipt.status == LifecycleReceiptStatus::Succeeded)
+            .filter_map(|receipt| {
+                self.lifecycle
+                    .intents
+                    .get(&receipt.action_id)
+                    .filter(|intent| matches!(intent.action, LifecycleAction::Absorb { .. }))
+                    .map(|intent| (intent.action.clone(), receipt.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (action, receipt) in completed_absorptions {
+            self.apply_completed_lifecycle_action(
+                &receipt.action_id,
+                &action,
+                receipt.completed_at_ms,
+                receipt.external_reference.as_deref(),
+                now_ms,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn absorption_target(&self) -> Result<Option<String>> {
+        let family = self.lineage.family(&self.local_tentacle_id)?;
+        Ok(family
+            .parent
+            .into_iter()
+            .chain(family.siblings)
+            .chain(family.children)
+            .find(|candidate| {
+                self.lineage.state().external_parent_id.as_deref() == Some(candidate.as_str())
+                    || self
+                        .lineage
+                        .node(candidate)
+                        .is_some_and(|node| node.lifecycle == TentacleLifecycle::Active)
+            }))
+    }
+
+    fn reconcile_killed_awakening(&mut self, now: u64) -> Result<()> {
+        if !matches!(self.ritual.phase(), AwakeningPhase::Killed { .. })
+            || self.lifecycle.death_pending()
+            || self
+                .lifecycle
+                .intents
+                .values()
+                .any(|intent| matches!(intent.action, LifecycleAction::Shutdown { .. }))
+        {
+            return Ok(());
+        }
+        let judgment_id = encode_sha256(
+            format!(
+                "awakening-kill:{}:{}",
+                self.ritual.nature().nature_id,
+                self.ritual.epoch()
+            )
+            .as_bytes(),
+        );
+        let at_ms = now.saturating_mul(1_000);
+        self.lifecycle
+            .schedule_death(&judgment_id, at_ms, 0, None)?;
+        if let Some(target_id) = self.absorption_target()? {
+            self.lifecycle.enqueue_absorption(
+                at_ms,
+                self.local_tentacle_id.clone(),
+                target_id,
+                judgment_id.clone(),
+            )?;
+        }
+        self.lifecycle.reconcile_expired_death(at_ms, None)?;
+        self.lifecycle_store.save(&self.lifecycle)?;
+        Ok(())
+    }
+
+    fn apply_final_judgment_lifecycle(
+        &mut self,
+        record: &EvolutionHistoryRecord,
+        action_at_ms: u64,
+    ) -> Result<()> {
+        if !record.authorizes_automatic_lifecycle() {
+            return Ok(());
+        }
+        match record.judgment.outcome {
+            JudgmentOutcome::Death => {
+                let already_survived = self.lifecycle.intents.values().any(|intent| {
+                    matches!(
+                        &intent.action,
+                        LifecycleAction::SpendForSurvival { judgment_id, .. }
+                            if judgment_id == &record.judgment_id
+                                && self.lifecycle.action_succeeded(&intent.action_id)
+                    )
+                });
+                if !already_survived {
+                    let survival_spend = if let Some(economics) = record.metrics.token_economics {
+                        let requirement = economics.emergency_survival_requirement(
+                            record.judgment.scores.total,
+                            record.judgment.policy.thresholds.survival_min,
+                        )?;
+                        match (economics.provenance, requirement) {
+                            (Some(provenance), Some(requirement)) if requirement.fully_funded => {
+                                Some(SurvivalSpendBinding {
+                                    expenditure_basis_points: requirement
+                                        .required_expenditure_basis_points,
+                                    chain_id: provenance.chain_id,
+                                    token_contract: provenance.token_contract,
+                                    treasury_address: provenance.holder_address,
+                                    configuration_identity: provenance.configuration_identity,
+                                    exact_amount: crate::evolution::ExactTokenAmount {
+                                        total_supply_whole: self.survival_total_supply_whole,
+                                        token_decimals: self.survival_token_decimals,
+                                        basis_points: requirement.required_expenditure_basis_points,
+                                        raw_amount: exact_raw_token_amount(
+                                            self.survival_total_supply_whole,
+                                            self.survival_token_decimals,
+                                            requirement.required_expenditure_basis_points,
+                                        )?,
+                                    },
+                                })
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                    .filter(|binding| binding.expenditure_basis_points > 0);
+                    if self.lifecycle.schedule_death(
+                        &record.judgment_id,
+                        action_at_ms,
+                        self.death_grace_period_ms,
+                        survival_spend,
+                    )? {
+                        if let Some(target_id) = self.absorption_target()? {
+                            self.lifecycle.enqueue_absorption(
+                                action_at_ms,
+                                self.local_tentacle_id.clone(),
+                                target_id,
+                                record.judgment_id.clone(),
+                            )?;
+                        }
+                        self.lifecycle_store.save(&self.lifecycle)?;
+                    }
+                }
+            }
+            JudgmentOutcome::PropagationRights
+                if self.lifecycle.auto_spawn_enabled && self.ritual.nature().growth > 70 =>
+            {
+                if is_accepted_propagation_grant_with_stake(
+                    record,
+                    &record.metrics,
+                    self.ritual.nature(),
+                    self.ritual.epoch(),
+                    i64::try_from(action_at_ms / 1_000)
+                        .context("automatic spawn timestamp exceeds the supported range")?,
+                    self.propagation_minimum_stake_basis_points,
+                )? {
+                    self.auto_spawn_from_grant(record, action_at_ms)?;
+                }
+            }
+            JudgmentOutcome::PropagationRights
+            | JudgmentOutcome::Survival
+            | JudgmentOutcome::StarvationWarning => {}
+        }
+        Ok(())
+    }
+
+    fn auto_spawn_from_grant(&mut self, grant: &EvolutionHistoryRecord, at_ms: u64) -> Result<()> {
+        let desired_children = if self.propagation_minimum_stake_basis_points == 0 {
+            1_u16
+        } else {
+            grant
+                .metrics
+                .token_economics
+                .map_or(0, |economics| economics.snapshot.stake_basis_points)
+                / self.propagation_minimum_stake_basis_points
+        }
+        .max(1);
+        let short_judgment = grant
+            .judgment_id
+            .get(..16)
+            .context("judgment ID is too short for automatic child identity")?;
+        let mut created = false;
+        for index in 0..desired_children {
+            let child_id = format!("tentacle-auto-{short_judgment}-{index}");
+            if self.lineage.node(&child_id).is_some()
+                || self.lifecycle.intents.values().any(|intent| {
+                    matches!(&intent.action, LifecycleAction::Spawn { child_id: existing, .. } if existing == &child_id)
+                })
+            {
+                continue;
+            }
+            let event = format!("auto-spawn:{}:{child_id}", grant.judgment_id);
+            let event_id_sha256 = encode_sha256(event.as_bytes());
+            let child_nature = self.lineage.plan_child_nature(&self.local_tentacle_id)?;
+            self.lifecycle.enqueue_spawn(
+                at_ms,
+                self.local_tentacle_id.clone(),
+                child_id,
+                grant.judgment_id.clone(),
+                child_nature,
+                "evolution-runtime".to_owned(),
+                event_id_sha256,
+            )?;
+            created = true;
+        }
+        if created {
+            self.lifecycle_store.save(&self.lifecycle)?;
+        }
+        Ok(())
+    }
+
     /// Handles exact authenticated-operator Evolution messages. Unknown commands return `None` so
     /// the existing operator harness can process them. During awakening, no message reaches that
     /// harness.
@@ -534,13 +2099,27 @@ impl EvolutionRuntime {
             };
             return Ok(Some(response));
         }
+        if self.lifecycle.death_pending() || self.lifecycle.shutdown_completed_at_ms.is_some() {
+            let response = match text.trim().to_ascii_lowercase().as_str() {
+                "/nature" => self.nature_status(),
+                "/lineage" => self.lineage_status()?,
+                "/metrics" => self.metrics_status_read_only()?,
+                "/judgment" => self.judgment_status_read_only()?,
+                "/gossip-status" => self.gossip_status(),
+                _ => {
+                    "DEATH LIFECYCLE IS ACTIVE. NEW CONVERSATIONS AND OPERATOR EFFECTS ARE CLOSED. READ-ONLY STATUS: /nature, /lineage, /metrics, /judgment, /gossip-status. A MATCHING CONFIRMED UWU SURVIVAL BURN MAY REOPEN THE TENTACLE BEFORE GRACE EXPIRES."
+                        .to_owned()
+                }
+            };
+            return Ok(Some(response));
+        }
         if !self.ritual.is_confirmed() {
             if text.trim().eq_ignore_ascii_case("/nature") {
                 return Ok(Some(self.ritual.formatted_prompt()));
             }
             if matches!(self.ritual.phase(), AwakeningPhase::Killed { .. }) {
                 return Ok(Some(format!(
-                    "{}\n\nNORMAL OPERATION REMAINS BLOCKED. A LOCAL ADMINISTRATOR MAY BEGIN A NEW SIGNED EPOCH WITH --reroll-nature --force; NO PROCESS WAS TERMINATED AUTOMATICALLY.",
+                    "{}\n\nNORMAL OPERATION IS BLOCKED. THE BINDING LIFECYCLE SHUTDOWN ACTION REMAINS DURABLE UNTIL THE EXECUTOR ACKNOWLEDGES IT.",
                     self.ritual.formatted_prompt()
                 )));
             }
@@ -587,10 +2166,31 @@ impl EvolutionRuntime {
                     "NATURE CONFIRMED. NORMAL OPERATION IS NOW OPEN.\n\n{}",
                     self.nature_status()
                 ),
-                AwakeningOutcome::KillRequested => format!(
-                    "KILL REQUEST RECORDED. NORMAL OPERATION REMAINS BLOCKED; THIS DID NOT TERMINATE THE PROCESS OR ABSORB DATA.\n\n{}",
-                    self.nature_status()
-                ),
+                AwakeningOutcome::KillRequested => {
+                    let judgment_id = encode_sha256(
+                        format!("awakening-kill:{operator_id}:{message_id}").as_bytes(),
+                    );
+                    let at_ms = transition_now.saturating_mul(1_000);
+                    if self
+                        .lifecycle
+                        .schedule_death(&judgment_id, at_ms, 0, None)?
+                    {
+                        if let Some(target_id) = self.absorption_target()? {
+                            self.lifecycle.enqueue_absorption(
+                                at_ms,
+                                self.local_tentacle_id.clone(),
+                                target_id,
+                                judgment_id.clone(),
+                            )?;
+                        }
+                        self.lifecycle.reconcile_expired_death(at_ms, None)?;
+                        self.lifecycle_store.save(&self.lifecycle)?;
+                    }
+                    format!(
+                        "KILL IS BINDING. NORMAL OPERATION IS BLOCKED AND A DURABLE SHUTDOWN ACTION IS READY FOR THE LIFECYCLE EXECUTOR.\n\n{}",
+                        self.nature_status()
+                    )
+                }
                 AwakeningOutcome::AwaitingConfirmation => self.ritual.formatted_prompt(),
                 AwakeningOutcome::SkippedForTesting
                 | AwakeningOutcome::AdjustedAfterConfirmation
@@ -598,6 +2198,29 @@ impl EvolutionRuntime {
                     bail!("unexpected awakening outcome from an XMTP ritual action")
                 }
             }));
+        }
+
+        if self.require_node_economics {
+            let now = now_unix_seconds()?;
+            if !self.node_economics_is_current(now) {
+                self.node_economics_available = false;
+                let response = match text.trim().to_ascii_lowercase().as_str() {
+                    "/nature" => self.nature_status(),
+                    "/lineage" => self.lineage_status()?,
+                    "/metrics" => self.metrics_status_read_only()?,
+                    "/judgment" => self.judgment_status_read_only()?,
+                    "/gossip-status" => self.gossip_status(),
+                    "/recovery-status" => {
+                        "CURRENT BASE UWU TREASURY ECONOMICS ARE UNAVAILABLE. RPC RECOVERY MUST RECORD A FRESH PROVENANCE-BOUND OBSERVATION BEFORE OPERATOR EFFECTS REOPEN."
+                            .to_owned()
+                    }
+                    _ => {
+                        "CURRENT BASE UWU TREASURY ECONOMICS ARE UNAVAILABLE. OPERATOR EFFECTS AND TOOL DISPATCH ARE CLOSED. READ-ONLY STATUS: /nature, /lineage, /metrics, /judgment, /gossip-status, /recovery-status."
+                            .to_owned()
+                    }
+                };
+                return Ok(Some(response));
+            }
         }
 
         let Some(command) = text.trim().strip_prefix('/') else {
@@ -614,6 +2237,7 @@ impl EvolutionRuntime {
             "metrics" if arguments.is_empty() => self.metrics_status()?,
             "judgment" if arguments.is_empty() => self.judgment_status()?,
             "spawn" => self.spawn_child(operator_id, message_id, arguments)?,
+            "auto-spawn" => self.configure_auto_spawn(arguments)?,
             "gossip-status" if arguments.is_empty() => self.gossip_status(),
             "share-skill" => self.share_skill(arguments)?,
             "request-skill" => self.request_skill(arguments)?,
@@ -640,6 +2264,17 @@ impl EvolutionRuntime {
         ensure!(
             !self.metrics.has_behavior_observations(),
             "Nature adjustment is deferred until the current observed metrics period closes"
+        );
+        ensure!(
+            !self.lifecycle.intents.values().any(|intent| {
+                matches!(intent.action, LifecycleAction::Spawn { .. })
+                    && self.lifecycle.receipt(&intent.action_id).is_none()
+                    && !self
+                        .lifecycle
+                        .canceled_action_ids
+                        .contains(&intent.action_id)
+            }),
+            "Nature adjustment is deferred while child provisioning is pending"
         );
         let parts = arguments.split_ascii_whitespace().collect::<Vec<_>>();
         let [nature_trait, value] = parts.as_slice() else {
@@ -762,6 +2397,24 @@ impl EvolutionRuntime {
         ))
     }
 
+    fn metrics_status_read_only(&self) -> Result<String> {
+        let evaluated_at = read_only_evaluation_timestamp(&self.metrics)?;
+        let judgment = self
+            .metrics
+            .evaluate_snapshot(self.ritual.nature(), evaluated_at)?;
+        Ok(format!(
+            "CURRENT DAILY METRICS (READ-ONLY DURING DEATH)\nPERIOD: {}..{}\nCONVERSATIONS: {}\nRETURNING: {}\nDEPTH TOTAL: {}\nCHILDREN RECORDED: {}\nACOLYTES OBSERVED: {}\n\n{}",
+            self.metrics.period_started_at_unix_seconds,
+            self.metrics.period_ends_at_unix_seconds,
+            self.metrics.engagement.conversations,
+            self.metrics.engagement.returning_conversations,
+            self.metrics.engagement.conversation_depth_total,
+            self.metrics.growth.children_spawned,
+            self.metrics.growth.acolytes_recruited,
+            render_judgment(&judgment),
+        ))
+    }
+
     fn judgment_status(&mut self) -> Result<String> {
         let now = now_unix_seconds()?;
         if let Some(final_judgment) = self.roll_period_if_closed(now)? {
@@ -783,15 +2436,19 @@ impl EvolutionRuntime {
         ))
     }
 
+    fn judgment_status_read_only(&self) -> Result<String> {
+        Ok(render_judgment(&self.metrics.evaluate_snapshot(
+            self.ritual.nature(),
+            read_only_evaluation_timestamp(&self.metrics)?,
+        )?))
+    }
+
     fn spawn_child(
         &mut self,
         operator_id: &str,
         message_id: &str,
         requested_id: &str,
     ) -> Result<String> {
-        if self.ritual.nature().sacred_ban == SacredBan::Spawning {
-            bail!("the current Nature's Sacred Ban forbids spawning");
-        }
         validate_runtime_id(operator_id, "authenticated operator ID")?;
         ensure!(
             !message_id.is_empty() && message_id.len() <= 1_024,
@@ -806,18 +2463,10 @@ impl EvolutionRuntime {
         let grant = self
             .last_final_judgment
             .as_ref()
-            .context(
-                "spawning requires Propagation Rights from a closed evaluation period with at least 8 bounded daily contact observations and 4 prior-day returns; partial or low-sample snapshots never grant permission",
-            )?;
+            .context("spawning requires a binding final Propagation Rights judgment")?;
         ensure!(
-            is_accepted_propagation_grant(
-                grant,
-                &self.metrics,
-                self.ritual.nature(),
-                self.ritual.epoch(),
-                i64::try_from(now).context("current timestamp exceeds metrics range")?,
-            )?,
-            "spawning requires unexpired Propagation Rights from the immediately preceding period under the current accepted scoring policy, signed Nature, and awakening epoch, with at least 8 bounded daily contact observations and 4 prior-day returns"
+            self.propagation_grant_is_currently_executable(grant, now)?,
+            "spawning requires binding Propagation Rights under the exact economic policy, signed Nature, and awakening epoch"
         );
         let grant_id = grant.judgment_id.clone();
         let child_id = if requested_id.trim().is_empty() {
@@ -829,32 +2478,48 @@ impl EvolutionRuntime {
         } else {
             requested_id.trim().to_owned()
         };
-        let child = self
-            .lineage
-            .spawn_child(
-                &self.local_tentacle_id,
-                &self.local_tentacle_id,
-                child_id.clone(),
+        ensure!(
+            self.lineage.node(&child_id).is_none()
+                && !self.lifecycle.intents.values().any(|intent| {
+                    matches!(&intent.action, LifecycleAction::Spawn { child_id: existing, .. } if existing == &child_id)
+                }),
+            "a child with this ID already exists or is awaiting provisioning"
+        );
+        let child_nature = self.lineage.plan_child_nature(&self.local_tentacle_id)?;
+        let event_id_sha256 = encode_sha256(message_id.as_bytes());
+        let action = self
+            .lifecycle
+            .enqueue_spawn(
                 now.saturating_mul(1_000),
-                SpawnAuthorization {
-                    judgment_id: grant_id.clone(),
-                    operator_id: operator_id.to_owned(),
-                    event_id_sha256: encode_sha256(message_id.as_bytes()),
-                },
+                self.local_tentacle_id.clone(),
+                child_id.clone(),
+                grant_id.clone(),
+                child_nature.clone(),
+                operator_id.to_owned(),
+                event_id_sha256,
             )?
             .clone();
-        if let Err(error) = self.lineage_store.save(&self.lineage) {
+        if let Err(error) = self.lifecycle_store.save(&self.lifecycle) {
             self.degraded = true;
             return Err(error.into());
         }
-        self.metrics.record_growth(1, 0, 0);
-        if let Err(error) = self.scales_store.save_metrics(&self.metrics) {
-            self.degraded = true;
-            return Err(error);
-        }
         Ok(format!(
-            "CHILD LINEAGE RECORD CREATED: {}\nNATURE: {}\nGENERATION: {}\nCONSUMED FINAL JUDGMENT: {}\nNO PROCESS, WALLET, XMTP IDENTITY, OR DEPLOYMENT WAS CREATED; THE OPERATOR MUST PROVISION THOSE SEPARATELY.",
-            child_id, child.nature.nature_id, child.generation, grant_id,
+            "DURABLE CHILD PROVISIONING ACTION CREATED: {}\nACTION: {}\nPLANNED NATURE: {}\nGENERATION: {}\nFINAL JUDGMENT: {}\nLINEAGE AND GROWTH CREDIT COMMIT ONLY AFTER A MATCHING SUCCESSFUL PROVISION RECEIPT.",
+            child_id, action.action_id, child_nature.nature_id, child_nature.generation, grant_id,
+        ))
+    }
+
+    fn configure_auto_spawn(&mut self, arguments: &str) -> Result<String> {
+        let enabled = match arguments.trim().to_ascii_lowercase().as_str() {
+            "on" | "true" | "1" => true,
+            "off" | "false" | "0" => false,
+            _ => return Ok("USAGE: /auto-spawn <on|off>".to_owned()),
+        };
+        self.set_auto_spawn_enabled(enabled)?;
+        Ok(format!(
+            "AUTOMATIC SPAWNING {}. PROPAGATION RIGHTS WILL {}PROVISION A CHILD INTENT WHEN NATURE GROWTH EXCEEDS 70.",
+            if enabled { "ENABLED" } else { "DISABLED" },
+            if enabled { "" } else { "NOT " }
         ))
     }
 
@@ -960,6 +2625,14 @@ impl EvolutionRuntime {
             }
             return Ok(None);
         }
+        if self.lifecycle.death_pending() {
+            self.reconcile_lifecycle_deadline(now.saturating_mul(1_000))?;
+            return Ok(None);
+        }
+        if self.require_node_economics && !self.node_economics_is_current(now) {
+            self.node_economics_available = false;
+            return Ok(None);
+        }
         let now = i64::try_from(now).context("current timestamp exceeds the metrics range")?;
         ensure!(
             self.metrics.nature_id == self.ritual.nature().nature_id
@@ -992,8 +2665,9 @@ impl EvolutionRuntime {
             .is_some_and(|existing| existing.judgment_id == record.judgment_id);
         if !already_recorded {
             self.scales_store.append_history(&record)?;
+            self.history_catalog.insert(&record)?;
         }
-        self.last_final_judgment = Some(record);
+        self.last_final_judgment = Some(record.clone());
         self.metrics = new_runtime_metrics(
             EvaluationPeriod::Daily,
             aligned_period_start(u64::try_from(now).unwrap_or(u64::MAX))?,
@@ -1001,13 +2675,19 @@ impl EvolutionRuntime {
             self.ritual.epoch(),
         )?;
         self.scales_store.save_metrics(&self.metrics)?;
+        self.apply_final_judgment_lifecycle(
+            &record,
+            u64::try_from(now)
+                .context("current timestamp predates the Unix epoch")?
+                .saturating_mul(1_000),
+        )?;
         Ok(Some(judgment))
     }
 }
 
 fn render_judgment(judgment: &Judgment) -> String {
     format!(
-        "JUDGMENT {:?} ({:?})\nSCORE: {}/10000 (PRE-STRESS {}, PENALTY {})\nSCALES: ENGAGEMENT {}, GROWTH {}, WEALTH {}, INFLUENCE {}\nPROPAGATION EVIDENCE: {} conversations / {} prior-day returns (requires {} / {}; eligible: {})\nEXECUTION: {:?}. NO SHUTDOWN, ABSORPTION, OR SPAWN OCCURS AUTOMATICALLY.",
+        "JUDGMENT {:?} ({:?})\nSCORE: {}/10000 (PRE-STRESS {}, PENALTY {})\nSCALES: ENGAGEMENT {}, GROWTH {}, WEALTH {}, INFLUENCE {}\nPROPAGATION EVIDENCE: {} conversations / {} prior-day returns (requires {} / {}; eligible: {})\nEXECUTION: {:?}. FINAL DEATH AND PROPAGATION OUTCOMES CREATE DURABLE AUTONOMOUS LIFECYCLE ACTIONS.",
         judgment.outcome,
         judgment.evaluation_status,
         judgment.scores.total,
@@ -1033,6 +2713,90 @@ fn render_judgment(judgment: &Judgment) -> String {
     )
 }
 
+fn is_accepted_propagation_grant_with_stake(
+    record: &EvolutionHistoryRecord,
+    current_metrics: &TentacleMetrics,
+    nature: &TentacleNature,
+    awakening_epoch: u64,
+    now: i64,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<bool> {
+    if !propagation_grant_history_is_authorized(
+        record,
+        nature,
+        awakening_epoch,
+        propagation_minimum_stake_basis_points,
+    )? {
+        return Ok(false);
+    }
+    let Some(grant_economics) = record.metrics.token_economics else {
+        return Ok(propagation_minimum_stake_basis_points == 0);
+    };
+    let Some(current_economics) = current_metrics.token_economics else {
+        return Ok(false);
+    };
+    let (Some(grant_provenance), Some(current_provenance)) =
+        (grant_economics.provenance, current_economics.provenance)
+    else {
+        return Ok(false);
+    };
+    let current_binding_matches_grant = current_provenance.chain_id == grant_provenance.chain_id
+        && current_provenance.holder_role == EconomicHolderRole::TentacleTreasury
+        && current_provenance.holder_address == grant_provenance.holder_address
+        && current_provenance.token_contract == grant_provenance.token_contract
+        && current_provenance.configuration_identity == grant_provenance.configuration_identity;
+    Ok(current_metrics.nature_id == nature.nature_id
+        && current_metrics.nature_fingerprint == nature.fingerprint()?
+        && current_metrics.awakening_epoch == awakening_epoch
+        && current_economics.snapshot.trustworthy
+        && current_economics.provenance.is_some()
+        && current_economics.validate().is_ok()
+        && current_economics.policy
+            == runtime_token_policy(nature, propagation_minimum_stake_basis_points)?
+        && current_economics.effects.propagation_stake_eligible
+        && current_binding_matches_grant
+        && i64::try_from(current_provenance.observed_at_unix_seconds)
+            .is_ok_and(|observed_at| observed_at <= now))
+}
+
+fn propagation_grant_history_is_authorized(
+    record: &EvolutionHistoryRecord,
+    nature: &TentacleNature,
+    awakening_epoch: u64,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<bool> {
+    if record.validate().is_err() {
+        return Ok(false);
+    }
+    let scoring_policy_is_accepted = match record.metrics.token_economics {
+        None => {
+            propagation_minimum_stake_basis_points == 0
+                && record.metrics.scored_scale_availability == RUNTIME_SCORED_SCALES
+                && record.judgment.scored_scale_availability == RUNTIME_SCORED_SCALES
+        }
+        Some(economics) => {
+            let expected_availability = token_runtime_scored_scales(economics.snapshot);
+            economics.snapshot.trustworthy
+                && economics.provenance.is_some()
+                && economics.validate().is_ok()
+                && economics.policy
+                    == runtime_token_policy(nature, propagation_minimum_stake_basis_points)?
+                && record.metrics.scored_scale_availability == expected_availability
+                && record.judgment.scored_scale_availability == expected_availability
+        }
+    };
+    Ok(scoring_policy_is_accepted
+        && record.authorizes_automatic_lifecycle()
+        && record.nature_id == nature.nature_id
+        && record.nature_fingerprint == nature.fingerprint()?
+        && record.awakening_epoch == awakening_epoch
+        && record.judgment.evaluation_status == EvaluationStatus::Final
+        && record.judgment.outcome == JudgmentOutcome::PropagationRights
+        && record.judgment.policy == JudgmentPolicy::for_period(record.metrics.period)
+        && record.judgment.propagation_evidence.eligible)
+}
+
+#[cfg(test)]
 fn is_accepted_propagation_grant(
     record: &EvolutionHistoryRecord,
     current_metrics: &TentacleMetrics,
@@ -1040,56 +2804,57 @@ fn is_accepted_propagation_grant(
     awakening_epoch: u64,
     now: i64,
 ) -> Result<bool> {
-    if record.validate().is_err() || current_metrics.validate().is_err() {
-        return Ok(false);
-    }
-    let scoring_policy_is_accepted = match record.metrics.token_economics {
-        None => {
-            record.metrics.scored_scale_availability == RUNTIME_SCORED_SCALES
-                && record.judgment.scored_scale_availability == RUNTIME_SCORED_SCALES
-        }
-        Some(economics) => {
-            let expected_availability = token_runtime_scored_scales(economics.snapshot);
-            economics.snapshot.trustworthy
-                && economics.validate().is_ok()
-                && economics.policy == runtime_token_policy(nature)?
-                && record.metrics.scored_scale_availability == expected_availability
-                && record.judgment.scored_scale_availability == expected_availability
-        }
-    };
-    Ok(scoring_policy_is_accepted
-        && record.nature_id == nature.nature_id
-        && record.nature_fingerprint == nature.fingerprint()?
-        && record.awakening_epoch == awakening_epoch
-        && record.judgment.evaluation_status == EvaluationStatus::Final
-        && record.judgment.outcome == JudgmentOutcome::PropagationRights
-        && record.judgment.policy == JudgmentPolicy::for_period(record.metrics.period)
-        && record.metrics.engagement.conversations >= DAILY_PROPAGATION_MIN_CONVERSATIONS
-        && record.metrics.engagement.returning_conversations
-            >= DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS
-        && record.judgment.propagation_evidence.eligible
-        && record.metrics.period_ends_at_unix_seconds
-            == current_metrics.period_started_at_unix_seconds
-        && (current_metrics.period_started_at_unix_seconds
-            ..current_metrics.period_ends_at_unix_seconds)
-            .contains(&now))
+    is_accepted_propagation_grant_with_stake(
+        record,
+        current_metrics,
+        nature,
+        awakening_epoch,
+        now,
+        DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+    )
 }
 
-fn runtime_token_policy(nature: &TentacleNature) -> Result<TokenEconomicPolicy> {
-    TokenEconomicPolicy::default().with_nature_appetites(
+fn runtime_token_policy(
+    nature: &TentacleNature,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<TokenEconomicPolicy> {
+    let mut policy = TokenEconomicPolicy::default().with_nature_appetites(
         nature.engagement,
         nature.growth,
         nature.wealth,
         nature.influence,
-    )
+    )?;
+    policy.propagation_minimum_stake_basis_points = propagation_minimum_stake_basis_points;
+    policy.validate()?;
+    Ok(policy)
 }
 
-const fn token_runtime_scored_scales(snapshot: TokenEconomicSnapshot) -> ScoredScaleAvailability {
+fn ensure_economic_configuration_continuity(
+    metrics: &TentacleMetrics,
+    incoming: EconomicObservationProvenance,
+) -> Result<()> {
+    if let Some(existing) = metrics
+        .token_economics
+        .and_then(|economics| economics.provenance)
+        && (existing.configuration_identity != incoming.configuration_identity
+            || existing.holder_address != incoming.holder_address
+            || existing.token_contract != incoming.token_contract
+            || existing.chain_id != incoming.chain_id)
+    {
+        ensure!(
+            !metrics.has_behavior_observations(),
+            "node economic identity/configuration cannot change inside an observed metrics period"
+        );
+    }
+    Ok(())
+}
+
+const fn token_runtime_scored_scales(_snapshot: TokenEconomicSnapshot) -> ScoredScaleAvailability {
     ScoredScaleAvailability {
         engagement: true,
-        growth: snapshot.reward_basis_points > 0,
+        growth: true,
         wealth: true,
-        influence: snapshot.stake_basis_points > 0,
+        influence: true,
     }
 }
 
@@ -1148,15 +2913,11 @@ fn reconcile_metrics_history_boundary(
 
 fn validate_lineage_spawn_authorizations(
     lineage: &Lineage,
-    history: &[EvolutionHistoryRecord],
+    history: &ValidatedHistoryCatalog,
 ) -> Result<()> {
-    let history_by_id: BTreeMap<&str, &EvolutionHistoryRecord> = history
-        .iter()
-        .map(|record| (record.judgment_id.as_str(), record))
-        .collect();
     for spawn in &lineage.state().spawn_records {
-        let grant = history_by_id
-            .get(spawn.authorization_judgment_id.as_str())
+        let grant = history
+            .get(&spawn.authorization_judgment_id)?
             .with_context(|| {
                 format!(
                     "lineage spawn {} references a missing final judgment",
@@ -1174,34 +2935,217 @@ fn validate_lineage_spawn_authorizations(
             "lineage spawn {} is bound to a different parent Nature than its judgment",
             spawn.child_id
         );
-
-        let valid_from_ms = u64::try_from(grant.metrics.period_ends_at_unix_seconds)
-            .context("spawn grant period ends before the Unix epoch")?
-            .checked_mul(1_000)
-            .context("spawn grant start exceeds the timestamp range")?;
-        let valid_until_seconds = grant
-            .metrics
-            .period_ends_at_unix_seconds
-            .checked_add(grant.metrics.period.duration_seconds())
-            .context("spawn grant validity period exceeds the timestamp range")?;
-        let valid_until_ms = u64::try_from(valid_until_seconds)
-            .context("spawn grant validity ends before the Unix epoch")?
-            .checked_mul(1_000)
-            .context("spawn grant end exceeds the timestamp range")?;
-        ensure!(
-            (valid_from_ms..valid_until_ms).contains(&spawn.at_ms),
-            "lineage spawn {} falls outside the immediately following authorized period",
-            spawn.child_id
-        );
     }
     Ok(())
 }
 
-fn restrict_runtime_scales(metrics: &mut TentacleMetrics, nature: &TentacleNature) -> Result<bool> {
+#[allow(clippy::too_many_arguments)]
+fn apply_absorption_lineage_projection(
+    lineage: &mut Lineage,
+    action: &LifecycleAction,
+    receipt: &LifecycleReceipt,
+    minimum_projection_at_ms: u64,
+    locally_observed_at_ms: u64,
+) -> Result<(u64, bool)> {
+    let LifecycleAction::Absorb {
+        source_id,
+        target_id,
+        ..
+    } = action
+    else {
+        bail!("lineage absorption projection requires an Absorb action")
+    };
+    ensure!(
+        receipt.status == LifecycleReceiptStatus::Succeeded
+            && locally_observed_at_ms >= minimum_projection_at_ms
+            && receipt.completed_at_ms
+                <= locally_observed_at_ms.saturating_add(LIFECYCLE_RECEIPT_CLOCK_SKEW_MS),
+        "lineage absorption projection requires a locally timely successful executor receipt"
+    );
+    let manifest_hash = receipt
+        .external_reference
+        .as_deref()
+        .context("successful absorption is missing its transfer-manifest hash")?;
+    let source_lifecycle = lineage
+        .node(source_id)
+        .context("absorption source disappeared from lineage")?
+        .lifecycle
+        .clone();
+    match source_lifecycle {
+        TentacleLifecycle::Active => {
+            let projected_at_ms = locally_observed_at_ms;
+            if lineage.node(target_id).is_some() {
+                lineage.record_absorption(
+                    target_id,
+                    target_id,
+                    source_id,
+                    projected_at_ms,
+                    vec![manifest_hash.to_owned()],
+                    false,
+                )?;
+            } else {
+                lineage.record_external_parent_absorption(
+                    source_id,
+                    target_id,
+                    projected_at_ms,
+                    vec![manifest_hash.to_owned()],
+                )?;
+            }
+            Ok((projected_at_ms, true))
+        }
+        TentacleLifecycle::Absorbed { into, at_ms } => {
+            ensure!(
+                into == *target_id
+                    && at_ms >= minimum_projection_at_ms
+                    && at_ms <= locally_observed_at_ms
+                    && receipt.completed_at_ms
+                        <= at_ms.saturating_add(LIFECYCLE_RECEIPT_CLOCK_SKEW_MS)
+                    && lineage.state().absorption_records.iter().any(|record| {
+                        record.source_id == *source_id
+                            && record.target_id == *target_id
+                            && record.at_ms == at_ms
+                            && record.knowledge_hashes == vec![manifest_hash.to_owned()]
+                    }),
+                "persisted lineage absorption does not match its executor receipt"
+            );
+            Ok((at_ms, false))
+        }
+    }
+}
+
+struct PendingLifecycleValidation<'a> {
+    history: &'a ValidatedHistoryCatalog,
+    current_metrics: &'a TentacleMetrics,
+    nature: &'a TentacleNature,
+    awakening_epoch: u64,
+    propagation_minimum_stake_basis_points: u16,
+    survival_total_supply_whole: u64,
+    survival_token_decimals: u8,
+}
+
+fn validate_pending_lifecycle_intents(
+    lifecycle: &LifecycleState,
+    lineage: &Lineage,
+    validation: PendingLifecycleValidation<'_>,
+) -> Result<()> {
+    let PendingLifecycleValidation {
+        history,
+        current_metrics,
+        nature,
+        awakening_epoch,
+        propagation_minimum_stake_basis_points,
+        survival_total_supply_whole,
+        survival_token_decimals,
+    } = validation;
+    let local_id = &lifecycle.tentacle_id;
+    let family = lineage.family(local_id)?;
+    let valid_absorption_targets = family
+        .parent
+        .into_iter()
+        .chain(family.siblings)
+        .chain(family.children)
+        .collect::<BTreeSet<_>>();
+    for intent in lifecycle.intents.values().filter(|intent| {
+        lifecycle.receipt(&intent.action_id).is_none()
+            && !lifecycle.canceled_action_ids.contains(&intent.action_id)
+    }) {
+        match &intent.action {
+            LifecycleAction::SpendForSurvival {
+                tentacle_id,
+                judgment_id,
+                grace_ends_at_ms,
+                chain_id,
+                token_contract,
+                treasury_address,
+                configuration_identity,
+                exact_amount,
+                ..
+            } => {
+                ensure!(
+                    tentacle_id == local_id
+                        && lifecycle.pending_death.as_ref().is_some_and(|pending| {
+                            pending.judgment_id == *judgment_id
+                                && pending.grace_ends_at_ms == *grace_ends_at_ms
+                        })
+                        && exact_amount.total_supply_whole == survival_total_supply_whole
+                        && exact_amount.token_decimals == survival_token_decimals,
+                    "pending survival spend is not bound to the exact local Death and token amount configuration"
+                );
+                if let Some(provenance) = current_metrics
+                    .token_economics
+                    .and_then(|economics| economics.provenance)
+                {
+                    ensure!(
+                        provenance.chain_id == *chain_id
+                            && provenance.token_contract == *token_contract
+                            && provenance.holder_address == *treasury_address
+                            && provenance.configuration_identity == *configuration_identity,
+                        "pending survival spend does not match current bound economic provenance"
+                    );
+                }
+            }
+            LifecycleAction::Absorb {
+                source_id,
+                target_id,
+                judgment_id,
+            } => ensure!(
+                source_id == local_id
+                    && valid_absorption_targets.contains(target_id)
+                    && lifecycle
+                        .pending_death
+                        .as_ref()
+                        .is_some_and(|pending| pending.judgment_id == *judgment_id),
+                "pending absorption is not bound to the exact local Death and lineage target"
+            ),
+            LifecycleAction::Spawn {
+                parent_id,
+                judgment_id,
+                child_nature,
+                ..
+            } => {
+                let grant = history.get(judgment_id)?.with_context(|| {
+                    format!("pending Spawn references missing judgment {judgment_id}")
+                })?;
+                ensure!(
+                    parent_id == local_id
+                        && child_nature.parent_nature_id.as_deref()
+                            == Some(nature.nature_id.as_str())
+                        && propagation_grant_history_is_authorized(
+                            &grant,
+                            nature,
+                            awakening_epoch,
+                            propagation_minimum_stake_basis_points,
+                        )?,
+                    "pending Spawn is not bound to the current Nature and exact economic propagation grant"
+                );
+            }
+            LifecycleAction::Shutdown {
+                tentacle_id,
+                judgment_id,
+                ..
+            } => ensure!(
+                tentacle_id == local_id
+                    && lifecycle
+                        .pending_death
+                        .as_ref()
+                        .is_some_and(|pending| pending.judgment_id == *judgment_id),
+                "pending Shutdown is not bound to the exact local Death"
+            ),
+        }
+    }
+    Ok(())
+}
+
+fn restrict_runtime_scales(
+    metrics: &mut TentacleMetrics,
+    nature: &TentacleNature,
+    propagation_minimum_stake_basis_points: u16,
+) -> Result<bool> {
     let expected = match metrics.token_economics {
         Some(economics) if economics.snapshot.trustworthy => {
             ensure!(
-                economics.policy == runtime_token_policy(nature)?,
+                economics.policy
+                    == runtime_token_policy(nature, propagation_minimum_stake_basis_points)?,
                 "trusted token metrics use a policy that does not match their bound Nature"
             );
             token_runtime_scored_scales(economics.snapshot)
@@ -1331,6 +3275,14 @@ fn now_unix_seconds() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?
         .as_secs())
+}
+
+fn read_only_evaluation_timestamp(metrics: &TentacleMetrics) -> Result<i64> {
+    let now =
+        i64::try_from(now_unix_seconds()?).context("current timestamp exceeds metrics range")?;
+    Ok(now
+        .max(metrics.period_started_at_unix_seconds)
+        .min(metrics.period_ends_at_unix_seconds.saturating_sub(1)))
 }
 
 fn encode_sha256(bytes: &[u8]) -> String {
@@ -1698,6 +3650,47 @@ mod tests {
 
     const OPERATOR: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+    fn open_confirmed_with_zero_stake(
+        data_dir: &Path,
+        workspace: &Path,
+    ) -> Result<EvolutionRuntime> {
+        EvolutionRuntime::open(
+            data_dir,
+            workspace,
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                propagation_minimum_stake_basis_points: 0,
+                ..EvolutionStartupOptions::default()
+            },
+        )
+    }
+
+    fn catalog_with(records: &[EvolutionHistoryRecord]) -> ValidatedHistoryCatalog {
+        let root = tempfile::tempdir().unwrap();
+        let store = ScalesStore::new(root.path()).unwrap();
+        for record in records {
+            store.append_history(record).unwrap();
+        }
+        store.history_catalog().unwrap()
+    }
+
+    fn propagation_test_nature() -> TentacleNature {
+        TentacleNature {
+            schema_version: 1,
+            nature_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            generation: 0,
+            parent_nature_id: None,
+            engagement: 100,
+            growth: 0,
+            wealth: 0,
+            influence: 0,
+            cooperation: 50,
+            stability: 50,
+            transparency: 50,
+            sacred_ban: SacredBan::MemorySharing,
+        }
+    }
+
     #[test]
     fn startup_blocks_until_authenticated_confirmation_and_survives_restart() {
         let root = tempfile::tempdir().unwrap();
@@ -1727,7 +3720,593 @@ mod tests {
     }
 
     #[test]
-    fn kill_blocks_without_terminating_and_local_force_can_recover() {
+    fn read_only_preflight_distinguishes_spawn_outbox_from_mandatory_death_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        ensure_private_directory(root.path()).unwrap();
+        assert!(!EvolutionRuntime::has_mandatory_recovery_work(root.path()).unwrap());
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        runtime
+            .lifecycle
+            .enqueue_spawn(
+                1,
+                runtime.local_tentacle_id.clone(),
+                "preflight-child".to_owned(),
+                "a".repeat(64),
+                child_nature,
+                "evolution-runtime".to_owned(),
+                "b".repeat(64),
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert!(!EvolutionRuntime::has_mandatory_recovery_work(root.path()).unwrap());
+        let death_at_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+        runtime
+            .lifecycle
+            .schedule_death(&"c".repeat(64), death_at_ms, DEATH_GRACE_PERIOD_MS, None)
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert!(EvolutionRuntime::has_mandatory_recovery_work(root.path()).unwrap());
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::ShutdownDueOrPending
+        );
+        runtime
+            .lifecycle
+            .enqueue_absorption(
+                death_at_ms,
+                runtime.local_tentacle_id.clone(),
+                "external-parent".to_owned(),
+                "c".repeat(64),
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::AbsorptionRequired
+        );
+        let pending = runtime.lifecycle.pending_death.as_mut().unwrap();
+        pending.scheduled_at_ms = 1;
+        pending.grace_ends_at_ms = 1;
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::ShutdownDueOrPending
+        );
+        assert!(matches!(
+            runtime
+                .due_native_shutdown_action(now_unix_seconds().unwrap())
+                .unwrap()
+                .unwrap()
+                .action,
+            LifecycleAction::Shutdown { .. }
+        ));
+    }
+
+    #[test]
+    fn lifecycle_only_startup_completes_due_shutdown_with_unfinished_absorption() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        let now_ms = now.saturating_mul(1_000);
+        let scheduled_at_ms = now_ms.saturating_sub(1_000);
+        let judgment_id = "d".repeat(64);
+        runtime
+            .lifecycle
+            .schedule_death(&judgment_id, scheduled_at_ms, 0, None)
+            .unwrap();
+        let absorption = runtime
+            .lifecycle
+            .enqueue_absorption(
+                scheduled_at_ms,
+                runtime.local_tentacle_id.clone(),
+                "external-parent".to_owned(),
+                judgment_id.clone(),
+            )
+            .unwrap()
+            .clone();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        drop(runtime);
+
+        // This recovery path intentionally does not parse unrelated projections.
+        fs::write(root.path().join("state").join("metrics.json"), b"not-json").unwrap();
+        let receipt = EvolutionRuntime::try_complete_due_native_shutdown(root.path(), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            receipt.external_reference.as_deref(),
+            Some("native-transport-never-started")
+        );
+
+        let lifecycle = LifecycleStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lifecycle.shutdown_completed_at_ms,
+            Some(receipt.completed_at_ms)
+        );
+        assert!(lifecycle.receipt(&absorption.action_id).is_none());
+        let shutdown = lifecycle.intents.get(&receipt.action_id).unwrap();
+        assert!(matches!(
+            &shutdown.action,
+            LifecycleAction::Shutdown {
+                tentacle_id,
+                judgment_id: action_judgment,
+                after_action_id: Some(dependency),
+            } if tentacle_id == &lifecycle.tentacle_id
+                && action_judgment == &judgment_id
+                && dependency == &absorption.action_id
+        ));
+
+        let replay = EvolutionRuntime::complete_due_native_shutdown(root.path(), now).unwrap();
+        assert_eq!(replay, receipt);
+    }
+
+    #[test]
+    fn lifecycle_only_startup_never_completes_shutdown_before_grace_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(&"e".repeat(64), now.saturating_mul(1_000), 60_000, None)
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        drop(runtime);
+
+        assert_eq!(
+            EvolutionRuntime::try_complete_due_native_shutdown(root.path(), now).unwrap(),
+            None
+        );
+        assert!(
+            EvolutionRuntime::complete_due_native_shutdown(root.path(), now)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot complete before")
+        );
+        let lifecycle = LifecycleStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(lifecycle.shutdown_completed_at_ms.is_none());
+        assert!(
+            !lifecycle
+                .intents
+                .values()
+                .any(|intent| { matches!(intent.action, LifecycleAction::Shutdown { .. }) })
+        );
+    }
+
+    #[test]
+    fn completed_shutdown_restart_repairs_absorption_receipt_lineage_crash_window() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let parent_nature = TentacleNature::random().unwrap();
+        let child_nature = parent_nature.inherit().unwrap().nature;
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                propagation_minimum_stake_basis_points: 0,
+                child_bootstrap: Some(ChildBootstrap {
+                    provisioning_action_id: "1".repeat(64),
+                    tentacle_id: "inherited-child".to_owned(),
+                    parent_id: "external-parent".to_owned(),
+                    inherited_nature: child_nature,
+                }),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        let now = now_unix_seconds().unwrap();
+        let now_ms = now.saturating_mul(1_000);
+        let judgment_id = "f".repeat(64);
+        runtime
+            .lifecycle
+            .schedule_death(&judgment_id, now_ms.saturating_sub(1_000), 0, None)
+            .unwrap();
+        let absorption = runtime
+            .lifecycle
+            .enqueue_absorption(
+                now_ms.saturating_sub(1_000),
+                "inherited-child".to_owned(),
+                "external-parent".to_owned(),
+                judgment_id,
+            )
+            .unwrap()
+            .clone();
+        runtime
+            .lifecycle
+            .acknowledge_action(LifecycleReceipt {
+                action_id: absorption.action_id.clone(),
+                completed_at_ms: now_ms,
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: Some("a".repeat(64)),
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: None,
+            })
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert!(
+            runtime
+                .lifecycle
+                .pending_absorption_projection_action_ids
+                .contains(&absorption.action_id)
+        );
+        assert_eq!(
+            runtime.lineage.node("inherited-child").unwrap().lifecycle,
+            TentacleLifecycle::Active
+        );
+        drop(runtime);
+
+        EvolutionRuntime::try_complete_due_native_shutdown(root.path(), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::AbsorptionProjectionRequired
+        );
+        // The repair boundary must remain independent of unrelated startup projections/options.
+        fs::write(root.path().join("state").join("metrics.json"), b"hostile").unwrap();
+        fs::write(root.path().join("state").join("nature.json"), b"hostile").unwrap();
+        assert!(EvolutionRuntime::repair_absorption_projection(root.path()).unwrap());
+        let lineage = LineageStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            lineage.node("inherited-child").unwrap().lifecycle,
+            TentacleLifecycle::Absorbed { ref into, .. } if into == "external-parent"
+        ));
+        let lifecycle = LifecycleStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(
+            lifecycle
+                .absorption_projections
+                .contains_key(&absorption.action_id)
+        );
+        assert!(
+            !lifecycle
+                .pending_absorption_projection_action_ids
+                .contains(&absorption.action_id)
+        );
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::CompletedShutdown
+        );
+        assert!(!EvolutionRuntime::repair_absorption_projection(root.path()).unwrap());
+    }
+
+    #[test]
+    fn stale_required_node_economics_closes_operator_effect_and_harness_lanes() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = now_unix_seconds().unwrap();
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                require_node_economics: true,
+                initial_node_economics: Some((
+                    TokenEconomicSnapshot {
+                        balance_basis_points: 10_000,
+                        stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+                        reward_basis_points: 0,
+                        trustworthy: true,
+                    },
+                    EconomicObservationProvenance::base(
+                        [1; 20],
+                        EconomicHolderRole::TentacleTreasury,
+                        [2; 20],
+                        now,
+                        Some(1),
+                        [3; 32],
+                    )
+                    .unwrap(),
+                )),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        runtime.mark_node_economics_unavailable();
+        for text in ["plain operator request", "/adjust growth 100", "/exec true"] {
+            let response = runtime
+                .handle_operator_message(OPERATOR, "stale-economics", text)
+                .unwrap()
+                .expect("stale economics must never fall through to operator tools");
+            assert!(response.contains("OPERATOR EFFECTS AND TOOL DISPATCH ARE CLOSED"));
+        }
+        assert!(
+            runtime
+                .handle_operator_message(OPERATOR, "status", "/nature")
+                .unwrap()
+                .unwrap()
+                .contains("Nature ")
+        );
+    }
+
+    #[test]
+    fn economic_refresh_reconciliation_failure_marks_runtime_unavailable_and_degraded() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(
+                &"e".repeat(64),
+                now.saturating_mul(1_000),
+                DEATH_GRACE_PERIOD_MS,
+                None,
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        let error = runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 10_000,
+                    stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now,
+                    Some(1),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing its final judgment history")
+        );
+        assert!(runtime.degraded);
+        assert!(!runtime.node_economics_available);
+    }
+
+    #[test]
+    fn startup_rejects_pending_survival_spend_with_wrong_token_amount_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(
+                &"f".repeat(64),
+                1_000,
+                DEATH_GRACE_PERIOD_MS,
+                Some(SurvivalSpendBinding {
+                    expenditure_basis_points: 500,
+                    chain_id: 8_453,
+                    token_contract: [2; 20],
+                    treasury_address: [1; 20],
+                    configuration_identity: [3; 32],
+                    exact_amount: crate::evolution::ExactTokenAmount {
+                        total_supply_whole: 2_000_000_000,
+                        token_decimals: runtime.survival_token_decimals,
+                        basis_points: 500,
+                        raw_amount: exact_raw_token_amount(
+                            2_000_000_000,
+                            runtime.survival_token_decimals,
+                            500,
+                        )
+                        .unwrap(),
+                    },
+                }),
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        drop(runtime);
+        let error = EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("token amount configuration"));
+    }
+
+    #[test]
+    fn binding_death_rejects_a_late_in_flight_spawn_success() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let intent = runtime
+            .lifecycle
+            .enqueue_spawn(
+                now_ms,
+                runtime.local_tentacle_id.clone(),
+                "late-child".to_owned(),
+                "a".repeat(64),
+                child_nature.clone(),
+                "evolution-runtime".to_owned(),
+                "b".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        runtime
+            .lifecycle
+            .schedule_death(&"c".repeat(64), now_ms, DEATH_GRACE_PERIOD_MS, None)
+            .unwrap();
+        let error = runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: intent.action_id.clone(),
+                completed_at_ms: now_ms.saturating_add(1),
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: None,
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: Some(crate::evolution::ProvisionReceipt {
+                    child_id: "late-child".to_owned(),
+                    child_nature_fingerprint: child_nature.fingerprint().unwrap(),
+                    manifest_sha256: "d".repeat(64),
+                }),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("after a binding Death began"));
+        assert!(runtime.lifecycle.receipt(&intent.action_id).is_none());
+        assert!(runtime.lineage.node("late-child").is_none());
+    }
+
+    #[test]
+    fn future_absorption_receipt_cannot_preempt_the_death_grace_period() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+        let judgment_id = "7".repeat(64);
+        let grace_period_ms = LIFECYCLE_RECEIPT_CLOCK_SKEW_MS / 3;
+        runtime
+            .lifecycle
+            .schedule_death(&judgment_id, now_ms, grace_period_ms, None)
+            .unwrap();
+        let intent = runtime
+            .lifecycle
+            .enqueue_absorption(
+                now_ms,
+                runtime.local_tentacle_id.clone(),
+                "future-target".to_owned(),
+                judgment_id,
+            )
+            .unwrap()
+            .clone();
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: intent.action_id.clone(),
+                completed_at_ms: now_ms.saturating_add(grace_period_ms).saturating_add(1),
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: Some("8".repeat(64)),
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: None,
+            })
+            .unwrap();
+        assert!(runtime.lifecycle.receipt(&intent.action_id).is_some());
+        assert_eq!(
+            runtime
+                .lineage
+                .node(&runtime.local_tentacle_id)
+                .unwrap()
+                .lifecycle,
+            TentacleLifecycle::Active
+        );
+        assert!(runtime.lifecycle.pending_death.is_some());
+    }
+
+    #[test]
+    fn spawn_projection_uses_local_observation_and_rejects_unbounded_future_receipts() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let bounded = runtime
+            .lifecycle
+            .enqueue_spawn(
+                now_ms,
+                runtime.local_tentacle_id.clone(),
+                "bounded-clock-child".to_owned(),
+                "9".repeat(64),
+                child_nature.clone(),
+                "evolution-runtime".to_owned(),
+                "a".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        let executor_time = now_ms.saturating_add(LIFECYCLE_RECEIPT_CLOCK_SKEW_MS / 2);
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: bounded.action_id,
+                completed_at_ms: executor_time,
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: None,
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: Some(crate::evolution::ProvisionReceipt {
+                    child_id: "bounded-clock-child".to_owned(),
+                    child_nature_fingerprint: child_nature.fingerprint().unwrap(),
+                    manifest_sha256: "b".repeat(64),
+                }),
+            })
+            .unwrap();
+        assert!(
+            runtime
+                .lineage
+                .node("bounded-clock-child")
+                .unwrap()
+                .spawned_at_ms
+                < executor_time
+        );
+
+        let future_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let future = runtime
+            .lifecycle
+            .enqueue_spawn(
+                now_ms,
+                runtime.local_tentacle_id.clone(),
+                "unbounded-clock-child".to_owned(),
+                "c".repeat(64),
+                future_nature.clone(),
+                "evolution-runtime".to_owned(),
+                "d".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        let error = runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: future.action_id.clone(),
+                completed_at_ms: now_ms
+                    .saturating_add(LIFECYCLE_RECEIPT_CLOCK_SKEW_MS)
+                    .saturating_add(1_000),
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: None,
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: Some(crate::evolution::ProvisionReceipt {
+                    child_id: "unbounded-clock-child".to_owned(),
+                    child_nature_fingerprint: future_nature.fingerprint().unwrap(),
+                    manifest_sha256: "e".repeat(64),
+                }),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("bounded local clock skew"));
+        assert!(runtime.lifecycle.receipt(&future.action_id).is_none());
+        assert!(runtime.lineage.node("unbounded-clock-child").is_none());
+    }
+
+    #[test]
+    fn kill_blocks_and_emits_durable_shutdown_while_local_force_can_recover() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let mut runtime = EvolutionRuntime::open(
@@ -1740,8 +4319,19 @@ mod tests {
             .handle_operator_message(OPERATOR, "message-kill", "KILL")
             .unwrap()
             .unwrap();
-        assert!(response.contains("DID NOT TERMINATE"));
+        assert!(response.contains("DURABLE SHUTDOWN ACTION"));
         assert!(!runtime.permits_normal_operation());
+        let blocked = runtime
+            .handle_operator_message(OPERATOR, "message-after-kill", "/spawn forbidden-child")
+            .unwrap()
+            .unwrap();
+        assert!(blocked.contains("OPERATOR EFFECTS ARE CLOSED"));
+        assert!(!runtime.lifecycle.intents.values().any(|intent| {
+            matches!(
+                &intent.action,
+                LifecycleAction::Spawn { child_id, .. } if child_id == "forbidden-child"
+            )
+        }));
         drop(runtime);
 
         let recovered = EvolutionRuntime::open(
@@ -1765,8 +4355,7 @@ mod tests {
     fn nature_changes_measurable_model_policy() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let mut runtime =
-            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
         let mut sequence = 0_u32;
         for (nature_trait, value) in [
             (NatureTrait::Engagement, 0),
@@ -1988,8 +4577,7 @@ mod tests {
         let expected_fingerprint = runtime.nature().fingerprint().unwrap();
         drop(runtime);
 
-        let resumed =
-            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let resumed = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
         assert_eq!(resumed.nature().growth, value);
         assert_eq!(resumed.metrics.nature_fingerprint, expected_fingerprint);
         assert_eq!(resumed.metrics.awakening_epoch, resumed.ritual.epoch());
@@ -2064,7 +4652,7 @@ mod tests {
     fn startup_replays_only_the_exact_history_ahead_metrics_window() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let runtime =
+        let mut runtime =
             EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
         let finalized = new_runtime_metrics(
             EvaluationPeriod::Daily,
@@ -2079,6 +4667,7 @@ mod tests {
         let record =
             EvolutionHistoryRecord::new(runtime.nature(), finalized.clone(), judgment).unwrap();
         runtime.scales_store.append_history(&record).unwrap();
+        runtime.history_catalog.insert(&record).unwrap();
         runtime.scales_store.save_metrics(&finalized).unwrap();
         drop(runtime);
 
@@ -2109,6 +4698,7 @@ mod tests {
             let record =
                 EvolutionHistoryRecord::new(runtime.nature(), finalized.clone(), judgment).unwrap();
             runtime.scales_store.append_history(&record).unwrap();
+            runtime.history_catalog.insert(&record).unwrap();
 
             if partially_overlapping {
                 runtime.metrics = new_runtime_metrics(
@@ -2255,6 +4845,85 @@ mod tests {
     }
 
     #[test]
+    fn public_turn_rechecks_required_node_economics_after_period_rollover() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = now_unix_seconds().unwrap();
+        let day = EvaluationPeriod::Daily.duration_seconds();
+        let current_start = aligned_period_start(now).unwrap();
+        let closed_start = current_start - day;
+        let observed_at = u64::try_from(current_start - 1).unwrap();
+        let snapshot = TokenEconomicSnapshot {
+            balance_basis_points: 10_000,
+            stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+            reward_basis_points: 0,
+            trustworthy: true,
+        };
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                require_node_economics: true,
+                node_economics_ttl_seconds: u64::try_from(day * 2).unwrap(),
+                initial_node_economics: Some((
+                    snapshot,
+                    EconomicObservationProvenance::base(
+                        [1; 20],
+                        EconomicHolderRole::TentacleTreasury,
+                        [2; 20],
+                        now,
+                        Some(2),
+                        [3; 32],
+                    )
+                    .unwrap(),
+                )),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+
+        let nature = runtime.nature().clone();
+        let mut closed = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            closed_start,
+            &nature,
+            runtime.ritual.epoch(),
+        )
+        .unwrap();
+        closed
+            .record_node_token_economic_observation(
+                snapshot,
+                runtime_token_policy(&nature, runtime.propagation_minimum_stake_basis_points)
+                    .unwrap(),
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    observed_at,
+                    Some(1),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        runtime.metrics = closed;
+        runtime.scales_store.save_metrics(&runtime.metrics).unwrap();
+        assert!(runtime.node_economics_is_current(now));
+
+        let start = runtime.begin_public_turn().unwrap();
+        assert!(matches!(
+            start,
+            PublicTurnStart::Gated(message)
+                if message.contains("current Base UWU treasury economics are unavailable")
+        ));
+        assert!(runtime.active_public_turns.is_empty());
+        assert!(runtime.metrics.token_economics.is_none());
+        assert!(!runtime.node_economics_available);
+        assert!(runtime.metrics.period_started_at_unix_seconds >= current_start);
+    }
+
+    #[test]
     fn public_token_observations_only_raise_engagement_and_survive_restart() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
@@ -2386,6 +5055,28 @@ mod tests {
         assert_eq!(fs::read_to_string(outside).unwrap(), "do not replace");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn auto_spawn_policy_commits_only_after_durable_lifecycle_save() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside-lifecycle");
+        fs::write(&outside, "do not replace").unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let before = runtime.auto_spawn_enabled();
+        let lifecycle_path = root.path().join("state").join("lifecycle.json");
+        fs::remove_file(&lifecycle_path).unwrap();
+        symlink(&outside, &lifecycle_path).unwrap();
+
+        assert!(runtime.set_auto_spawn_enabled(!before).is_err());
+        assert_eq!(runtime.auto_spawn_enabled(), before);
+        assert!(runtime.degraded);
+        assert_eq!(fs::read_to_string(outside).unwrap(), "do not replace");
+    }
+
     #[test]
     fn forced_epoch_reroll_resets_prior_adjustment_stress() {
         let root = tempfile::tempdir().unwrap();
@@ -2410,17 +5101,60 @@ mod tests {
     }
 
     #[test]
+    fn forced_reroll_rejects_pending_spawn_before_nature_or_metrics_change() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        runtime
+            .lifecycle
+            .enqueue_spawn(
+                1,
+                runtime.local_tentacle_id.clone(),
+                "reroll-pending-child".to_owned(),
+                "a".repeat(64),
+                child_nature,
+                "evolution-runtime".to_owned(),
+                "b".repeat(64),
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        let nature_before = fs::read(root.path().join("state").join("nature.json")).unwrap();
+        let metrics_before = fs::read(root.path().join("state").join("metrics.json")).unwrap();
+        drop(runtime);
+
+        let error = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                reroll_nature: true,
+                force: true,
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("blocked while child provisioning is pending"));
+        assert_eq!(
+            fs::read(root.path().join("state").join("nature.json")).unwrap(),
+            nature_before
+        );
+        assert_eq!(
+            fs::read(root.path().join("state").join("metrics.json")).unwrap(),
+            metrics_before
+        );
+    }
+
+    #[test]
     fn lineage_spawn_receipts_must_resolve_to_their_exact_final_grants() {
         let mut nature = TentacleNature::random().unwrap();
         nature.sacred_ban = SacredBan::MemorySharing;
         let mut metrics = new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, 1).unwrap();
-        for index in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
-            metrics.record_conversation(
-                1_000,
-                index < DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
-                Some(1),
-            );
-        }
+        metrics.record_conversation(10_000, true, Some(1));
         let judgment = metrics
             .evaluate(&nature, metrics.period_ends_at_unix_seconds)
             .unwrap();
@@ -2443,8 +5177,9 @@ mod tests {
                 authorization.clone(),
             )
             .unwrap();
-        validate_lineage_spawn_authorizations(&valid, std::slice::from_ref(&grant)).unwrap();
-        assert!(validate_lineage_spawn_authorizations(&valid, &[]).is_err());
+        validate_lineage_spawn_authorizations(&valid, &catalog_with(std::slice::from_ref(&grant)))
+            .unwrap();
+        assert!(validate_lineage_spawn_authorizations(&valid, &catalog_with(&[])).is_err());
 
         let mut other_nature = TentacleNature::random().unwrap();
         other_nature.sacred_ban = SacredBan::MemorySharing;
@@ -2459,28 +5194,30 @@ mod tests {
             )
             .unwrap();
         assert!(
-            validate_lineage_spawn_authorizations(&wrong_parent, std::slice::from_ref(&grant))
-                .is_err()
+            validate_lineage_spawn_authorizations(
+                &wrong_parent,
+                &catalog_with(std::slice::from_ref(&grant))
+            )
+            .is_err()
         );
 
-        let mut expired = Lineage::new("parent", nature, 0).unwrap();
-        let invalid_spawn_at = u64::try_from(
+        let mut later = Lineage::new("parent", nature, 0).unwrap();
+        let later_spawn_at = u64::try_from(
             grant.metrics.period_ends_at_unix_seconds + grant.metrics.period.duration_seconds(),
         )
         .unwrap()
             * 1_000;
-        expired
+        later
             .spawn_child(
                 "parent",
                 "parent",
-                "expired-child",
-                invalid_spawn_at,
+                "later-child",
+                later_spawn_at,
                 authorization,
             )
             .unwrap();
-        assert!(
-            validate_lineage_spawn_authorizations(&expired, std::slice::from_ref(&grant)).is_err()
-        );
+        validate_lineage_spawn_authorizations(&later, &catalog_with(std::slice::from_ref(&grant)))
+            .unwrap();
     }
 
     #[test]
@@ -2516,15 +5253,15 @@ mod tests {
     }
 
     #[test]
-    fn propagation_grants_require_bounded_volume_returns_and_current_policy() {
-        let nature = TentacleNature::random().unwrap();
+    fn propagation_grants_have_no_volume_or_expiry_quota_and_require_exact_economic_policy() {
+        let nature = propagation_test_nature();
         let mut low_sample = new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, 1).unwrap();
         low_sample.record_conversation(1_000, true, Some(1));
         let judgment = low_sample
             .evaluate(&nature, low_sample.period_ends_at_unix_seconds)
             .unwrap();
-        assert_eq!(judgment.outcome, JudgmentOutcome::Survival);
-        assert!(!judgment.propagation_evidence.eligible);
+        assert_eq!(judgment.outcome, JudgmentOutcome::PropagationRights);
+        assert!(judgment.propagation_evidence.eligible);
         let record = EvolutionHistoryRecord::new(&nature, low_sample, judgment).unwrap();
         let current = new_runtime_metrics(
             EvaluationPeriod::Daily,
@@ -2534,24 +5271,19 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !is_accepted_propagation_grant(
+            is_accepted_propagation_grant_with_stake(
                 &record,
                 &current,
                 &nature,
                 1,
                 current.period_started_at_unix_seconds + 1,
+                0,
             )
             .unwrap()
         );
 
         let mut eligible = new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, 1).unwrap();
-        for index in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
-            eligible.record_conversation(
-                1_000,
-                index < DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
-                Some(1),
-            );
-        }
+        eligible.record_conversation(10_000, true, Some(1));
         let judgment = eligible
             .evaluate(&nature, eligible.period_ends_at_unix_seconds)
             .unwrap();
@@ -2565,12 +5297,13 @@ mod tests {
         )
         .unwrap();
         assert!(
-            is_accepted_propagation_grant(
+            is_accepted_propagation_grant_with_stake(
                 &record,
                 &current,
                 &nature,
                 1,
                 current.period_started_at_unix_seconds + 1,
+                0,
             )
             .unwrap()
         );
@@ -2578,22 +5311,29 @@ mod tests {
         let mut token_enabled =
             new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, 1).unwrap();
         let targets = JudgmentPolicy::for_period(EvaluationPeriod::Daily).targets;
-        for index in 0..DAILY_PROPAGATION_MIN_CONVERSATIONS {
-            token_enabled.record_conversation(
-                targets.average_conversation_depth,
-                index < DAILY_PROPAGATION_MIN_RETURNING_CONVERSATIONS,
-                Some(targets.response_time_full_credit_ms),
-            );
-        }
+        token_enabled.record_conversation(
+            targets.average_conversation_depth,
+            true,
+            Some(targets.response_time_full_credit_ms),
+        );
         token_enabled
-            .record_token_economic_snapshot(
+            .record_node_token_economic_observation(
                 TokenEconomicSnapshot {
-                    balance_basis_points: 8_000,
-                    stake_basis_points: 0,
+                    balance_basis_points: 10_000,
+                    stake_basis_points: 10_000,
                     reward_basis_points: 0,
                     trustworthy: true,
                 },
-                runtime_token_policy(&nature).unwrap(),
+                runtime_token_policy(&nature, DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS).unwrap(),
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    1,
+                    None,
+                    [3; 32],
+                )
+                .unwrap(),
             )
             .unwrap();
         token_enabled.record_growth(
@@ -2618,18 +5358,37 @@ mod tests {
             token_record.metrics.scored_scale_availability,
             ScoredScaleAvailability {
                 engagement: true,
-                growth: false,
+                growth: true,
                 wealth: true,
-                influence: false,
+                influence: true,
             }
         );
-        let token_current = new_runtime_metrics(
+        let mut token_current = new_runtime_metrics(
             EvaluationPeriod::Daily,
             token_record.metrics.period_ends_at_unix_seconds,
             &nature,
             1,
         )
         .unwrap();
+        let grant_economics = token_record.metrics.token_economics.unwrap();
+        let grant_provenance = grant_economics.provenance.unwrap();
+        let current_observed_at =
+            u64::try_from(token_current.period_started_at_unix_seconds + 1).unwrap();
+        token_current
+            .record_node_token_economic_observation(
+                grant_economics.snapshot,
+                grant_economics.policy,
+                EconomicObservationProvenance::base(
+                    grant_provenance.holder_address,
+                    grant_provenance.holder_role,
+                    grant_provenance.token_contract,
+                    current_observed_at,
+                    Some(2),
+                    grant_provenance.configuration_identity,
+                )
+                .unwrap(),
+            )
+            .unwrap();
         assert!(
             is_accepted_propagation_grant(
                 &token_record,
@@ -2640,11 +5399,49 @@ mod tests {
             )
             .unwrap()
         );
+        let mut withdrawn_current = token_current.clone();
+        withdrawn_current
+            .record_node_token_economic_observation(
+                TokenEconomicSnapshot {
+                    stake_basis_points: 0,
+                    ..grant_economics.snapshot
+                },
+                grant_economics.policy,
+                EconomicObservationProvenance::base(
+                    grant_provenance.holder_address,
+                    grant_provenance.holder_role,
+                    grant_provenance.token_contract,
+                    current_observed_at.saturating_add(1),
+                    Some(3),
+                    grant_provenance.configuration_identity,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            withdrawn_current.scored_scale_availability,
+            ScoredScaleAvailability {
+                engagement: true,
+                growth: true,
+                wealth: true,
+                influence: true,
+            }
+        );
+        assert!(
+            !is_accepted_propagation_grant(
+                &token_record,
+                &withdrawn_current,
+                &nature,
+                1,
+                withdrawn_current.period_started_at_unix_seconds + 2,
+            )
+            .unwrap()
+        );
 
         let mut arbitrary_availability_metrics = token_record.metrics.clone();
         arbitrary_availability_metrics
             .scored_scale_availability
-            .growth = true;
+            .growth = false;
         let arbitrary_availability_judgment = arbitrary_availability_metrics
             .evaluate(
                 &nature,
@@ -2669,7 +5466,8 @@ mod tests {
             .unwrap()
         );
 
-        let mut arbitrary_policy = runtime_token_policy(&nature).unwrap();
+        let mut arbitrary_policy =
+            runtime_token_policy(&nature, DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS).unwrap();
         arbitrary_policy.engagement_sensitivity_basis_points =
             if arbitrary_policy.engagement_sensitivity_basis_points == 10_000 {
                 9_999
@@ -2678,9 +5476,15 @@ mod tests {
             };
         let mut arbitrary_policy_metrics = token_record.metrics.clone();
         arbitrary_policy_metrics
-            .record_token_economic_snapshot(
+            .record_node_token_economic_observation(
                 token_record.metrics.token_economics.unwrap().snapshot,
                 arbitrary_policy,
+                token_record
+                    .metrics
+                    .token_economics
+                    .unwrap()
+                    .provenance
+                    .unwrap(),
             )
             .unwrap();
         let arbitrary_policy_judgment = arbitrary_policy_metrics
@@ -2728,15 +5532,760 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !is_accepted_propagation_grant(
+            is_accepted_propagation_grant_with_stake(
                 &record,
                 &stale_cycle,
                 &nature,
                 1,
                 stale_cycle.period_started_at_unix_seconds + 1,
+                0,
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn spawn_lineage_and_growth_commit_only_after_matching_provision_success() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let before_growth = runtime.metrics.growth.children_spawned;
+        let at_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+
+        let failed_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let failed = runtime
+            .lifecycle
+            .enqueue_spawn(
+                at_ms,
+                runtime.local_tentacle_id.clone(),
+                "failed-child".to_owned(),
+                "a".repeat(64),
+                failed_nature,
+                "evolution-runtime".to_owned(),
+                "b".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: failed.action_id,
+                completed_at_ms: at_ms.saturating_add(1),
+                status: LifecycleReceiptStatus::Failed,
+                external_reference: None,
+                detail: Some("provisioner failed".to_owned()),
+                confirmed_chain_receipt: None,
+                provision_receipt: None,
+            })
+            .unwrap();
+        assert!(runtime.lineage.node("failed-child").is_none());
+        assert_eq!(runtime.metrics.growth.children_spawned, before_growth);
+
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let successful = runtime
+            .lifecycle
+            .enqueue_spawn(
+                at_ms,
+                runtime.local_tentacle_id.clone(),
+                "provisioned-child".to_owned(),
+                "c".repeat(64),
+                child_nature.clone(),
+                "evolution-runtime".to_owned(),
+                "d".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: successful.action_id,
+                completed_at_ms: at_ms.saturating_add(2),
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: None,
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: Some(crate::evolution::ProvisionReceipt {
+                    child_id: "provisioned-child".to_owned(),
+                    child_nature_fingerprint: child_nature.fingerprint().unwrap(),
+                    manifest_sha256: "e".repeat(64),
+                }),
+            })
+            .unwrap();
+        assert_eq!(
+            runtime.lineage.node("provisioned-child").unwrap().nature,
+            child_nature
+        );
+        assert_eq!(
+            runtime.metrics.growth.children_spawned,
+            before_growth.saturating_add(1)
+        );
+    }
+
+    #[test]
+    fn restart_recovers_lineage_ahead_spawn_growth_exactly_once() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let nature = runtime.nature().clone();
+        let prior_period = runtime
+            .metrics
+            .period_started_at_unix_seconds
+            .saturating_sub(EvaluationPeriod::Daily.duration_seconds());
+        let mut grant_metrics = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            prior_period,
+            &nature,
+            runtime.ritual.epoch(),
+        )
+        .unwrap();
+        grant_metrics.record_conversation(1_000, true, Some(1));
+        let judgment = grant_metrics
+            .evaluate(&nature, grant_metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.outcome, JudgmentOutcome::PropagationRights);
+        let grant = EvolutionHistoryRecord::new(&nature, grant_metrics, judgment).unwrap();
+        runtime.scales_store.append_history(&grant).unwrap();
+        runtime.history_catalog.insert(&grant).unwrap();
+
+        let completed_at_ms = now_unix_seconds().unwrap().saturating_mul(1_000);
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        let intent = runtime
+            .lifecycle
+            .enqueue_spawn(
+                completed_at_ms,
+                runtime.local_tentacle_id.clone(),
+                "lineage-ahead-child".to_owned(),
+                grant.judgment_id.clone(),
+                child_nature.clone(),
+                "evolution-runtime".to_owned(),
+                "f".repeat(64),
+            )
+            .unwrap()
+            .clone();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        let receipt = LifecycleReceipt {
+            action_id: intent.action_id.clone(),
+            completed_at_ms,
+            status: LifecycleReceiptStatus::Succeeded,
+            external_reference: None,
+            detail: None,
+            confirmed_chain_receipt: None,
+            provision_receipt: Some(crate::evolution::ProvisionReceipt {
+                child_id: "lineage-ahead-child".to_owned(),
+                child_nature_fingerprint: child_nature.fingerprint().unwrap(),
+                manifest_sha256: "e".repeat(64),
+            }),
+        };
+        runtime.lifecycle.acknowledge_action(receipt).unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        runtime
+            .lineage
+            .record_provisioned_child(
+                &runtime.local_tentacle_id,
+                &runtime.local_tentacle_id,
+                "lineage-ahead-child",
+                child_nature,
+                completed_at_ms,
+                SpawnAuthorization {
+                    judgment_id: grant.judgment_id,
+                    operator_id: "evolution-runtime".to_owned(),
+                    event_id_sha256: "f".repeat(64),
+                },
+            )
+            .unwrap();
+        runtime.lineage_store.save(&runtime.lineage).unwrap();
+        assert_eq!(runtime.metrics.growth.children_spawned, 0);
+        assert!(runtime.lifecycle.spawn_projections.is_empty());
+        drop(runtime);
+
+        let resumed = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        assert_eq!(resumed.metrics.growth.children_spawned, 1);
+        assert_eq!(resumed.lifecycle.spawn_projections.len(), 1);
+        drop(resumed);
+        let resumed_again = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        assert_eq!(resumed_again.metrics.growth.children_spawned, 1);
+        assert_eq!(resumed_again.lifecycle.spawn_projections.len(), 1);
+    }
+
+    #[test]
+    fn completed_shutdown_restart_does_not_roll_or_mutate_state() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        runtime.metrics = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            aligned_period_start(now).unwrap() - EvaluationPeriod::Daily.duration_seconds(),
+            runtime.nature(),
+            runtime.ritual.epoch(),
+        )
+        .unwrap();
+        runtime.metrics.record_conversation(50, true, Some(1));
+        runtime.scales_store.save_metrics(&runtime.metrics).unwrap();
+
+        let completed_at_ms = now.saturating_mul(1_000);
+        let judgment_id = "9".repeat(64);
+        runtime
+            .lifecycle
+            .schedule_death(&judgment_id, completed_at_ms, 0, None)
+            .unwrap();
+        runtime
+            .lifecycle
+            .reconcile_expired_death(completed_at_ms, None)
+            .unwrap();
+        let shutdown = runtime.lifecycle.next_due_action().unwrap().clone();
+        runtime
+            .lifecycle
+            .acknowledge_action(LifecycleReceipt {
+                action_id: shutdown.action_id,
+                completed_at_ms,
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: Some("native-transport-stopped".to_owned()),
+                detail: None,
+                confirmed_chain_receipt: None,
+                provision_receipt: None,
+            })
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        let state_dir = root.path().join("state");
+        let tracked = [
+            "metrics.json",
+            "evolution_history.jsonl",
+            "lifecycle.json",
+            "lineage.json",
+        ];
+        let before = tracked
+            .iter()
+            .map(|name| {
+                let path = state_dir.join(name);
+                (name, fs::read(path).unwrap_or_default())
+            })
+            .collect::<Vec<_>>();
+        drop(runtime);
+
+        let resumed = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                auto_spawn: Some(false),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(resumed.is_shutdown_complete());
+        drop(resumed);
+        for (name, expected) in before {
+            assert_eq!(fs::read(state_dir.join(name)).unwrap_or_default(), expected);
+        }
+    }
+
+    #[test]
+    fn restart_before_spawn_receipt_reuses_the_pending_child_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let nature = runtime.nature().clone();
+        let mut grant_metrics =
+            new_runtime_metrics(EvaluationPeriod::Daily, 0, &nature, runtime.ritual.epoch())
+                .unwrap();
+        grant_metrics.record_conversation(1_000, true, Some(1));
+        let judgment = grant_metrics
+            .evaluate(&nature, grant_metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.outcome, JudgmentOutcome::PropagationRights);
+        let grant = EvolutionHistoryRecord::new(&nature, grant_metrics, judgment).unwrap();
+        runtime.scales_store.append_history(&grant).unwrap();
+        runtime.history_catalog.insert(&grant).unwrap();
+        let at_ms = u64::try_from(grant.judgment.evaluated_at_unix_seconds)
+            .unwrap()
+            .saturating_mul(1_000);
+        runtime.auto_spawn_from_grant(&grant, at_ms).unwrap();
+        let before = runtime
+            .lifecycle
+            .intents
+            .values()
+            .filter(|intent| matches!(intent.action, LifecycleAction::Spawn { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(before.len(), 1);
+        drop(runtime);
+
+        let mut resumed = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        resumed.auto_spawn_from_grant(&grant, at_ms).unwrap();
+        let after = resumed
+            .lifecycle
+            .intents
+            .values()
+            .filter(|intent| matches!(intent.action, LifecycleAction::Spawn { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn current_stake_withdrawal_suppresses_pending_spawn_across_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = now_unix_seconds().unwrap();
+        let funded = TokenEconomicSnapshot {
+            balance_basis_points: 10_000,
+            stake_basis_points: 10_000,
+            reward_basis_points: 10_000,
+            trustworthy: true,
+        };
+        let provenance = EconomicObservationProvenance::base(
+            [1; 20],
+            EconomicHolderRole::TentacleTreasury,
+            [2; 20],
+            now,
+            Some(1),
+            [3; 32],
+        )
+        .unwrap();
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                auto_spawn: Some(false),
+                initial_node_economics: Some((funded, provenance)),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        let nature = runtime.nature().clone();
+        let prior_period = runtime
+            .metrics
+            .period_started_at_unix_seconds
+            .saturating_sub(EvaluationPeriod::Daily.duration_seconds());
+        let mut grant_metrics = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            prior_period,
+            &nature,
+            runtime.ritual.epoch(),
+        )
+        .unwrap();
+        let targets = JudgmentPolicy::for_period(EvaluationPeriod::Daily).targets;
+        grant_metrics.record_conversation(
+            targets.average_conversation_depth,
+            true,
+            Some(targets.response_time_full_credit_ms),
+        );
+        grant_metrics
+            .record_node_token_economic_observation(
+                funded,
+                runtime_token_policy(&nature, runtime.propagation_minimum_stake_basis_points)
+                    .unwrap(),
+                EconomicObservationProvenance::base(
+                    provenance.holder_address,
+                    provenance.holder_role,
+                    provenance.token_contract,
+                    u64::try_from(prior_period).unwrap().saturating_add(1),
+                    Some(1),
+                    provenance.configuration_identity,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        grant_metrics
+            .record_economic_result(targets.revenue_micro_units, targets.efficiency_basis_points)
+            .unwrap();
+        grant_metrics.record_growth(
+            targets.children_spawned,
+            targets.acolytes_recruited,
+            targets.network_contribution_points,
+        );
+        grant_metrics.record_influence(
+            targets.governance_participation,
+            targets.sibling_influence_points,
+        );
+        let judgment = grant_metrics
+            .evaluate(&nature, grant_metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.outcome, JudgmentOutcome::PropagationRights);
+        let grant = EvolutionHistoryRecord::new(&nature, grant_metrics, judgment).unwrap();
+        runtime.scales_store.append_history(&grant).unwrap();
+        runtime.history_catalog.insert(&grant).unwrap();
+        let child_nature = runtime
+            .lineage
+            .plan_child_nature(&runtime.local_tentacle_id)
+            .unwrap();
+        runtime
+            .lifecycle
+            .enqueue_spawn(
+                now.saturating_mul(1_000),
+                runtime.local_tentacle_id.clone(),
+                "stake-bound-child".to_owned(),
+                grant.judgment_id.clone(),
+                child_nature,
+                "evolution-runtime".to_owned(),
+                "d".repeat(64),
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert!(matches!(
+            runtime
+                .next_due_lifecycle_action(now)
+                .unwrap()
+                .unwrap()
+                .action,
+            LifecycleAction::Spawn { .. }
+        ));
+
+        let withdrawn = TokenEconomicSnapshot {
+            stake_basis_points: 0,
+            ..funded
+        };
+        runtime
+            .record_node_economic_observation(withdrawn, provenance)
+            .unwrap();
+        assert!(runtime.next_due_lifecycle_action(now).unwrap().is_none());
+        drop(runtime);
+
+        let mut resumed = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                auto_spawn: Some(false),
+                initial_node_economics: Some((withdrawn, provenance)),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(resumed.next_due_lifecycle_action(now).unwrap().is_none());
+    }
+
+    #[test]
+    fn fresh_top_up_during_grace_enqueues_exact_survival_burn() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        let nature = runtime.nature().clone();
+        let prior_period = runtime
+            .metrics
+            .period_started_at_unix_seconds
+            .saturating_sub(EvaluationPeriod::Daily.duration_seconds());
+        let policy =
+            runtime_token_policy(&nature, runtime.propagation_minimum_stake_basis_points).unwrap();
+        let mut death_metrics = new_runtime_metrics(
+            EvaluationPeriod::Daily,
+            prior_period,
+            &nature,
+            runtime.ritual.epoch(),
+        )
+        .unwrap();
+        death_metrics
+            .record_node_token_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 0,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                policy,
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    u64::try_from(prior_period).unwrap().saturating_add(1),
+                    Some(1),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let judgment = death_metrics
+            .evaluate(&nature, death_metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.outcome, JudgmentOutcome::Death);
+        let death = EvolutionHistoryRecord::new(&nature, death_metrics, judgment).unwrap();
+        runtime.scales_store.append_history(&death).unwrap();
+        runtime.history_catalog.insert(&death).unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(
+                &death.judgment_id,
+                now.saturating_mul(1_000),
+                DEATH_GRACE_PERIOD_MS,
+                None,
+            )
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        assert!(
+            !runtime.lifecycle.intents.values().any(|intent| {
+                matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
+            })
+        );
+
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 10_000,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now,
+                    Some(2),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let spend = runtime
+            .lifecycle
+            .intents
+            .values()
+            .find(|intent| {
+                matches!(
+                    &intent.action,
+                    LifecycleAction::SpendForSurvival { judgment_id, .. }
+                        if judgment_id == &death.judgment_id
+                )
+            })
+            .unwrap();
+        assert!(matches!(
+            &spend.action,
+            LifecycleAction::SpendForSurvival { exact_amount, .. }
+                if exact_amount.raw_amount
+                    == exact_raw_token_amount(
+                        runtime.survival_total_supply_whole,
+                        runtime.survival_token_decimals,
+                        exact_amount.basis_points,
+                    )
+                    .unwrap()
+        ));
+        let first_action_id = spend.action_id.clone();
+        // A fresher observation with the same exact economic binding must not replace an
+        // unreceipted burn with a new idempotency key.
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 10_000,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now.saturating_add(1),
+                    Some(3),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            runtime
+                .lifecycle
+                .intents
+                .values()
+                .filter(|intent| {
+                    runtime.lifecycle.receipt(&intent.action_id).is_none()
+                        && matches!(
+                            &intent.action,
+                            LifecycleAction::SpendForSurvival { judgment_id, .. }
+                                if judgment_id == &death.judgment_id
+                        )
+                })
+                .map(|intent| intent.action_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first_action_id.as_str()]
+        );
+
+        // Underfunding hides, rather than replaces, the ambiguous unreceipted burn. Funding
+        // recovery reactivates the same action ID.
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 0,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now.saturating_add(2),
+                    Some(4),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(
+            runtime
+                .lifecycle
+                .canceled_action_ids
+                .contains(&first_action_id)
+        );
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 10_000,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now.saturating_add(3),
+                    Some(5),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(
+            !runtime
+                .lifecycle
+                .canceled_action_ids
+                .contains(&first_action_id)
+        );
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: first_action_id.clone(),
+                completed_at_ms: now.saturating_add(3).saturating_mul(1_000),
+                status: LifecycleReceiptStatus::Failed,
+                external_reference: None,
+                detail: Some("burn transaction was not accepted".to_owned()),
+                confirmed_chain_receipt: None,
+                provision_receipt: None,
+            })
+            .unwrap();
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 10_000,
+                    stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now.saturating_add(4),
+                    Some(6),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(runtime.lifecycle.intents.values().any(|intent| {
+            intent.action_id != first_action_id
+                && runtime.lifecycle.receipt(&intent.action_id).is_none()
+                && matches!(
+                    &intent.action,
+                    LifecycleAction::SpendForSurvival { judgment_id, .. }
+                        if judgment_id == &death.judgment_id
+                )
+        }));
+        let second = runtime
+            .lifecycle
+            .intents
+            .values()
+            .find(|intent| {
+                intent.action_id != first_action_id
+                    && runtime.lifecycle.receipt(&intent.action_id).is_none()
+                    && matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
+            })
+            .unwrap()
+            .clone();
+        let LifecycleAction::SpendForSurvival {
+            chain_id,
+            token_contract,
+            treasury_address,
+            burn_destination,
+            configuration_identity,
+            exact_amount,
+            ..
+        } = second.action
+        else {
+            unreachable!();
+        };
+        runtime
+            .ack_lifecycle_action(LifecycleReceipt {
+                action_id: second.action_id,
+                completed_at_ms: now.saturating_add(5).saturating_mul(1_000),
+                status: LifecycleReceiptStatus::Succeeded,
+                external_reference: None,
+                detail: None,
+                confirmed_chain_receipt: Some(crate::evolution::ConfirmedChainReceipt {
+                    chain_id,
+                    transaction_hash: format!("0x{}", "9".repeat(64)),
+                    block_number: 7,
+                    block_timestamp_unix_seconds: now.saturating_add(5),
+                    token_contract,
+                    from_address: treasury_address,
+                    burn_destination,
+                    configuration_identity,
+                    exact_amount,
+                    operation: crate::evolution::TokenSpendOperation::Burn,
+                }),
+                provision_receipt: None,
+            })
+            .unwrap();
+        assert!(!runtime.node_economics_available);
+        let snapshot = TokenEconomicSnapshot {
+            balance_basis_points: 10_000,
+            stake_basis_points: runtime.propagation_minimum_stake_basis_points,
+            reward_basis_points: 0,
+            trustworthy: true,
+        };
+        assert!(
+            runtime
+                .record_node_economic_observation(
+                    snapshot,
+                    EconomicObservationProvenance::base(
+                        [1; 20],
+                        EconomicHolderRole::TentacleTreasury,
+                        [2; 20],
+                        now.saturating_add(4),
+                        Some(6),
+                        [3; 32],
+                    )
+                    .unwrap(),
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("after the latest confirmed survival burn")
+        );
+        runtime
+            .record_node_economic_observation(
+                snapshot,
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now.saturating_add(6),
+                    Some(8),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(runtime.node_economics_available);
     }
 
     #[cfg(unix)]

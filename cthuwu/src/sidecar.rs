@@ -16,7 +16,7 @@ use std::{
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::{Mutex, Semaphore},
+    sync::{Mutex, Semaphore, watch},
     task::JoinSet,
     time::timeout,
 };
@@ -62,6 +62,7 @@ pub async fn run_xmtp_sidecar(
     sidecar: &Path,
     data_dir: &Path,
     xmtp_environment: &str,
+    mut lifecycle_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     if !sidecar.is_file() {
         bail!(
@@ -81,11 +82,18 @@ pub async fn run_xmtp_sidecar(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
     copy_transport_environment(&mut command);
 
     let mut child = command
         .spawn()
         .with_context(|| format!("starting XMTP transport with {}", node.display()))?;
+    #[cfg(unix)]
+    let _process_group = ProcessGroupGuard::new(child.id());
 
     let stdout = child
         .stdout
@@ -119,6 +127,17 @@ pub async fn run_xmtp_sidecar(
             signal = &mut shutdown => {
                 signal?;
                 info!("stopping XMTP transport");
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                drop(stdin);
+                return stop_transport(&mut child).await;
+            }
+            changed = lifecycle_shutdown.changed() => {
+                changed.context("autonomous lifecycle shutdown controller closed")?;
+                if !*lifecycle_shutdown.borrow() {
+                    continue;
+                }
+                info!("stopping XMTP transport after binding lifecycle shutdown");
                 tasks.abort_all();
                 while tasks.join_next().await.is_some() {}
                 drop(stdin);
@@ -452,6 +471,33 @@ async fn stop_transport(child: &mut Child) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    process_id: Option<i32>,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn new(process_id: Option<u32>) -> Self {
+        Self {
+            process_id: process_id.and_then(|value| i32::try_from(value).ok()),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if let Some(process_id) = self.process_id {
+            // The Node sidecar is its process-group leader. Binding shutdown is complete only when
+            // every descendant is gone, including helpers forked by the direct Node process.
+            unsafe {
+                libc::kill(-process_id, libc::SIGKILL);
+            }
+        }
+    }
+}
+
 async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
@@ -544,6 +590,27 @@ fn validate_request(request: &InboundText) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn completed_transport_parent_cannot_leave_descendants_running() {
+        use std::os::unix::process::CommandExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let late_effect = directory.path().join("late-sidecar-effect");
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(format!(
+            "(sleep 0.2; touch '{}') & exit 0",
+            late_effect.display()
+        ));
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().unwrap();
+        let guard = ProcessGroupGuard::new(child.id());
+        assert!(child.wait().await.unwrap().success());
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        assert!(!late_effect.exists());
+    }
 
     #[test]
     fn parses_the_transport_contract() {
