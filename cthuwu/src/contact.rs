@@ -12,6 +12,7 @@ use crate::storage::{ensure_private_directory, restrict_file, sync_directory};
 const NOT_SHARED: &str = "_Not shared yet._";
 const SKIPPED: &str = "_Skipped._";
 const MAX_CONTACT_NOTE_BYTES: usize = 128 * 1024;
+const MAX_NATURE_AFFINITY_ID_CHARS: usize = 64;
 pub const CURRENT_SHARING_CONSENT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +75,16 @@ pub struct Contact {
     pub introductions_paused: bool,
     pub awaiting_onboarding_answer: bool,
     pub onboarding_turns_since_prompt: u32,
+    pub loyalty_score: u8,
+    pub loyalty_last_day: u64,
+    pub nature_affinity_id: Option<String>,
+    pub nature_affinity_score: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NatureInteractionObservation {
+    pub first_observation_today: bool,
+    pub returning_after_prior_day: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +124,10 @@ impl Contact {
             introductions_paused: false,
             awaiting_onboarding_answer: false,
             onboarding_turns_since_prompt: 0,
+            loyalty_score: 0,
+            loyalty_last_day: 0,
+            nature_affinity_id: None,
+            nature_affinity_score: 0,
         }
     }
 
@@ -284,6 +299,18 @@ impl Contact {
 
     pub fn profile_markdown(&self) -> String {
         format!(
+            "{}\n## Local relationship signals\nLoyalty score: {} / 100\nNature affinity binding: {} ({} / 100)\n",
+            self.model_profile_markdown(),
+            self.loyalty_score,
+            self.nature_affinity_id.as_deref().unwrap_or("not measured"),
+            self.nature_affinity_score,
+        )
+    }
+
+    /// User-chosen profile fields only. Computed local relationship signals are deliberately
+    /// excluded because this view may be sent to the configured inference provider.
+    pub fn model_profile_markdown(&self) -> String {
+        format!(
             "## Name\n{}\n\n## Hopes and dreams\n{}\n\n## Resources they may want to contribute\n{}\n\n## Needs and support\n{}\n\n## Sharing\n{}\n",
             markdown_value(self.name.as_deref()),
             markdown_value(self.hopes.as_deref()),
@@ -295,7 +322,7 @@ impl Contact {
                 "Previous sharing consent needs renewal."
             } else {
                 "Not opted in."
-            }
+            },
         )
     }
 
@@ -307,13 +334,46 @@ impl Contact {
         self.touch();
     }
 
+    /// Records bounded, local-only relationship signals for evolutionary evaluation.
+    ///
+    /// The affinity ID identifies a Nature configuration, never a person. Gossip may aggregate
+    /// these scores, but must never export the contact's inbox ID or note.
+    pub fn record_nature_interaction(
+        &mut self,
+        nature_affinity_id: &str,
+        returning_contact: bool,
+    ) -> Result<NatureInteractionObservation> {
+        let nature_affinity_id = normalize_nature_affinity_id(nature_affinity_id)?;
+        let today = unix_seconds() / 86_400;
+        let first_observation_today = self.loyalty_last_day < today;
+        let returning_after_prior_day =
+            returning_contact && self.loyalty_last_day > 0 && self.loyalty_last_day < today;
+        if first_observation_today {
+            let loyalty_gain = if returning_after_prior_day { 5 } else { 1 };
+            self.loyalty_score = self.loyalty_score.saturating_add(loyalty_gain).min(100);
+            self.loyalty_last_day = today;
+
+            if self.nature_affinity_id.as_deref() == Some(nature_affinity_id.as_str()) {
+                self.nature_affinity_score = self.nature_affinity_score.saturating_add(1).min(100);
+            } else {
+                self.nature_affinity_id = Some(nature_affinity_id);
+                self.nature_affinity_score = 1;
+            }
+        }
+        self.touch();
+        Ok(NatureInteractionObservation {
+            first_observation_today,
+            returning_after_prior_day,
+        })
+    }
+
     pub fn is_matching_enabled(&self) -> bool {
         self.sharing_enabled && self.sharing_consent_version == CURRENT_SHARING_CONSENT_VERSION
     }
 
     fn markdown(&self) -> String {
         format!(
-            "---\ninbox_id: {}\nfirst_seen_unix: {}\nlast_seen_unix: {}\nonboarding_stage: {}\nsharing_enabled: {}\nsharing_consent_version: {}\nintroductions_paused: {}\nawaiting_onboarding_answer: {}\nonboarding_turns_since_prompt: {}\n---\n\n# Contact {}\n\n{}",
+            "---\ninbox_id: {}\nfirst_seen_unix: {}\nlast_seen_unix: {}\nonboarding_stage: {}\nsharing_enabled: {}\nsharing_consent_version: {}\nintroductions_paused: {}\nawaiting_onboarding_answer: {}\nonboarding_turns_since_prompt: {}\nloyalty_score: {}\nloyalty_last_day: {}\nnature_affinity_id: {}\nnature_affinity_score: {}\n---\n\n# Contact {}\n\n{}",
             self.inbox_id,
             self.first_seen,
             self.last_seen,
@@ -323,6 +383,10 @@ impl Contact {
             self.introductions_paused,
             self.awaiting_onboarding_answer,
             self.onboarding_turns_since_prompt,
+            self.loyalty_score,
+            self.loyalty_last_day,
+            self.nature_affinity_id.as_deref().unwrap_or("none"),
+            self.nature_affinity_score,
             self.inbox_id,
             self.profile_markdown(),
         )
@@ -340,6 +404,11 @@ impl Contact {
             optional_bool_metadata(markdown, "awaiting_onboarding_answer")?;
         let onboarding_turns_since_prompt =
             optional_u32_metadata(markdown, "onboarding_turns_since_prompt")?;
+        let loyalty_score = optional_u8_metadata(markdown, "loyalty_score")?.min(100);
+        let loyalty_last_day = optional_u64_metadata(markdown, "loyalty_last_day")?;
+        let nature_affinity_id = optional_nature_affinity_metadata(markdown)?;
+        let nature_affinity_score =
+            optional_u8_metadata(markdown, "nature_affinity_score")?.min(100);
 
         Ok(Self {
             inbox_id,
@@ -355,6 +424,10 @@ impl Contact {
             introductions_paused,
             awaiting_onboarding_answer,
             onboarding_turns_since_prompt,
+            loyalty_score,
+            loyalty_last_day,
+            nature_affinity_id,
+            nature_affinity_score,
         })
     }
 }
@@ -622,6 +695,56 @@ fn optional_u32_metadata(markdown: &str, key: &str) -> Result<u32> {
     }
 }
 
+fn optional_u64_metadata(markdown: &str, key: &str) -> Result<u64> {
+    match markdown
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+    {
+        Some(value) => value
+            .parse()
+            .with_context(|| format!("contact has invalid {key}")),
+        None => Ok(0),
+    }
+}
+
+fn optional_u8_metadata(markdown: &str, key: &str) -> Result<u8> {
+    match markdown
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+    {
+        Some(value) => value
+            .parse()
+            .with_context(|| format!("contact has invalid {key}")),
+        None => Ok(0),
+    }
+}
+
+fn optional_nature_affinity_metadata(markdown: &str) -> Result<Option<String>> {
+    let Some(value) = markdown
+        .lines()
+        .find_map(|line| line.strip_prefix("nature_affinity_id: "))
+    else {
+        return Ok(None);
+    };
+    if value == "none" {
+        return Ok(None);
+    }
+    normalize_nature_affinity_id(value).map(Some)
+}
+
+fn normalize_nature_affinity_id(value: &str) -> Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || value.chars().count() > MAX_NATURE_AFFINITY_ID_CHARS
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        bail!("invalid Nature affinity ID");
+    }
+    Ok(value)
+}
+
 fn section(markdown: &str, heading: &str) -> Option<String> {
     let marker = format!("## {heading}\n");
     let value = markdown
@@ -761,5 +884,99 @@ mod tests {
         let name = contact.display_name();
         assert!(!name.contains('\n'));
         assert!(name.chars().count() <= 64);
+    }
+
+    #[test]
+    fn nature_affinity_and_loyalty_are_bounded_and_survive_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ContactStore::new(root.path()).unwrap();
+        let (mut contact, _) = store.load_or_create("aabbcc").unwrap();
+        for _ in 0..150 {
+            contact.loyalty_last_day = 0;
+            assert!(
+                contact
+                    .record_nature_interaction("nature-deadbeef", true)
+                    .unwrap()
+                    .first_observation_today
+            );
+        }
+        assert!(
+            !contact
+                .record_nature_interaction("nature-deadbeef", true)
+                .unwrap()
+                .first_observation_today
+        );
+        store.save(&contact).unwrap();
+
+        let loaded = store.load("aabbcc").unwrap().unwrap();
+        assert_eq!(loaded.loyalty_score, 100);
+        assert_eq!(loaded.nature_affinity_score, 100);
+        assert_eq!(
+            loaded.nature_affinity_id.as_deref(),
+            Some("nature-deadbeef")
+        );
+        assert!(loaded.loyalty_last_day > 0);
+    }
+
+    #[test]
+    fn returning_signal_requires_a_prior_day_observation() {
+        let mut contact = Contact::new("aabbcc".to_owned());
+        let first = contact
+            .record_nature_interaction(&"a".repeat(64), true)
+            .unwrap();
+        assert!(first.first_observation_today);
+        assert!(!first.returning_after_prior_day);
+
+        let same_day = contact
+            .record_nature_interaction(&"a".repeat(64), true)
+            .unwrap();
+        assert!(!same_day.first_observation_today);
+        assert!(!same_day.returning_after_prior_day);
+
+        contact.loyalty_last_day = contact.loyalty_last_day.saturating_sub(1);
+        let next_day = contact
+            .record_nature_interaction(&"a".repeat(64), true)
+            .unwrap();
+        assert!(next_day.first_observation_today);
+        assert!(next_day.returning_after_prior_day);
+    }
+
+    #[test]
+    fn remote_model_profile_excludes_computed_local_relationship_signals() {
+        let mut contact = Contact::new("aabbcc".to_owned());
+        contact.name = Some("Nyx".to_owned());
+        contact.loyalty_score = 42;
+        contact.nature_affinity_id = Some("b".repeat(64));
+        contact.nature_affinity_score = 7;
+
+        let local = contact.profile_markdown();
+        assert!(local.contains("Local relationship signals"));
+        assert!(local.contains("42 / 100"));
+        assert!(local.contains(&"b".repeat(64)));
+
+        let model = contact.model_profile_markdown();
+        assert!(model.contains("Nyx"));
+        assert!(!model.contains("Local relationship signals"));
+        assert!(!model.contains("42 / 100"));
+        assert!(!model.contains(&"b".repeat(64)));
+    }
+
+    #[test]
+    fn legacy_contact_without_evolution_metadata_still_loads() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ContactStore::new(root.path()).unwrap();
+        store.load_or_create("aabbcc").unwrap();
+        let path = root.path().join("contacts/aabbcc.md");
+        let note = fs::read_to_string(&path).unwrap();
+        let legacy = note
+            .lines()
+            .filter(|line| !line.starts_with("loyalty_") && !line.starts_with("nature_affinity_"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, legacy).unwrap();
+
+        let loaded = store.load("aabbcc").unwrap().unwrap();
+        assert_eq!(loaded.loyalty_score, 0);
+        assert!(loaded.nature_affinity_id.is_none());
     }
 }

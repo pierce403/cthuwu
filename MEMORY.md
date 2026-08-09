@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-05
+Last reviewed: 2026-08-09
 
 ## Product
 
@@ -135,6 +135,74 @@ Last reviewed: 2026-08-05
 - Backend secrets are atomically persisted at `state/xmtp-identity.json`; XMTP databases are environment-specific below `state/xmtp/`.
 - `@xmtp/agent-sdk@2.3.0` is the supported first transport. Direct libxmtp remains a later option because its Rust crates are unpublished internal APIs.
 
+## Evolution architecture decisions
+
+- Tentacle Nature is a local runtime policy distinct from the Council's durable Cthulhu personality.
+  It has seven 0–100 sliders, one closed Sacred Ban, a random Nature ID, generation, and optional
+  parent Nature ID. Inheritance selects similarity/drift/radical mutation with a 70/20/10 split.
+- `state/nature.json` and the logically append-only awakening journal use a local owner-only HMAC
+  key. Journal updates verify and atomically copy-on-write replace canonical newline-terminated
+  history. These are symmetric local integrity tags, not public signatures, peer identities, or
+  protection from a compromised service account that can read the key and re-sign state. The key is
+  created atomically; missing-key startup beside signed state or metrics/history/lineage projections
+  fails without implicit rekeying or adoption of orphaned projections.
+- A new awakening epoch blocks normal public conversation, contact mutation, inference, and tools.
+  Only the already authenticated active XMTP operator path may apply `YES`, relative `ADJUST`,
+  `REROLL`, or `KILL`. Local `--skip-awakening` is a visibly distinct signed testing override;
+  forced rerolls append new epochs rather than rewriting history. `KILL` never exits the process.
+  Signed `POST_ADJUST` entries reconcile exact current-period stress after a crash. An expired empty
+  pending-awakening metrics period resets without producing a judgment before late confirmation.
+  Each signed entry carries its exact immediate-predecessor Nature snapshot; recovery accepts only
+  the head or final signed predecessor, and rejects a divergent Nature/log pair even if both validate
+  independently. With no journal entries, a missing Nature may be generated only when no Evolution
+  projections or alternate Nature exist.
+- Confirmed Nature supplies only bounded response/resource policy and local contact relationship
+  signals. Relationship values are excluded from remote model profiles; one contact contributes at
+  most once per UTC day and counts as returning only after prior-day activity. Nature cannot add
+  tools, expand role authority, select an unconfigured remote provider, or weaken privacy consent.
+- Rust holds one `state/evolution-runtime.lock` for a data directory. Public inference reservations
+  bind the signed Nature fingerprint, awakening epoch, and metrics period; mutation and rollover
+  defer until matching reservations finish.
+- Scales open-period evaluations are `PartialSnapshot`/`AdvisorySnapshotOnly`. Only a closed-period
+  evaluation is final, and even then propagation, survival, starvation, and death outcomes require
+  authenticated operator confirmation. Metrics and judgments bind Nature ID/fingerprint, awakening
+  epoch, period bounds, and scored-scale availability. Active weights are renormalized; the runtime
+  currently scores engagement only because trusted growth/economic/influence adapters are absent.
+  Policy and judgment persist the evidence floors and observed counts (daily 8/4, weekly 32/16); a
+  propagation-threshold score with too little evidence is capped at `Survival`.
+- Lineage is an auditable local record. Spawning may create a child Nature and lineage entry, but
+  only from a final grant for the current policy, Nature ID/fingerprint, and awakening epoch, with
+  at least eight daily observations and four prior-day returns. It records authenticated operator
+  and hashed event provenance and consumes the content-derived judgment ID once; partial snapshots
+  never grant. Spawning does not provision an identity, run another process, or prove a live child.
+  Death/absorption facts never terminate processes, route users, or merge private memory
+  automatically. A grant is usable only in the immediately following metrics period; a closed or
+  missed intervening period invalidates it. On load, each spawn receipt must resolve to its exact
+  Final PropagationRights history, parent Nature, and authorized time window.
+- Judgment history is a canonical, unkeyed consistency journal, not cryptographic tamper evidence.
+  It accepts only deterministic final records evaluated exactly at period end and rejects duplicate
+  IDs, same-period conflicts, reorder, and overlap. Startup rejects open-metrics overlap except exact
+  equality with the last Final payload, the single replayable history-ahead append/reset window.
+- Custom `--nature-path` values are relative to `UWUBOT_DATA_DIR/state/natures/`; absolute and parent
+  traversal paths fail closed. A possible partial multi-snapshot commit makes Evolution sticky
+  fail-closed until restart recovery or consistent-backup restoration.
+- `--show-nature` runs that normal startup reconciliation before rendering, so it is not read-only
+  and conflicts with skip/reroll mutators.
+- Hermes is a decentralized anti-entropy state machine embedded in each Tentacle, not a central
+  router. Its closed payloads contain bounded aggregate patterns and operator skill text only; raw
+  DMs, contacts/identifiers, notes, credentials, private memory, paths, commands, and tool arguments
+  are excluded. A memory-sharing Sacred Ban is strictly receive-only, including no digest emission.
+- Hermes HMAC identities and a trusted-key ring implement local provenance checks. There is no live
+  gossip transport, discovery handshake, or peer-key provisioning yet, so peer IDs alone establish
+  no trust and deterministic convergence tests establish no interoperability claim.
+- Gossiped skills remain inert untrusted data until a local authenticated operator explicitly
+  reviews and activates them through the compiled skill boundary. A valid signature is provenance,
+  not authorization to install, prompt, or execute anything.
+- Council remains optional and standalone direct DMs remain the default. Evolution does not publish
+  metrics or lineage to a live Council yet. The optional token/staking/slashing/revenue Phase 5 was
+  rejected from this implementation; Council contribution credit remains non-financial and raw
+  recruitment earns nothing.
+
 ## Council architecture decisions
 
 - The architecture has four distinct planes: public durable identity/trust registry, XMTP Council
@@ -223,6 +291,11 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
   should replace the test-only signer?
 - What Council admission and Sybil policy is appropriate before contribution credit affects access
   to scarce operator resources?
+- Which authenticated transport and out-of-band peer-key lifecycle should carry Hermes envelopes?
+- What operator-reviewed import format should activate a quarantined gossiped skill without
+  widening the existing compiled skill authority?
+- How should a separately provisioned child prove that a local lineage spawn record corresponds to
+  its actual XMTP identity and running process?
 
 ## Current milestone
 
@@ -233,6 +306,12 @@ bounded propagation/credit, protected persistence, and a deterministic simulator
 workspace suite now verifies the implemented deterministic scope; `FEATURES.md` retains unchecked
 criteria where live, cross-platform, or more specific evidence is still absent. Live XMTP Council
 groups and ERC-8004 remain adapter boundaries, not completion claims.
+
+The local Evolution milestone adds Nature and signed awakening epochs, bounded Scales and logically
+append-only judgment history, lineage records, and a persisted Hermes anti-entropy core. Focused
+Rust tests cover those local state machines and security shapes. Live XMTP awakening remains a
+release exercise; Hermes has no network transport or peer-key provisioning; and child/death records
+have no automatic process effects. These limitations are intentional and must remain explicit.
 
 The 2026-08-01 manual XMTP `dev` release-gate run passed browser identity, exactly-once reply,
 contact onboarding, bilateral matching, deletion, and restart/persistence checks. Sanitized evidence

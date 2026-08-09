@@ -3,7 +3,10 @@ use crate::{
         DETERMINISTIC_FALLBACK_RESERVE, InferenceDeadline, InferenceLane, LOCAL_MODEL_PHASE_LIMIT,
         OPERATOR_MODEL_TOOL_PHASE_LIMIT,
     },
-    model::{DeterministicModel, Model, ModelRequest, OpenAiCompatibleModel, RawAssistantMessage},
+    model::{
+        DeterministicModel, Model, ModelPolicy, ModelRequest, OpenAiCompatibleModel,
+        RawAssistantMessage,
+    },
     operator::{ControlReply, ModelControl, OperatorModel},
     storage::{ensure_private_directory, restrict_file, sync_directory},
     web_search::WebSearch,
@@ -718,6 +721,25 @@ fn is_timeout_error(error: &anyhow::Error) -> bool {
 #[async_trait]
 impl Model for InferenceRouter {
     async fn respond(&self, request: ModelRequest<'_>) -> Result<String> {
+        let policy = ModelPolicy::default();
+        self.respond_public(request, &policy).await
+    }
+
+    async fn respond_with_policy(
+        &self,
+        request: ModelRequest<'_>,
+        policy: &ModelPolicy,
+    ) -> Result<String> {
+        self.respond_public(request, policy).await
+    }
+}
+
+impl InferenceRouter {
+    async fn respond_public(
+        &self,
+        request: ModelRequest<'_>,
+        policy: &ModelPolicy,
+    ) -> Result<String> {
         let candidates = self.candidates(InferenceLane::Public)?;
         let deadline = InferenceDeadline::current(InferenceLane::Public)?;
         let mut last_error = None;
@@ -738,29 +760,31 @@ impl Model for InferenceRouter {
                 continue;
             };
             let result = match &candidate.model {
-                CandidateModel::Compatible(model) => {
-                    match timeout(
-                        attempt_budget,
-                        model.respond_with_deadline(
+                CandidateModel::Compatible(model) => match timeout(
+                    attempt_budget,
+                    model.respond_with_deadline_and_policy(
+                        ModelRequest {
+                            profile: request.profile,
+                            message: request.message,
+                        },
+                        attempt_deadline,
+                        policy,
+                    ),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(anyhow::anyhow!("model phase `provider_attempt` timed out")),
+                },
+                CandidateModel::Deterministic => {
+                    DeterministicModel
+                        .respond_with_policy(
                             ModelRequest {
                                 profile: request.profile,
                                 message: request.message,
                             },
-                            attempt_deadline,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => Err(anyhow::anyhow!("model phase `provider_attempt` timed out")),
-                    }
-                }
-                CandidateModel::Deterministic => {
-                    DeterministicModel
-                        .respond(ModelRequest {
-                            profile: request.profile,
-                            message: request.message,
-                        })
+                            policy,
+                        )
                         .await
                 }
             };

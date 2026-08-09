@@ -1,17 +1,23 @@
 use crate::{
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
+    evolution_runtime::{
+        ConversationObservation, EvolutionRuntime, PublicTurnStart, PublicTurnToken,
+    },
     matching::suggest_matches,
-    model::{Model, ModelRequest},
+    model::{Model, ModelPolicy, ModelRequest},
     operator::OperatorHarness,
     principal::{OperatorStore, PrincipalRole},
 };
 use anyhow::{Context, Result};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
-const ONBOARDING_PROMPT_CADENCE: u32 = 3;
 
 pub struct UwUBot {
     contacts: ContactStore,
@@ -19,6 +25,36 @@ pub struct UwUBot {
     model: Arc<dyn Model>,
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
+    evolution: Arc<Mutex<EvolutionRuntime>>,
+}
+
+struct PublicTurnGuard {
+    evolution: Arc<Mutex<EvolutionRuntime>>,
+    token: Option<PublicTurnToken>,
+}
+
+impl PublicTurnGuard {
+    fn new(evolution: Arc<Mutex<EvolutionRuntime>>, token: PublicTurnToken) -> Self {
+        Self {
+            evolution,
+            token: Some(token),
+        }
+    }
+
+    fn take(&mut self) -> PublicTurnToken {
+        self.token.take().expect("public turn token is present")
+    }
+}
+
+impl Drop for PublicTurnGuard {
+    fn drop(&mut self) {
+        let Some(token) = self.token.take() else {
+            return;
+        };
+        if let Ok(mut evolution) = self.evolution.lock() {
+            let _ = evolution.finish_public_turn(token, None);
+        }
+    }
 }
 
 impl UwUBot {
@@ -28,6 +64,7 @@ impl UwUBot {
         model: Arc<dyn Model>,
         operators: Arc<Mutex<OperatorStore>>,
         operator_harness: Arc<OperatorHarness>,
+        evolution: Arc<Mutex<EvolutionRuntime>>,
     ) -> Self {
         Self {
             contacts,
@@ -35,6 +72,7 @@ impl UwUBot {
             model,
             operators,
             operator_harness,
+            evolution,
         }
     }
 
@@ -163,14 +201,34 @@ impl UwUBot {
         }
 
         let response = match role {
-            PrincipalRole::Operator => self
-                .operator_harness
-                .respond(inbox_id, text)
-                .await
-                .unwrap_or_else(|_| {
-                    "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
-                        .to_owned()
-                }),
+            PrincipalRole::Operator => {
+                let (evolution_response, requires_recovery) = {
+                    let mut evolution = self
+                        .evolution
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
+                    let response =
+                        evolution.handle_operator_message(inbox_id, message_id, text);
+                    (response, evolution.requires_recovery())
+                };
+                match evolution_response {
+                    Ok(Some(response)) => response,
+                    Ok(None) => self
+                        .operator_harness
+                        .respond(inbox_id, text)
+                        .await
+                        .unwrap_or_else(|_| {
+                            "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
+                                .to_owned()
+                        }),
+                    Err(error) if requires_recovery => format!(
+                        "THE EVOLUTION STATE TRANSITION REPORTED AN ERROR. A WRITE-AHEAD OR PARTIAL LOCAL COMMIT MAY HAVE OCCURRED. CHECK /nature AND THE RELEVANT STATUS COMMAND, OR RESTART FOR SIGNED RECOVERY: {error}"
+                    ),
+                    Err(error) => format!(
+                        "THE REQUESTED EVOLUTION EFFECT WAS SAFELY REJECTED. ROUTINE PERIOD RECONCILIATION MAY HAVE COMPLETED, BUT THE REQUESTED CHANGE DID NOT: {error}"
+                    ),
+                }
+            }
             PrincipalRole::StaleOperator => {
                 "THIS MESSAGE PREDATES THE LOCAL OPERATOR AUTHORIZATION BOUNDARY. I WILL EXECUTE NOTHING FROM IT; SEND A NEW MESSAGE, OPERATOR."
                     .to_owned()
@@ -184,6 +242,22 @@ impl UwUBot {
     }
 
     async fn receive_user(&self, inbox_id: &str, text: &str) -> Result<String> {
+        let started = Instant::now();
+        let turn = {
+            let mut evolution = self
+                .evolution
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
+            match evolution.begin_public_turn() {
+                Ok(PublicTurnStart::Ready(turn)) => turn,
+                Ok(PublicTurnStart::Gated(response)) => return Ok(response),
+                Err(error) => {
+                    warn!(%error, "could not reserve a Nature-bound public turn");
+                    return Ok(evolution.public_gate_response());
+                }
+            }
+        };
+        let mut turn_guard = PublicTurnGuard::new(self.evolution.clone(), turn.token);
         let (mut contact, created) = self.contacts.load_or_create(inbox_id)?;
         contact.mark_seen();
 
@@ -217,8 +291,9 @@ impl UwUBot {
             }
         }
 
-        let profile = contact.profile_markdown();
-        let mut response = self.model_reply(&profile, text).await;
+        let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
+        let profile = contact.model_profile_markdown();
+        let mut response = self.model_reply(&profile, text, &turn.policy).await;
 
         if created && !response.contains('?') {
             contact.mark_onboarding_prompted();
@@ -226,7 +301,7 @@ impl UwUBot {
         } else if !answered_onboarding && contact.stage != OnboardingStage::Complete {
             contact.note_conversation_turn();
             if !contact.awaiting_onboarding_answer
-                && contact.onboarding_turns_since_prompt >= ONBOARDING_PROMPT_CADENCE
+                && contact.onboarding_turns_since_prompt >= turn.onboarding_prompt_cadence
             {
                 contact.mark_onboarding_prompted();
                 response.push_str("\n\n");
@@ -234,16 +309,41 @@ impl UwUBot {
             }
         }
 
-        self.contacts.save(&contact)?;
+        let conversation_depth = 1_u32.saturating_add(
+            u32::try_from(text.split_whitespace().count() / 20)
+                .unwrap_or(u32::MAX)
+                .min(9),
+        );
+        let contact_save = self.contacts.save(&contact);
+        let response_time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let turn_token = turn_guard.take();
+        match self.evolution.lock() {
+            Ok(mut evolution) => {
+                let observation = (contact_save.is_ok() && relationship.first_observation_today)
+                    .then_some(ConversationObservation {
+                        depth: conversation_depth,
+                        returning: relationship.returning_after_prior_day,
+                        response_time_ms: Some(response_time_ms),
+                    });
+                if let Err(error) = evolution.finish_public_turn(turn_token, observation) {
+                    warn!(%error, "could not persist local Evolution conversation metrics");
+                }
+            }
+            Err(_) => warn!("could not acquire Evolution runtime to finish public turn"),
+        }
+        contact_save?;
         Ok(response)
     }
 
-    async fn model_reply(&self, profile: &str, text: &str) -> String {
+    async fn model_reply(&self, profile: &str, text: &str, policy: &ModelPolicy) -> String {
         self.model
-            .respond(ModelRequest {
-                profile,
-                message: text,
-            })
+            .respond_with_policy(
+                ModelRequest {
+                    profile,
+                    message: text,
+                },
+                policy,
+            )
             .await
             .context("generating Cthuwu response")
             .unwrap_or_else(|_| {
@@ -496,6 +596,15 @@ fn is_operator_only_command(command: &str) -> bool {
             | "users"
             | "user"
             | "operator"
+            | "nature"
+            | "adjust"
+            | "lineage"
+            | "metrics"
+            | "judgment"
+            | "spawn"
+            | "gossip-status"
+            | "share-skill"
+            | "request-skill"
     )
 }
 
@@ -641,8 +750,10 @@ mod tests {
     use super::*;
     use crate::agent_context::AgentContext;
     use crate::{
+        evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions},
         model::DeterministicModel,
         operator::{DeterministicOperatorModel, OperatorToolRuntime, ToolReceipt},
+        scales::ScalesStore,
     };
     use std::{path::Path, sync::Mutex as StdMutex};
 
@@ -709,6 +820,32 @@ mod tests {
             model,
             Arc::new(Mutex::new(operators)),
             Arc::new(harness),
+            Arc::new(Mutex::new(
+                EvolutionRuntime::open_confirmed_for_test(root, root).unwrap(),
+            )),
+        )
+    }
+
+    fn awaiting_bot(
+        root: &Path,
+        model: Arc<dyn Model>,
+        operators: OperatorStore,
+        tools: Arc<RecordingTools>,
+    ) -> UwUBot {
+        let harness = OperatorHarness::new(
+            Arc::new(DeterministicOperatorModel),
+            tools,
+            AgentContext::new(root, root).unwrap(),
+        );
+        UwUBot::new(
+            ContactStore::new(root).unwrap(),
+            ProcessedMessages::new(root).unwrap(),
+            model,
+            Arc::new(Mutex::new(operators)),
+            Arc::new(harness),
+            Arc::new(Mutex::new(
+                EvolutionRuntime::open(root, root, EvolutionStartupOptions::default()).unwrap(),
+            )),
         )
     }
 
@@ -782,6 +919,79 @@ mod tests {
                 .unwrap()
                 .stage,
             OnboardingStage::Complete
+        );
+    }
+
+    #[tokio::test]
+    async fn awakening_gate_precedes_public_contacts_models_and_operator_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
+        operators
+            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
+            .unwrap();
+        let bot = awaiting_bot(root.path(), model.clone(), operators, tools.clone());
+
+        let blocked = send(&bot, 0, "aabbcc", "hello").await;
+        assert!(blocked.contains("still waking safely"));
+        assert!(model.messages.lock().unwrap().is_empty());
+        assert!(
+            ContactStore::new(root.path())
+                .unwrap()
+                .load("aabbcc")
+                .unwrap()
+                .is_none()
+        );
+
+        let invalid = send(&bot, 1, OPERATOR_ID, "/exec true").await;
+        assert!(invalid.contains("INVALID AWAKENING RESPONSE"));
+        assert!(tools.calls.lock().unwrap().is_empty());
+        let confirmed = send(&bot, 2, OPERATOR_ID, "YES").await;
+        assert!(confirmed.contains("NORMAL OPERATION IS NOW OPEN"));
+
+        let answered = send(&bot, 3, "aabbcc", "hello again").await;
+        assert!(answered.contains("answered: hello again"));
+        assert_eq!(model.messages.lock().unwrap().as_slice(), ["hello again"]);
+        assert!(
+            ContactStore::new(root.path())
+                .unwrap()
+                .load("aabbcc")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_records_a_terminal_gate_without_executing_or_exiting() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let mut operators = OperatorStore::new(root.path(), "dev").unwrap();
+        operators
+            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
+            .unwrap();
+        let bot = awaiting_bot(
+            root.path(),
+            Arc::new(DeterministicModel),
+            operators,
+            tools.clone(),
+        );
+
+        let killed = send(&bot, 0, OPERATOR_ID, "KILL").await;
+        assert!(killed.contains("DID NOT TERMINATE THE PROCESS"));
+        let later = send(&bot, 1, OPERATOR_ID, "/exec true").await;
+        assert!(later.contains("NORMAL OPERATION REMAINS BLOCKED"));
+        assert!(tools.calls.lock().unwrap().is_empty());
+        assert!(
+            send(&bot, 2, "aabbcc", "hello")
+                .await
+                .contains("still waking safely")
         );
     }
 
@@ -869,8 +1079,15 @@ mod tests {
         let user = send(&bot, 4, id, "/user aabbcc").await;
         let provider = send(&bot, 5, id, "/provider ollama").await;
         let model = send(&bot, 6, id, "/model qwen3:8b").await;
-        let help = send(&bot, 7, id, "/help").await;
-        for response in [welcome, denied, files, users, user, provider, model, help] {
+        let nature = send(&bot, 7, id, "/nature").await;
+        let spawn = send(&bot, 8, id, "/spawn child-owned").await;
+        let gossip = send(&bot, 9, id, "/gossip-status").await;
+        let share = send(&bot, 10, id, "/share-skill private-memory").await;
+        let help = send(&bot, 11, id, "/help").await;
+        for response in [
+            welcome, denied, files, users, user, provider, model, nature, spawn, gossip, share,
+            help,
+        ] {
             assert!(!response.contains("/profile"));
             assert!(!response.contains("/exec"));
             assert!(!response.contains("/help"));
@@ -1155,6 +1372,31 @@ mod tests {
                 .load("aabbcc")
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn one_contact_contributes_at_most_one_observation_per_day() {
+        let root = tempfile::tempdir().unwrap();
+        let bot = public_bot(root.path());
+        send(&bot, 0, "aabbcc", "hello there").await;
+        send(&bot, 1, "aabbcc", "another same-day message").await;
+
+        let metrics = ScalesStore::new(root.path())
+            .unwrap()
+            .load_metrics()
+            .unwrap()
+            .unwrap();
+        assert_eq!(metrics.engagement.conversations, 1);
+        assert_eq!(metrics.engagement.returning_conversations, 0);
+        let contact = ContactStore::new(root.path())
+            .unwrap()
+            .load("aabbcc")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            contact.nature_affinity_id.as_deref().map(str::len),
+            Some(64)
         );
     }
 }

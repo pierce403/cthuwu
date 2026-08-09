@@ -17,6 +17,8 @@ Cthuwu has two user-facing pieces:
 
 The detailed product contract and remaining release gates live in [FEATURES.md](FEATURES.md).
 The Council protocol is documented in [docs/protocol/README.md](docs/protocol/README.md).
+The local Evolution layer and its current network boundary are documented in
+[docs/evolution.md](docs/evolution.md).
 
 ## Council implementation status
 
@@ -31,6 +33,22 @@ The Council protocol is documented in [docs/protocol/README.md](docs/protocol/RE
 
 Council mode is opt-in. An existing deployment with no Council configuration starts the same
 standalone `uwubot`, uses the same direct-DM transport, and requires no registry or group.
+
+## Evolution implementation status
+
+| Component | Status |
+|---|---|
+| Tentacle Nature and awakening audit | **Implemented — local**; HMAC-authenticated state and operator-gated state machine |
+| Scales and lineage | **Implemented — local**; bounded judgments and records, with no automatic process lifecycle effects |
+| Hermes-inspired anti-entropy | **Implemented — local core and persistence**; no live transport or peer-key provisioning |
+| Council metrics/lineage publication | **Not connected**; no live Council interoperability claim |
+| Token or financial incentive layer | **Out of scope**; the optional proposal phase was not implemented |
+
+Evolution state is per standalone Tentacle and does not require a Council. Its local HMAC tags are
+integrity checks under an owner-only symmetric key, not public signatures. A recorded child is not a
+running process, and a death outcome is not a shutdown command. Received gossip skills remain inert
+until an authenticated local operator reviews and activates them through the existing compiled skill
+boundary.
 
 ## What works
 
@@ -59,6 +77,19 @@ standalone `uwubot`, uses the same direct-DM transport, and requires no registry
   intentionally privileged shell execution; public, stale, and revoked messages cannot reach it.
 - Structured, versioned Cthulhu personalities include deterministic Archivist, Hermit, Merchant,
   Wanderer, Oracle, and Trickster personas with different local policy positions without an LLM.
+- Each Tentacle also has a random, signed local Nature with seven bounded sliders and one Sacred Ban.
+  The local runtime gates first awakening to the authenticated XMTP operator lane before normal
+  work; a live ritual release exercise remains open. Confirmed Nature supplies bounded
+  response/resource policy and local relationship signals. Those relationship values remain local
+  and are omitted from profiles sent to remote models.
+- The Scales core accumulates bounded aggregate metrics, distinguishes advisory open-period
+  snapshots from final judgments, and requires an authenticated operator before any lifecycle
+  effect. The runtime currently scores only engagement, renormalizing active Nature weight, because
+  trusted growth, economic, and influence adapters are unavailable. Lineage persistence records
+  spawns and absorptions without launching, terminating, or routing processes.
+- The Hermes-inspired core signs and reconciles privacy-shaped knowledge between directly trusted
+  peers in deterministic tests. It persists anti-entropy state locally, but no live gossip transport,
+  discovery handshake, or peer-key provisioning exists yet.
 - The local Council implementation models validated envelopes, Tentacle lifecycle and liveness,
   capability discovery, explainable routing, generation-fenced leases, governance, bounded referral
   propagation, contribution credit, and persistence without introducing transport or inference
@@ -128,6 +159,15 @@ state/environment
 state/agent/SOUL.md
 state/agent/memories/MEMORY.md
 state/agent/operators/<operator-inbox-id>.md
+state/evolution-signing.key
+state/evolution-runtime.lock
+state/nature.json
+state/natures/<custom-relative-path>
+state/awakening_log.md
+state/metrics.json
+state/evolution_history.jsonl
+state/lineage.json
+state/hermes_gossip.json
 state/inference.json
 state/operators.json
 state/processed/<hashed-message-id>
@@ -136,15 +176,73 @@ state/xmtp-identity.json
 state/xmtp/<environment>/
 ```
 
-The identity file contains a private key protected by owner-only filesystem permissions. Back up the entire data directory securely. The runtime lock contains only a process ID and process-start timestamp, and is recovered after a stopped process without confusing a reused PID for the old bot. Do not delete only the XMTP database: doing so creates a new installation and can eventually exhaust the inbox installation limit.
+The identity file contains a private key protected by owner-only filesystem permissions. Back up the
+entire data directory securely. The launcher lock contains only a process ID and process-start
+timestamp, and is recovered after a stopped process without confusing a reused PID for the old bot.
+Rust separately holds the owner-only `state/evolution-runtime.lock` as the single writer for local
+Evolution state. Do not delete only the XMTP database: doing so creates a new installation and can
+eventually exhaust the inbox installation limit.
+
+### Nature and first awakening
+
+On a fresh data directory, `uwubot` creates a random Nature and waits for an active XMTP operator to
+confirm it. While that epoch is pending, normal public conversation, contact mutation, model calls,
+and tools remain gated. The operator replies with exactly one of these actions:
+
+```text
+YES
+ADJUST <trait> <delta>
+REROLL
+KILL
+```
+
+`KILL` records a terminal request for the epoch but does not stop the OS process. The audit journal
+records normalized actions and hashed XMTP event IDs rather than message bodies. Confirming or
+skipping the gate does not authorize a Council or enable public/operator tools beyond their existing
+role boundaries.
+
+Useful local options are:
+
+```bash
+./uwu.sh --show-nature
+./uwu.sh --nature-path experiments/nature.json
+./uwu.sh --reroll-nature --force
+./uwu.sh --skip-awakening
+./uwu.sh --gossip-peers sibling-a,sibling-b
+```
+
+`--show-nature` runs normal Evolution startup reconciliation before printing, so it can initialize
+missing state or finish a safe crash recovery. It is not a read-only file inspector and cannot be
+combined with `--skip-awakening` or `--reroll-nature --force`.
+
+Use `--skip-awakening` only for tests or deliberate local bring-up; it creates a signed audit event
+that is visibly distinct from XMTP operator confirmation. A forced reroll creates a new immutable
+awakening epoch. `--gossip-peers` supplies bootstrap identifiers only: without an out-of-band trusted
+key binding and a live transport adapter, it does not connect to or authenticate those peers.
+`--nature-path` accepts only a non-empty relative path below
+`UWUBOT_DATA_DIR/state/natures/`; absolute paths and parent traversal are rejected. The default
+snapshot remains `state/nature.json`.
+
+Signed `POST_ADJUST` audit entries are the recovery source for the exact current-period stress
+counter if a crash separates the journal and metrics writes. An expired empty metrics period while
+awakening is pending is reset without a judgment, so late confirmation starts from the current
+period rather than evaluating gated time.
+
+Each signed awakening entry includes both its resulting Nature and the exact immediate-predecessor
+Nature snapshot. Recovery accepts only the journal head or, for the final log-ahead crash window,
+that signed predecessor. A different Nature is rejected even if its envelope validates under the
+same key, so divergent Nature/log backups must be restored together rather than mixed. Before the
+first action, a missing Nature is regenerated only when no Evolution projections or alternate
+Nature exist; an established node with a lost Nature must restore a consistent backup.
 
 For an offline contact-flow harness:
 
 ```bash
-./uwu.sh --data-dir /tmp/cthuwu-harness --stdin-inbox 012345abcdef
+./uwu.sh --data-dir /tmp/cthuwu-harness --skip-awakening --stdin-inbox 012345abcdef
 ```
 
-Each input line is the next message from that test inbox.
+Each input line is the next message from that test inbox. The explicit testing override is required
+because stdin cannot supply an authenticated operator awakening.
 
 The hidden stdin harness is deliberately public-only. It cannot simulate an operator, even when its
 inbox argument matches an active operator record.
@@ -203,7 +301,11 @@ authority. Revoke the Cthuwu role and the compromised XMTP installation immediat
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
 Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
-`/qmd`, `/provider`, `/model`, `/users`, and `/user` commands. `/provider` and `/model` change the
+`/qmd`, `/provider`, `/model`, `/users`, and `/user` commands. Evolution adds `/nature`,
+`/adjust <trait> <value>`, `/lineage`, `/metrics`, `/judgment`, `/spawn [child-id]`,
+`/gossip-status`, `/share-skill <name>`, and `/request-skill <name>`. During awakening, the ritual's
+bare `ADJUST <trait> <delta>` is a relative change; after confirmation, `/adjust` sets an absolute
+bounded value and adds a visible stress event. `/provider` and `/model` change the
 persisted node-wide inference route without accepting a URL or credential over XMTP, and route changes
 clear bounded in-process operator dialogue history. Each ordinary-language turn receives an exact
 prompt inventory built from its closed schema. Bounded file/discovery/search tools form the base. A
@@ -217,6 +319,46 @@ writes and edits remain unavailable, so use direct `/write` and `/edit`. The saf
 set it explicitly for a narrower production workspace. QMD is an optional external adapter; set
 `UWUBOT_QMD` to a compatible executable that supports `qmd query <query> --json`. Public users are
 not shown this syntax and cannot invoke these tools.
+
+`/judgment` returns an advisory snapshot until the current daily/weekly period closes; a partial
+snapshot can never grant a right. Persisted metrics and final judgments bind the signed Nature ID and
+fingerprint, awakening epoch, period bounds, and scored-scale availability. The runtime accepts at
+most one engagement observation per contact per UTC day, and counts a return only after prior-day
+activity. Public inference reserves its Nature fingerprint, awakening epoch, and metrics period, so
+mutation and rollover wait until all remote work using that binding finishes.
+
+`JudgmentPolicy` and each `Judgment` persist the propagation evidence floors and observed counts.
+Daily policy requires eight observations and four prior-day returns; weekly policy requires 32 and
+16. A high score with a smaller sample is capped at `Survival`, never `PropagationRights`.
+
+A final result still requires authenticated operator confirmation; it never shuts down the process.
+`/spawn` additionally requires a final propagation-rights judgment from the exact current scoring
+policy, Nature ID/fingerprint, and awakening epoch, plus at least eight daily contact observations
+and four prior-day returns. It records authenticated operator and hashed event provenance and
+consumes the judgment's content-derived ID exactly once. The resulting child Nature and lineage
+record does not provision an XMTP identity, start another `uwubot`, or prove a live child exists.
+The right expires at the end of the immediately following metrics period; missed periods invalidate
+it rather than extending or reviving it.
+On startup, every stored spawn receipt must resolve to its exact `Final` `PropagationRights` history
+record, match the recorded parent Nature, and have a timestamp inside that immediately following
+period. A well-formed but unverifiable lineage file fails closed.
+`/share-skill` stages bounded operator-authored text in the local Hermes state. `/request-skill` can
+inspect only knowledge already present locally until a live peer adapter exists. Gossiped skill text
+is untrusted and is never installed, executed, or exposed as a model tool automatically.
+
+The signed awakening journal and unkeyed final-judgment history are logically append-only and use
+canonical, newline-terminated atomic copy-on-write replacements. Judgment history accepts only
+deterministic final records evaluated exactly at period end and rejects duplicate IDs, conflicting
+same-period records, reordering, and overlap. Those are consistency checks, not cryptographic tamper
+evidence. The Evolution signing key is created atomically; if it is missing while signed state
+or metrics/history/lineage projections exist, startup fails without silently rekeying or adopting
+the orphaned projections. Startup also cross-validates open metrics against Final history. The only
+accepted overlap is exact equality with the last finalized metrics payload—the history-ahead crash
+window where append committed before reset—which is replayed into an empty current period. Any other
+overlap fails closed. If a multi-snapshot transition reports a
+persistence error after a possible partial commit, Evolution remains sticky fail-closed until
+restart performs signed recovery (or a consistent backup is restored); the error response does not
+promise that nothing was written.
 
 `list_users` and `get_user` read parsed, retained `ContactStore` notes through a dedicated operator-only
 boundary. They do not widen generic file-tool access to the data directory. User reports are terminal
@@ -442,6 +584,15 @@ The browser wallet is stored in local storage. Its XMTP Browser SDK message data
   fenced by Tentacle incarnation or lease generation where applicable.
 - Production signatures are not simulated. The deterministic signer is test-only; live adapters
   must bind authenticated senders to Cthulhu/Tentacle identities explicitly.
+- Evolution Nature and awakening files use a separate local HMAC key. That symmetric tag detects
+  unauthorized file changes only while the key and service account remain protected; it is not a
+  peer-verifiable or production Council signature.
+- Hermes state accepts only closed aggregate payload types and excludes raw DMs, contact IDs/notes,
+  credentials, and private memory. Tool-operation records cannot carry paths, shell commands, output,
+  or arguments; bounded skill prose remains hostile input. There is no live gossip transport or
+  peer-key provisioning, and persisted peer IDs are not proof of authentication.
+- Scales outcomes and lineage records are non-effectful until an authenticated operator acts. The
+  Evolution implementation contains no token, staking, slashing, or financial recruitment layer.
 - Heartbeats, load, sessions, user references, contact memory, and conversation content do not go
   on-chain.
 - Council votes and propagated requests cannot override a Tentacle operator's local security policy.

@@ -1,13 +1,19 @@
 mod agent_context;
+pub mod awakening;
 mod bot;
 mod contact;
 mod deadline;
 mod dedupe;
+pub mod evolution;
+pub mod evolution_runtime;
+pub mod hermes;
 mod inference;
 mod matching;
 mod model;
 mod operator;
+pub mod personality;
 mod principal;
+pub mod scales;
 mod sidecar;
 mod storage;
 mod web_search;
@@ -19,6 +25,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use contact::ContactStore;
 use cthuwu_council::run_deterministic_simulation;
 use dedupe::ProcessedMessages;
+use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions};
 use inference::{
     DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
     DEFAULT_VENICE_MODEL, DEFAULT_VENICE_TIMEOUT_SECONDS, InferenceConfig, InferenceRouter,
@@ -150,6 +157,34 @@ struct Cli {
     #[arg(long, env = "UWUBOT_COUNCIL_SIMULATE", default_value_t = false)]
     council_simulate: bool,
 
+    /// Testing-only local confirmation. The signed log records that XMTP confirmation was skipped.
+    #[arg(long, env = "UWUBOT_SKIP_AWAKENING", default_value_t = false)]
+    skip_awakening: bool,
+
+    /// Start a new signed Nature epoch. Requires the explicit --force acknowledgement.
+    #[arg(long, env = "UWUBOT_REROLL_NATURE", default_value_t = false)]
+    reroll_nature: bool,
+
+    /// Acknowledge the disruptive local Nature reroll.
+    #[arg(long, requires = "reroll_nature", default_value_t = false)]
+    force: bool,
+
+    /// Custom signed Nature path, relative to UWUBOT_DATA_DIR/state/natures.
+    #[arg(long, env = "UWUBOT_NATURE_PATH")]
+    nature_path: Option<PathBuf>,
+
+    /// Open and reconcile Evolution state, print Nature/awakening status, then exit without XMTP.
+    #[arg(
+        long,
+        conflicts_with_all = ["skip_awakening", "reroll_nature", "force"],
+        default_value_t = false
+    )]
+    show_nature: bool,
+
+    /// Untrusted bootstrap peer hints. Live gossip still requires authenticated key binding.
+    #[arg(long, env = "UWUBOT_GOSSIP_PEERS", value_delimiter = ',')]
+    gossip_peers: Vec<String>,
+
     #[command(subcommand)]
     command: Option<CliCommand>,
 }
@@ -232,6 +267,21 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let operator_root = resolve_isolated_operator_root(&cli.data_dir, &cli.operator_root)?;
+    let evolution = EvolutionRuntime::open(
+        &cli.data_dir,
+        &operator_root,
+        EvolutionStartupOptions {
+            skip_awakening: cli.skip_awakening,
+            reroll_nature: cli.reroll_nature,
+            force: cli.force,
+            nature_path: cli.nature_path.clone(),
+            gossip_peers: cli.gossip_peers.clone(),
+        },
+    )?;
+    if cli.show_nature {
+        println!("{}", evolution.nature_status());
+        return Ok(());
+    }
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
@@ -257,6 +307,7 @@ async fn main() -> Result<()> {
         model,
         Arc::new(Mutex::new(operators)),
         operator_harness,
+        Arc::new(Mutex::new(evolution)),
     );
 
     info!(
@@ -499,6 +550,16 @@ mod tests {
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);
+    }
+
+    #[test]
+    fn show_nature_cannot_hide_startup_mutations() {
+        assert!(Cli::try_parse_from(["uwubot", "--show-nature"]).is_ok());
+        assert!(Cli::try_parse_from(["uwubot", "--show-nature", "--skip-awakening"]).is_err());
+        assert!(
+            Cli::try_parse_from(["uwubot", "--show-nature", "--reroll-nature", "--force",])
+                .is_err()
+        );
     }
 
     #[test]
