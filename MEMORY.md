@@ -51,6 +51,9 @@ Last reviewed: 2026-08-09
   retries every second and retains the last verified treasury observation only until its freshness
   TTL expires; unknown or stale economics still fail closed. Base's built-in public RPC fallback is
   rate limited, so production operators should configure a dedicated `CTHUWU_RPC_ENDPOINT`.
+- A fresh unawakened node has no persisted Scales economics by design. Public admission must report
+  the pending authenticated operator Nature confirmation before checking post-awakening economics;
+  otherwise the deliberate empty pre-confirmation metrics state looks like an RPC outage.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
   `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
   discover intro Tentacles.

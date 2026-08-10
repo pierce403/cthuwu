@@ -691,6 +691,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     A failed treasury refresh retries every second and retains only a prior verified observation
     that remains inside its configured freshness TTL. Freshly observed zero remains real evidence
     and maps a public holder to Unproven.
+  - Before awakening confirmation, treasury observations are validated at startup but deliberately
+    excluded from Scales state. Public admission reports the pending operator-confirmed awakening
+    before evaluating the post-awakening economics gate.
   - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
     depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
     optional 0–100 override. `unproven` is the permissive default minimum tier.

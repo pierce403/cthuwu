@@ -932,6 +932,7 @@ impl EvolutionRuntime {
         let gossip_bootstrap_hints =
             normalize_gossip_hints(options.gossip_peers, &local_tentacle_id)?;
 
+        let node_economics_available = metrics.token_economics.is_some();
         let mut runtime = Self {
             _runtime_lock: runtime_lock,
             operator_root: operator_root.to_path_buf(),
@@ -951,7 +952,7 @@ impl EvolutionRuntime {
             propagation_minimum_stake_basis_points: options.propagation_minimum_stake_basis_points,
             require_node_economics: options.require_node_economics,
             node_economics_ttl_seconds: options.node_economics_ttl_seconds,
-            node_economics_available: options.initial_node_economics.is_some(),
+            node_economics_available,
             survival_total_supply_whole: options.survival_total_supply_whole,
             survival_token_decimals: options.survival_token_decimals,
             hermes_store,
@@ -1124,15 +1125,18 @@ impl EvolutionRuntime {
     pub(crate) fn begin_public_turn(&mut self) -> Result<PublicTurnStart> {
         let now = now_unix_seconds()?;
         self.reconcile_lifecycle_deadline(now.saturating_mul(1_000))?;
+        // Awakening, Death, terminal lineage, and degraded-state gates describe the actual
+        // admission boundary. Pre-confirmation economics are deliberately not persisted, so an
+        // economics check here would misreport every fresh unawakened node as an RPC outage.
+        if !self.permits_normal_operation() {
+            return Ok(PublicTurnStart::Gated(self.public_gate_response()));
+        }
         if self.require_node_economics && !self.node_economics_is_current(now) {
             self.node_economics_available = false;
             return Ok(PublicTurnStart::Gated(
                 "current Base UWU treasury economics are unavailable; this Tentacle refuses to operate until RPC observation recovers."
                     .to_owned(),
             ));
-        }
-        if !self.permits_normal_operation() {
-            return Ok(PublicTurnStart::Gated(self.public_gate_response()));
         }
         if i64::try_from(now).is_ok_and(|now| {
             now >= self.metrics.period_ends_at_unix_seconds && !self.active_public_turns.is_empty()
@@ -3789,6 +3793,11 @@ mod tests {
         .unwrap();
         assert!(!runtime.ritual.is_confirmed());
         assert!(runtime.metrics.token_economics.is_none());
+        let PublicTurnStart::Gated(message) = runtime.begin_public_turn().unwrap() else {
+            panic!("unconfirmed runtime must gate public conversation");
+        };
+        assert!(message.contains("still waking safely"));
+        assert!(!message.contains("economics are unavailable"));
         assert!(
             runtime
                 .record_node_economic_observation(snapshot, provenance)
