@@ -27,7 +27,7 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{info, warn};
 
 pub const DEFAULT_VENICE_MODEL: &str = "e2ee-deepseek-v4-flash";
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen3:8b";
@@ -940,6 +940,13 @@ impl InferenceRouter {
                 );
                 continue;
             };
+            info!(
+                provider = candidate.provider.as_str(),
+                model = candidate.model_name(),
+                lane = deadline.lane().as_str(),
+                attempt_budget_ms = attempt_budget.as_millis(),
+                "thinking with inference provider"
+            );
             let result = match &candidate.model {
                 CandidateModel::Compatible(model) => match timeout(
                     attempt_budget,
@@ -971,6 +978,12 @@ impl InferenceRouter {
             };
             match result {
                 Ok(response) => {
+                    info!(
+                        provider = candidate.provider.as_str(),
+                        model = candidate.model_name(),
+                        lane = deadline.lane().as_str(),
+                        "inference provider completed"
+                    );
                     self.record_success(
                         candidate.provider,
                         InferenceLane::Public,
@@ -1025,6 +1038,14 @@ impl OperatorModel for InferenceRouter {
                 );
                 continue;
             };
+            info!(
+                provider = candidate.provider.as_str(),
+                model = candidate.model_name(),
+                lane = deadline.lane().as_str(),
+                attempt_budget_ms = attempt_budget.as_millis(),
+                tool_schemas = tools.len(),
+                "thinking with operator inference provider"
+            );
             let result = match &candidate.model {
                 CandidateModel::Compatible(model) => {
                     match timeout(
@@ -1055,6 +1076,13 @@ impl OperatorModel for InferenceRouter {
             };
             match result {
                 Ok(response) => {
+                    info!(
+                        provider = candidate.provider.as_str(),
+                        model = candidate.model_name(),
+                        lane = deadline.lane().as_str(),
+                        tool_calls = response.tool_calls.len(),
+                        "operator inference provider completed"
+                    );
                     self.record_success(
                         candidate.provider,
                         InferenceLane::Operator,

@@ -630,6 +630,7 @@ uwu_main() {
 
   uwu_log "starting uwubot on XMTP $UWU_XMTP_ENV"
   uwu_log "persistent state: $UWU_DATA_DIR"
+  uwu_log "console activity shows XMTP delivery, thinking, and tool phases; message bodies and secrets stay private"
   exec "$UWU_BINARY" "${UWU_BOT_ARGS[@]}"
 }
 

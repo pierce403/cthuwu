@@ -153,6 +153,10 @@ On Unix, macOS, or WSL, the root launcher handles the repeatable setup and then 
 
 It verifies Node 22+, installs Rust 1.97 through an existing `rustup` when needed, installs the locked sidecar packages when the lockfile, Node major version, or host platform changes, and builds both the sidecar and release binary. Concurrent invocations serialize that setup so they cannot corrupt the shared build tree, and only one bot may use a data directory at a time. On the first normal launch, the sidecar atomically creates the wallet and database key; later launches reuse them. The launcher never reads or prints either key.
 
+While running, the same console shows lifecycle activity: received/direct-message delivery,
+routing, “thinking” provider phases, fallback, and tool start/completion. It deliberately omits DM
+bodies, credentials, contact notes, tool arguments, paths, commands, and tool output.
+
 On Unix, Rust starts the XMTP sidecar as a process-group leader. Supervisor teardown kills the
 complete process group, including helpers forked by Node, even if the direct sidecar process has
 already exited.

@@ -28,7 +28,7 @@ use tokio::{
     process::Command,
     time::timeout,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 const MAX_OPERATOR_AGENT_STEPS: usize = 8;
 const MAX_OPERATOR_TOOL_CALLS: usize = 8;
@@ -1175,6 +1175,7 @@ impl OperatorToolRuntime for LocalOperatorTools {
         if arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
             return ToolReceipt::error(name, "tool arguments exceed the hard size limit");
         }
+        info!(tool = name, "running operator tool");
         let result = match name {
             "list_files" => self.list_files(arguments),
             "read_file" => self.read_file(arguments),
@@ -1190,7 +1191,15 @@ impl OperatorToolRuntime for LocalOperatorTools {
                 return ToolReceipt::error(name, "unsupported operator tool; nothing was executed");
             }
         };
-        result.unwrap_or_else(|error| ToolReceipt::error(name, error.to_string()))
+        let receipt = result.unwrap_or_else(|error| ToolReceipt::error(name, error.to_string()));
+        info!(
+            tool = receipt.tool.as_str(),
+            ok = receipt.ok,
+            timed_out = receipt.timed_out,
+            truncated = receipt.truncated,
+            "operator tool completed"
+        );
+        receipt
     }
 }
 

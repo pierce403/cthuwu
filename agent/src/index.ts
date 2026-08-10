@@ -118,13 +118,19 @@ async function main(): Promise<void> {
         sentAtNs: context.message.sentAtNs.toString(),
         conversationId: context.message.conversationId,
       };
+      const inboundBytes = Buffer.byteLength(context.message.content, "utf8");
+      diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
       const response =
-        Buffer.byteLength(context.message.content, "utf8") > MAX_INBOUND_TEXT_BYTES
+        inboundBytes > MAX_INBOUND_TEXT_BYTES
           ? bridge.rejectOversized(metadata)
           : bridge.request({ ...metadata, text: context.message.content });
       const result = await response;
       if (result.type === "reply") {
+        diagnostic("uwubot finished; delivering XMTP reply");
         await context.conversation.sendText(result.text);
+        diagnostic("delivered XMTP reply");
+      } else {
+        diagnostic("uwubot ignored the XMTP message");
       }
     })().catch((_error: unknown) => {
       diagnostic("failed to process an inbound XMTP text message");

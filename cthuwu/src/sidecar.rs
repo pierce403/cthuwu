@@ -371,6 +371,12 @@ pub async fn run_xmtp_sidecar(
         }
         let role =
             bot.role_for_authenticated_message(&request.sender_inbox_id, &request.sent_at_ns)?;
+        info!(
+            role = ?role,
+            message_bytes = request.text.len(),
+            sender_address_available = request.sender_address.is_some(),
+            "received authenticated XMTP direct message"
+        );
         let first_delivery =
             bot.claim_authenticated_message(&request.message_id, &request.sender_inbox_id)?;
         if request.event_type == "reject_inbound" {
@@ -415,6 +421,10 @@ pub async fn run_xmtp_sidecar(
                 | PrincipalRole::StaleOperator
                 | PrincipalRole::RevokedOperator => InferenceLane::Operator,
             };
+            info!(
+                lane = inference_lane.as_str(),
+                "thinking about XMTP message"
+            );
             let response = match processing_budget(request.deadline_unix_ms, role) {
                 Some(budget) => match timeout(budget, async {
                     scope_authenticated_deadline(inference_lane, budget, async {
@@ -479,6 +489,15 @@ pub async fn run_xmtp_sidecar(
                     }
                 }
             };
+            let response_kind = match &response {
+                SidecarResponse::Reply { .. } => "reply",
+                SidecarResponse::Ignore { .. } => "ignore",
+            };
+            info!(
+                lane = inference_lane.as_str(),
+                response = response_kind,
+                "finished XMTP message processing"
+            );
             if let Err(cause) = send_response(&stdin, response).await {
                 error!(error = %cause, "could not write XMTP sidecar response");
             }

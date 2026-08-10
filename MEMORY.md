@@ -49,6 +49,10 @@ Last reviewed: 2026-08-09
   protected `state/inference.json`; `/venice-key` stores the secret separately in owner-only
   `state/venice.key`. Route changes clear in-process operator dialogue history.
 - Text-only one-to-one DMs are the first vertical slice.
+- `./uwu.sh` now keeps the default console useful without becoming a transcript: Node emits received
+  and delivered XMTP-message events, while Rust emits authenticated routing, inference “thinking”
+  provider phases/fallback, and tool lifecycle events. These records omit message bodies, identity
+  IDs, credentials, contact notes, tool arguments, paths, commands, and output.
 - Browser identities are generated and connected automatically, then persisted in local storage.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
   and local XMTP modes remain explicit backend/test concerns only. Both `uwu.sh` and `uwubot`

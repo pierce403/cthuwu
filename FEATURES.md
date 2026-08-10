@@ -106,6 +106,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The transport atomically creates or loads a dedicated wallet key and encrypted XMTP database under `UWUBOT_DATA_DIR`.
   - Environment markers prevent silent development/production state reuse.
   - `./uwu.sh` verifies the required runtimes, serializes concurrent setup, installs locked sidecar dependencies as needed, builds both runtime components, prepares dedicated environment-specific owner-only state outside the checkout, prevents concurrent runtimes for one data directory, and then replaces itself with `uwubot`.
+  - Its default console activity feed reports inbound/direct-message delivery, authenticated routing,
+    inference start/completion and fallback, and public/operator tool start/completion. It never
+    prints DM bodies, credentials, contact notes, tool arguments, filesystem paths, commands, or
+    tool output.
   - A Docker image packages Rust, Node, and the XMTP native binding behind the same `uwubot` entrypoint.
   - A hidden stdin harness exercises contact behavior without a network.
 - **Test Criteria**:
