@@ -93,6 +93,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - **Description**: The operator runs one Rust binary, `uwubot`, for the Cthuwu agent.
 - **Properties**:
   - Cargo exposes one application binary named `uwubot`.
+  - The launcher and Rust runtime default to XMTP `production`, matching the deployed browser.
+    `dev` and `local` remain explicit test-only overrides and never activate implicitly.
   - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
@@ -621,8 +623,13 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     operators must trust the interpreter, libraries, subprocesses, and signer-service dependency
     chain separately. On Unix, the executor is a process-group leader and cleanup kills the entire
     group, including descendants, after success, failure, or timeout.
-  - Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
-    executor before any Evolution state mutation. The only outage exception is read-only inspection
+  - Normal startup derives the XMTP treasury address and validates token configuration and initial
+    economics before any Evolution state mutation. A configured lifecycle executor is validated
+    before use, but it is optional: without one, ordinary XMTP operation continues while external
+    spend, spawn, and absorption intents remain pending. Native fixed-deadline Shutdown remains
+    authoritative. Pre-confirmation economics are not persisted as Scales observations; startup
+    repairs the historical token-only pre-awakening seed, while refusing any pre-awakening state
+    that also contains behavioral observations. The only outage exception is read-only inspection
     of existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
     opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
     decisions wait for fresh bound economics.

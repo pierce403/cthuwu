@@ -671,6 +671,27 @@ impl EvolutionRuntime {
         let mut last_final_judgment = scales_store.history_catalog()?.last().cloned();
 
         if !terminal_shutdown {
+            // Versions that first made node economics mandatory persisted their startup
+            // observation before the initial awakening was confirmed. No conversation or other
+            // behavior can occur in that phase, so repair that exact token-only state back to an
+            // empty pre-confirmation period. Fresh economics will be recorded after confirmation.
+            let preconfirmation_economics_repaired = if !ritual.is_confirmed()
+                && metrics.token_economics.is_some()
+            {
+                ensure!(
+                    !metrics.has_behavior_observations_without_node_economics(),
+                    "unconfirmed awakening contains non-economic observations; manual recovery is required"
+                );
+                metrics = new_runtime_metrics(
+                    metrics.period,
+                    metrics.period_started_at_unix_seconds,
+                    ritual.nature(),
+                    ritual.epoch(),
+                )?;
+                true
+            } else {
+                false
+            };
             let history_boundary_changed = reconcile_metrics_history_boundary(
                 &mut metrics,
                 last_final_judgment.as_ref(),
@@ -685,29 +706,31 @@ impl EvolutionRuntime {
                 options.propagation_minimum_stake_basis_points,
             )?;
             let stress_changed = reconcile_adjustment_stress(&mut metrics, &awakening_log)?;
-            let initial_economics_changed =
-                if let Some((snapshot, provenance)) = options.initial_node_economics {
-                    ensure!(
-                        provenance.holder_role == EconomicHolderRole::TentacleTreasury,
-                        "initial lifecycle economics must belong to the Tentacle treasury"
-                    );
-                    ensure_economic_configuration_continuity(&metrics, provenance)?;
-                    metrics.record_node_token_economic_observation(
-                        snapshot,
-                        runtime_token_policy(
-                            ritual.nature(),
-                            options.propagation_minimum_stake_basis_points,
-                        )?,
-                        provenance,
-                    )?;
-                    true
-                } else {
-                    false
-                };
+            let initial_economics_changed = if (ritual.is_confirmed() || options.skip_awakening)
+                && let Some((snapshot, provenance)) = options.initial_node_economics
+            {
+                ensure!(
+                    provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+                    "initial lifecycle economics must belong to the Tentacle treasury"
+                );
+                ensure_economic_configuration_continuity(&metrics, provenance)?;
+                metrics.record_node_token_economic_observation(
+                    snapshot,
+                    runtime_token_policy(
+                        ritual.nature(),
+                        options.propagation_minimum_stake_basis_points,
+                    )?,
+                    provenance,
+                )?;
+                true
+            } else {
+                false
+            };
             if history_boundary_changed
                 || binding_changed
                 || availability_changed
                 || stress_changed
+                || preconfirmation_economics_repaired
                 || initial_economics_changed
             {
                 scales_store.save_metrics(&metrics)?;
@@ -984,6 +1007,12 @@ impl EvolutionRuntime {
                 .lineage
                 .node(&self.local_tentacle_id)
                 .is_some_and(|node| node.lifecycle == TentacleLifecycle::Active)
+    }
+
+    /// Pre-confirmation economics are validated by startup but must not become Scales evidence.
+    /// A binding Death remains allowed to refresh economics for a possible survival spend.
+    pub fn accepts_node_economic_observations(&self) -> bool {
+        self.ritual.is_confirmed() || self.lifecycle.death_pending()
     }
 
     pub(crate) const fn requires_recovery(&self) -> bool {
@@ -1394,17 +1423,17 @@ impl EvolutionRuntime {
         {
             self.node_economics_available = false;
         }
-        if receipt.status == LifecycleReceiptStatus::Succeeded {
-            if let Err(error) = self.apply_completed_lifecycle_action(
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && let Err(error) = self.apply_completed_lifecycle_action(
                 &receipt.action_id,
                 &action,
                 receipt.completed_at_ms,
                 receipt.external_reference.as_deref(),
                 receipt_observed_at_ms,
-            ) {
-                self.degraded = true;
-                return Err(error);
-            }
+            )
+        {
+            self.degraded = true;
+            return Err(error);
         }
         Ok(true)
     }
@@ -1431,6 +1460,10 @@ impl EvolutionRuntime {
         snapshot: TokenEconomicSnapshot,
         provenance: EconomicObservationProvenance,
     ) -> Result<TokenEconomicEffects> {
+        ensure!(
+            self.accepts_node_economic_observations(),
+            "node economics cannot enter metrics before awakening confirmation"
+        );
         ensure!(
             provenance.holder_role == EconomicHolderRole::TentacleTreasury,
             "lifecycle economics must belong to the Tentacle treasury"
@@ -2033,16 +2066,13 @@ impl EvolutionRuntime {
     }
 
     fn auto_spawn_from_grant(&mut self, grant: &EvolutionHistoryRecord, at_ms: u64) -> Result<()> {
-        let desired_children = if self.propagation_minimum_stake_basis_points == 0 {
-            1_u16
-        } else {
-            grant
-                .metrics
-                .token_economics
-                .map_or(0, |economics| economics.snapshot.stake_basis_points)
-                / self.propagation_minimum_stake_basis_points
-        }
-        .max(1);
+        let desired_children = grant
+            .metrics
+            .token_economics
+            .map_or(0, |economics| economics.snapshot.stake_basis_points)
+            .checked_div(self.propagation_minimum_stake_basis_points)
+            .unwrap_or(1)
+            .max(1);
         let short_judgment = grant
             .judgment_id
             .get(..16)
@@ -3717,6 +3747,74 @@ mod tests {
         )
         .unwrap();
         assert!(resumed.permits_normal_operation());
+    }
+
+    #[test]
+    fn preconfirmation_startup_economics_stay_unobserved_and_repair_legacy_seed() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = now_unix_seconds().unwrap();
+        let snapshot = TokenEconomicSnapshot {
+            balance_basis_points: 10_000,
+            stake_basis_points: 0,
+            reward_basis_points: 0,
+            trustworthy: true,
+        };
+        let provenance = EconomicObservationProvenance::base(
+            [1; 20],
+            EconomicHolderRole::TentacleTreasury,
+            [2; 20],
+            now,
+            None,
+            [3; 32],
+        )
+        .unwrap();
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                require_node_economics: true,
+                initial_node_economics: Some((snapshot, provenance)),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!runtime.ritual.is_confirmed());
+        assert!(runtime.metrics.token_economics.is_none());
+        assert!(
+            runtime
+                .record_node_economic_observation(snapshot, provenance)
+                .unwrap_err()
+                .to_string()
+                .contains("before awakening confirmation")
+        );
+        let nature = runtime.nature().clone();
+        drop(runtime);
+
+        let store = ScalesStore::new(root.path()).unwrap();
+        let mut legacy = store.load_metrics().unwrap().unwrap();
+        legacy
+            .record_node_token_economic_observation(
+                snapshot,
+                runtime_token_policy(&nature, DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS).unwrap(),
+                provenance,
+            )
+            .unwrap();
+        store.save_metrics(&legacy).unwrap();
+
+        let repaired = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                require_node_economics: true,
+                initial_node_economics: Some((snapshot, provenance)),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!repaired.ritual.is_confirmed());
+        assert!(repaired.metrics.token_economics.is_none());
+        assert!(!repaired.metrics.has_behavior_observations());
     }
 
     #[test]

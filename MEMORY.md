@@ -45,7 +45,8 @@ Last reviewed: 2026-08-09
 - Text-only one-to-one DMs are the first vertical slice.
 - Browser identities are generated and connected automatically, then persisted in local storage.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
-  and local XMTP modes remain backend/test concerns only.
+  and local XMTP modes remain explicit backend/test concerns only. Both `uwu.sh` and `uwubot`
+  default to `production`; they never select `dev` implicitly.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
   `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
   discover intro Tentacles.
@@ -214,8 +215,13 @@ Last reviewed: 2026-08-09
   kills it and all descendants after success, failure, or timeout. The XMTP sidecar uses the same
   full-process-group cleanup on supervisor teardown, including when its direct Node parent has
   already exited.
-- Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
-  executor before mutating Evolution state. The only outage exception is read-only inspection of
+- Normal startup derives the XMTP treasury address and validates token configuration and initial
+  economics before mutating Evolution state. A configured lifecycle executor is validated before
+  use, but it is optional: ordinary XMTP operation continues without one while external spend,
+  spawn, and absorption intents remain pending and native fixed-deadline Shutdown stays active. The
+  initial economics preflight does not enter Scales before awakening confirmation; startup repairs
+  the historical token-only pre-awakening seed but fails closed if behavioral observations are also
+  present. The only outage exception is read-only inspection of
   existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
   opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
   decisions wait for fresh bound economics. Child/spawn/lineage lifecycle state has no fixed

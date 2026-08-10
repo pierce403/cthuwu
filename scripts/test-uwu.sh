@@ -72,6 +72,8 @@ test_equal 2 "${#UWU_BOT_ARGS[@]}" "forwarded argument count"
 test_equal --model "${UWU_BOT_ARGS[0]}" "first forwarded argument"
 test_equal ollama "${UWU_BOT_ARGS[1]}" "second forwarded argument"
 unset UWUBOT_XMTP_ENV UWUBOT_DATA_DIR
+uwu_parse_arguments
+test_equal production "$UWU_XMTP_ENV" "default XMTP environment"
 
 secret_marker="model-secret-must-not-appear"
 search_secret_marker="search-secret-must-not-appear"

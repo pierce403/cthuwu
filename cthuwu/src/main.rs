@@ -77,7 +77,7 @@ struct Cli {
     #[arg(long, env = "UWUBOT_DATA_DIR", default_value = ".")]
     data_dir: PathBuf,
 
-    #[arg(long, env = "UWUBOT_XMTP_ENV", value_enum, default_value_t = Network::Dev)]
+    #[arg(long, env = "UWUBOT_XMTP_ENV", value_enum, default_value_t = Network::Production)]
     xmtp_env: Network,
 
     /// Optional startup override. Without one, the persisted selection or Venice default is used.
@@ -389,14 +389,14 @@ struct AutonomyDependencies {
     token_eye: Option<Arc<TokenEye>>,
     stake_eye: Option<Arc<TokenEye>>,
     propagation_minimum_stake_basis_points: u16,
-    executor: Arc<LifecycleExecutor>,
+    executor: Option<Arc<LifecycleExecutor>>,
 }
 
 impl EconomicDependencies {
     fn into_autonomy(
         self,
         propagation_minimum_stake_basis_points: u16,
-        executor: Arc<LifecycleExecutor>,
+        executor: Option<Arc<LifecycleExecutor>>,
     ) -> AutonomyDependencies {
         AutonomyDependencies {
             blockchain: self.blockchain,
@@ -510,15 +510,17 @@ async fn main() -> Result<()> {
                     );
                 }
             }
-            match build_lifecycle_executor(&cli) {
-                Ok(executor) => lifecycle_executor = Some(executor),
-                Err(error) if mandatory_recovery != MandatoryRecoveryKind::None => {
-                    warn!(
-                        %error,
-                        "lifecycle executor is unavailable; fixed-deadline native shutdown remains authoritative"
-                    );
+            if cli.lifecycle_executor.is_some() {
+                match build_lifecycle_executor(&cli) {
+                    Ok(executor) => lifecycle_executor = Some(executor),
+                    Err(error) if mandatory_recovery != MandatoryRecoveryKind::None => {
+                        warn!(
+                            %error,
+                            "lifecycle executor is unavailable; fixed-deadline native shutdown remains authoritative"
+                        );
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
             }
         }
     }
@@ -628,8 +630,11 @@ async fn main() -> Result<()> {
     }
     let economic_dependencies = economic_dependencies
         .context("normal runtime economics are unavailable after startup recovery")?;
-    let lifecycle_executor = lifecycle_executor
-        .context("normal runtime lifecycle executor is unavailable after startup recovery")?;
+    if lifecycle_executor.is_none() {
+        info!(
+            "no lifecycle executor configured; external spend, spawn, and absorption intents will remain pending"
+        );
+    }
     let blockchain = economic_dependencies.blockchain.clone();
     let token_eye = economic_dependencies.token_eye.clone();
     let autonomy_dependencies = economic_dependencies.into_autonomy(
@@ -764,7 +769,7 @@ fn build_lifecycle_executor(cli: &Cli) -> Result<Arc<LifecycleExecutor>> {
     let executor = LifecycleExecutor::new(
         cli.lifecycle_executor
             .clone()
-            .context("CTHUWU_LIFECYCLE_EXECUTOR is required for autonomous Evolution")?,
+            .context("CTHUWU_LIFECYCLE_EXECUTOR is not configured")?,
     )?;
     executor.ensure_outside_operator_root(&cli.operator_root)?;
     Ok(Arc::new(executor))
@@ -1192,9 +1197,16 @@ async fn run_autonomy_supervisor(
                 continue;
             }
 
+            let Some(executor) = executor.as_ref() else {
+                // The durable intent is the truthful blocked state. Leave it unreceipted for a
+                // future configured executor while still allowing economics refresh and native
+                // fixed-deadline Shutdown supervision to proceed.
+                continue;
+            };
+
             let execution = execute_with_death_preemption(
                 &evolution,
-                &executor,
+                executor,
                 Some(&blockchain.rpc_endpoint),
                 &intent,
             )
@@ -1235,7 +1247,14 @@ async fn run_autonomy_supervisor(
             }
         }
 
-        if blockchain.observe_tokens && now >= next_economic_refresh {
+        let accepts_economic_observations = evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .accepts_node_economic_observations();
+        if blockchain.observe_tokens
+            && now >= next_economic_refresh
+            && accepts_economic_observations
+        {
             let observation = observe_with_death_preemption(
                 &evolution,
                 &blockchain,
@@ -1532,6 +1551,7 @@ mod tests {
         assert!(!standalone.council_simulate);
         assert!(standalone.stdin_inbox.is_none());
         assert!(standalone.command.is_none());
+        assert_eq!(standalone.xmtp_env.as_str(), "production");
         assert!(standalone.model.is_none());
         assert_eq!(standalone.venice_model, DEFAULT_VENICE_MODEL);
         assert_eq!(
@@ -1558,6 +1578,7 @@ mod tests {
         assert_eq!(standalone.token_decimals, UWU_TOKEN_DECIMALS);
         assert_eq!(standalone.token_total_supply, UWU_TOTAL_SUPPLY);
         assert_eq!(standalone.web_search_safesearch, BraveSafeSearch::Off);
+        assert!(standalone.lifecycle_executor.is_none());
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);

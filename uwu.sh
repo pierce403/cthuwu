@@ -128,7 +128,7 @@ uwu_validate_ambient_configuration() {
 
 uwu_parse_arguments() {
   uwu_reject_unsafe_arguments "$@"
-  UWU_XMTP_ENV="${UWUBOT_XMTP_ENV-dev}"
+  UWU_XMTP_ENV="${UWUBOT_XMTP_ENV-production}"
   if [[ "${UWUBOT_DATA_DIR+x}" == x ]]; then
     UWU_DATA_DIR="$UWUBOT_DATA_DIR"
     UWU_DATA_DIR_SET=1

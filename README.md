@@ -157,7 +157,7 @@ On Unix, Rust starts the XMTP sidecar as a process-group leader. Supervisor tear
 complete process group, including helpers forked by Node, even if the direct sidecar process has
 already exited.
 
-The default is XMTP `dev` with persistent owner-only state at `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/dev`. Each environment gets a different directory. Override either setting through the environment or the corresponding normal `uwubot` option:
+The default is XMTP `production` with persistent owner-only state at `${XDG_DATA_HOME:-$HOME/.local/share}/cthuwu/production`. Each environment gets a different directory. Local and dev networks are explicit test-only overrides; production deployment should use the default:
 
 ```bash
 UWUBOT_XMTP_ENV=production ./uwu.sh

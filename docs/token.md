@@ -112,9 +112,13 @@ Retry/backoff may protect the RPC endpoint, but it must not turn unknown economi
 operation or introduce a delay after all required economic evidence is fresh and the action is
 authorized.
 
-Normal startup derives the persistent XMTP wallet, validates token configuration and initial
-economics, and validates the lifecycle executor before creating or mutating Evolution state. XMTP
-identity creation may occur before the RPC preflight because that identity is itself the wallet
+Normal startup derives the persistent XMTP wallet and validates token configuration and initial
+economics before creating or mutating Evolution state. A configured lifecycle executor is validated
+before use, but it is optional: without one, ordinary XMTP operation continues while external
+spend, spawn, and absorption intents remain pending. Native fixed-deadline Shutdown still runs.
+Initial economics are not persisted as Scales observations until awakening is confirmed. Startup
+repairs the historical token-only pre-awakening seed, but refuses an unconfirmed period that also
+contains behavioral observations. XMTP identity creation may occur before the RPC preflight because that identity is itself the wallet
 source. The only outage exception is a read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
 `Shutdown` work, the runtime may open solely to drain that work even while Base is unavailable.
 Persisted `Spawn` and survival `Spend`, plus new token-dependent decisions, wait for fresh bound

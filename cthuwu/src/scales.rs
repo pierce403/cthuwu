@@ -291,6 +291,12 @@ impl TentacleMetrics {
     /// True when rebinding can preserve only the explicit Nature-adjustment stress counter and
     /// cannot misattribute any behavioral/economic observation to another Nature.
     pub fn has_behavior_observations(&self) -> bool {
+        self.has_behavior_observations_without_node_economics() || self.token_economics.is_some()
+    }
+
+    /// True when an observation other than the replaceable node-economics snapshot exists.
+    /// Startup uses this narrowly to repair the historical pre-awakening economics seeding bug.
+    pub fn has_behavior_observations_without_node_economics(&self) -> bool {
         self.engagement != EngagementMetrics::default()
             || self.growth != GrowthMetrics::default()
             || self.influence != InfluenceMetrics::default()
@@ -298,7 +304,6 @@ impl TentacleMetrics {
                 .wealth
                 .as_ref()
                 .is_some_and(|wealth| wealth != &WealthMetrics::default())
-            || self.token_economics.is_some()
     }
 
     pub fn rebind_empty_period(
