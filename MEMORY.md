@@ -54,6 +54,9 @@ Last reviewed: 2026-08-09
 - A fresh unawakened node has no persisted Scales economics by design. Public admission must report
   the pending authenticated operator Nature confirmation before checking post-awakening economics;
   otherwise the deliberate empty pre-confirmation metrics state looks like an RPC outage.
+- While Nature confirmation is pending, normal startup prints the Nature sheet and says whether an
+  active production operator must first be added or can send `/nature` and a listed action. The
+  terminal remains read-only for awakening; only an authenticated XMTP operator message has authority.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
   `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
   discover intro Tentacles.

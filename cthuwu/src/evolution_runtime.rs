@@ -1070,6 +1070,11 @@ impl EvolutionRuntime {
         )
     }
 
+    pub fn pending_awakening_prompt(&self) -> Option<String> {
+        matches!(self.ritual.phase(), AwakeningPhase::AwaitingConfirmation)
+            .then(|| self.ritual.formatted_prompt())
+    }
+
     pub fn model_policy(&self) -> ModelPolicy {
         let nature = self.ritual.nature();
         let appetites = [

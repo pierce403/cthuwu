@@ -694,6 +694,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Before awakening confirmation, treasury observations are validated at startup but deliberately
     excluded from Scales state. Public admission reports the pending operator-confirmed awakening
     before evaluating the post-awakening economics gate.
+  - Normal startup prints the pending Nature sheet and authenticated XMTP production next step. It
+    distinguishes an absent operator ACL from an already configured operator, but never accepts a
+    terminal reply as awakening authority.
   - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
     depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
     optional 0–100 override. `unproven` is the permissive default minimum tier.
