@@ -220,7 +220,7 @@ Shutdown is a separate native path. Its durable intent is intercepted by the Rus
 stops XMTP and writes a local controller receipt before the process returns; no lifecycle-executor
 request or external shutdown receipt is involved.
 
-Normal startup validates token configuration, treasury ownership, initial economics, and the
+Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
 lifecycle executor before creating or mutating Evolution state. The only outage exception is
 read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
 `Shutdown` work, the runtime opens solely to drain it during a Base outage. Persisted `Spawn`,

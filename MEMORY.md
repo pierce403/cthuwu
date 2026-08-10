@@ -214,7 +214,7 @@ Last reviewed: 2026-08-09
   kills it and all descendants after success, failure, or timeout. The XMTP sidecar uses the same
   full-process-group cleanup on supervisor teardown, including when its direct Node parent has
   already exited.
-- Normal startup validates token configuration, treasury ownership, initial economics, and the
+- Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
   executor before mutating Evolution state. The only outage exception is read-only inspection of
   existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
   opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
@@ -290,7 +290,7 @@ Last reviewed: 2026-08-09
 - `RecordedTokenEconomics` is active node state. Its schema can carry holder role/address, chain,
   contract, optional block, observed time, configured token metadata, configuration identity, and a
   source label and uses idempotent history. Current live reads set the block to none, use local time,
-  and treat signed configured decimals/supply as assumptions; the source label is not external
+  and treat configured decimals/supply as assumptions; the source label is not external
   identity proof.
 - Transaction hash, block, and timestamp fields in a lifecycle receipt are assertions from the
   configured executor. Rust validates their shape and intent binding but does not independently

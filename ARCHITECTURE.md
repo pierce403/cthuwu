@@ -163,7 +163,7 @@ The Scales core represents daily or weekly aggregate Engagement, Growth, Wealth,
 Metrics and judgments bind the exact Nature ID/fingerprint, awakening epoch, period bounds, scored
 inputs, treasury/stake addresses, token configuration, and available observation metadata. Current
 live `balanceOf(..., "latest")` reads have no block number: they record local wall-clock observation
-time, set `observed_block_number` to `None` (omitted from JSON), and carry the attested configuration
+time, set `observed_block_number` to `None` (omitted from JSON), and carry the identity-derived configuration
 identity.
 Public-sender balances contribute only to that entity's tier and Engagement. A bound Tentacle
 treasury is the primary Wealth input; stake affects Influence and propagation eligibility; accepted
@@ -277,7 +277,7 @@ must trust and pin that complete dependency chain separately. On Unix, both the 
 lifecycle executor run as process-group leaders; the supervisor kills the full group, including
 descendants, after completion, timeout, or teardown.
 
-Normal startup validates token configuration, treasury ownership, initial economics, and the
+Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
 lifecycle executor before creating or mutating Evolution state. The only outage exception is
 read-only inspection of existing lifecycle state; when it finds already-binding `Absorb` or
 `Shutdown` work, the runtime may open solely to drain it during a Base outage. `Spawn`, survival

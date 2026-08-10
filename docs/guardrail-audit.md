@@ -149,7 +149,7 @@ These controls preserve the meaning of an authorized economic effect:
 - deterministic XMTP-wallet derivation and strict identity-frame parsing on every startup, without
   providing a private key to Rust;
 - revalidated Base chain ID and configured contract, local observation time,
-  `observed_block_number = None` (omitted from JSON) for current `latest` reads, and treasury-signed
+  `observed_block_number = None` (omitted from JSON) for current `latest` reads, and identity-derived
   configuration identity;
 - explicit treatment of configured decimals/supply as assumptions until contract metadata calls are
   implemented;

@@ -621,7 +621,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     operators must trust the interpreter, libraries, subprocesses, and signer-service dependency
     chain separately. On Unix, the executor is a process-group leader and cleanup kills the entire
     group, including descendants, after success, failure, or timeout.
-  - Normal startup validates token configuration, treasury ownership, initial economics, and the
+  - Normal startup derives the XMTP treasury address, validates token configuration and initial economics, and validates the
     executor before any Evolution state mutation. The only outage exception is read-only inspection
     of existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
     opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
