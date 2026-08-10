@@ -16,10 +16,15 @@ export async function createXmtpSession(
   identity: StoredIdentity,
 ): Promise<ChatSession> {
   const wallet = new Wallet(identity.walletPrivateKey);
-  const client = await Client.create(createSigner(wallet), {
-    env: config.environment,
-    appVersion: "cthuwu-web/0.1.0",
-  });
+  const client = await recoverRegisteredClient(() =>
+    Client.create(createSigner(wallet), {
+      env: config.environment,
+      appVersion: "cthuwu-web/0.1.0",
+      // Client.create() otherwise calls register() every time the app opens. Reopen the Browser
+      // SDK's persisted installation first, then ask XMTP whether it is already registered.
+      disableAutoRegister: true,
+    }),
+  );
   const botAddress = await resolveCompanionAddress(config.botAddress);
   const conversation = await client.conversations.createDmWithIdentifier({
     identifier: botAddress,
@@ -29,6 +34,30 @@ export async function createXmtpSession(
     await conversation.updateConsentState(ConsentState.Allowed);
   }
   return new XmtpSession(client, conversation);
+}
+
+interface RegistrationClient {
+  isRegistered(): Promise<boolean>;
+  register(): Promise<void>;
+  close(): void;
+}
+
+/**
+ * Reuses the persisted Browser SDK installation whenever XMTP recognizes it. Registration only
+ * happens for a genuinely new local installation, preventing routine page loads from exhausting
+ * the inbox's ten-installation limit.
+ */
+export async function recoverRegisteredClient<T extends RegistrationClient>(
+  createClient: () => Promise<T>,
+): Promise<T> {
+  const client = await createClient();
+  try {
+    if (!(await client.isRegistered())) await client.register();
+    return client;
+  } catch (error) {
+    client.close();
+    throw error;
+  }
 }
 
 class XmtpSession implements ChatSession {

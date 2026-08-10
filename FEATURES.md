@@ -51,6 +51,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The browser creates an EOA private key with `crypto.getRandomValues` before configuration or network access.
   - A separate 32-byte compatibility key is persisted, but the UI does not claim it encrypts the current Browser SDK database.
   - A versioned record is namespaced by XMTP environment in local storage and reused on reload.
+  - Browser startup reopens the Browser SDK's persisted installation, then queries XMTP registration
+    state before registering. A routine reload never creates another installation for an inbox that
+    XMTP already recognizes.
   - The deployed browser always uses XMTP `production` and connects automatically to the canonical
     intro Tentacle; no build variable can redirect either value.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
@@ -62,6 +65,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Legacy complete records migrate; partial or corrupt records fail closed.
   - [x] Encrypted export/import round-trips and rejects a wrong passphrase or environment.
   - [x] Reset leaves unrelated and other-environment storage untouched.
+  - [x] Browser identity tests prove a registered installation is recovered without another
+    registration, while a genuinely new installation registers once and closes cleanly on failure.
   - [x] A full browser automation test verifies persistence across an actual page reload.
 
 ### Browser-to-Cthuwu XMTP direct message
@@ -77,6 +82,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - A planned Base registry contract will replace the hard-coded bootstrap address with registered
     intro-Tentacle discovery.
   - The client loads existing text history, streams new messages, deduplicates overlapping history/stream delivery, and sends text.
+  - The Browser SDK's automatic registration is disabled. The client explicitly checks the XMTP API
+    for the reopened installation's registration before requesting a new one, preventing normal
+    reloads from consuming the inbox installation limit.
   - Failed sends preserve the draft; inbound rendering uses text nodes rather than HTML.
   - Groups, attachments, reactions, and read receipts are outside the first slice.
 - **Test Criteria**:

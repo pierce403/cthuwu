@@ -57,6 +57,11 @@ Last reviewed: 2026-08-09
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
   and local XMTP modes remain explicit backend/test concerns only. Both `uwu.sh` and `uwubot`
   default to `production`; they never select `dev` implicitly.
+- Browser startup must call `Client.create(..., { disableAutoRegister: true })`, reopen its
+  persisted Browser SDK installation, then check `client.isRegistered()` before calling
+  `client.register()`. Auto-registering on every launch creates needless installations and reaches
+  XMTP's 10-installation inbox cap; an already registered installation must be recovered without a
+  second register request.
 - The container also defaults XMTP to `production`. A transient node-economics refresh failure
   retries every second and retains the last verified treasury observation only until its freshness
   TTL expires; unknown or stale economics still fail closed. Base's built-in public RPC fallback is

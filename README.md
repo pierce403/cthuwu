@@ -693,7 +693,7 @@ bootstrap constant with discovery of registered intro Tentacles.
 The root page publishes an absolute Open Graph/Twitter large-image card at
 `https://cthuwu.app/cthuwu-og.jpg`.
 
-The browser wallet is stored in local storage. Its XMTP Browser SDK message database is currently unencrypted. The settings dialog says this explicitly; an identity export recovers the wallet/inbox, not message history or necessarily the same installation.
+The browser wallet is stored in local storage. Its XMTP Browser SDK message database is currently unencrypted. The settings dialog says this explicitly; an identity export recovers the wallet/inbox, not message history or necessarily the same installation. On each launch, the browser reopens the persisted Browser SDK installation and checks XMTP registration before registering; routine reloads therefore reuse the existing installation rather than consuming another of the inbox's installation slots.
 
 ## Privacy and security
 
