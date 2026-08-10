@@ -20,7 +20,7 @@ const AWAKENING_LOG_VERSION: u32 = 2;
 const AWAKENING_LOG_ALGORITHM: &str = "hmac-sha256";
 const AWAKENING_LOG_SIGNATURE_DOMAIN: &str = "cthuwu-awakening-log-v2";
 const AWAKENING_LOG_HEADER: &str = "# Cthuwu awakening log\n\n\
-    Signed, append-only operator actions. Raw message bodies are never stored.\n\n";
+    Signed, append-only awakening actions. Raw message bodies are never stored.\n\n";
 const MAX_AWAKENING_RESPONSE_BYTES: usize = 256;
 const MAX_AWAKENING_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_EVENT_ID_BYTES: usize = 1024;
@@ -170,6 +170,9 @@ pub enum AwakeningPhase {
         timestamp_unix: u64,
         operator_id: String,
     },
+    AcceptedByDefault {
+        timestamp_unix: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +181,7 @@ pub enum AwakeningOutcome {
     Confirmed,
     KillRequested,
     SkippedForTesting,
+    AcceptedByDefault,
     AdjustedAfterConfirmation,
     ForcedRerollEpoch,
 }
@@ -194,6 +198,7 @@ pub struct AwakeningRecovery {
 enum RecordedAwakeningAction {
     Operator(AwakeningAction),
     SkipForTesting,
+    AcceptDefault,
     PostConfirmationAdjust {
         nature_trait: NatureTrait,
         value: u8,
@@ -206,6 +211,7 @@ impl RecordedAwakeningAction {
         match self {
             Self::Operator(action) => action.normalized(),
             Self::SkipForTesting => "SKIP --skip-awakening".to_owned(),
+            Self::AcceptDefault => "ACCEPT DEFAULT NATURE".to_owned(),
             Self::PostConfirmationAdjust {
                 nature_trait,
                 value,
@@ -217,6 +223,8 @@ impl RecordedAwakeningAction {
     fn parse(value: &str) -> Result<Self> {
         if value == "SKIP --skip-awakening" {
             Ok(Self::SkipForTesting)
+        } else if value == "ACCEPT DEFAULT NATURE" {
+            Ok(Self::AcceptDefault)
         } else if value == "BEGIN --reroll-nature --force" {
             Ok(Self::ForcedRerollEpoch)
         } else if value.starts_with("POST_ADJUST") {
@@ -400,6 +408,37 @@ impl AwakeningRitual {
         Ok(AwakeningOutcome::SkippedForTesting)
     }
 
+    /// Accepts the generated Nature as a safe local default so an operator is never required for
+    /// ordinary conversation. This remains distinct from authenticated operator confirmation.
+    pub fn accept_default(
+        &mut self,
+        timestamp_unix: u64,
+        provenance: &AwakeningProvenance,
+        log: &AwakeningLog,
+    ) -> Result<AwakeningOutcome> {
+        self.prepare_transition(timestamp_unix, provenance)?;
+        if provenance.source != ProvenanceSource::LocalCli {
+            bail!("default Nature acceptance requires local runtime provenance");
+        }
+        let predecessor_nature = self.nature.clone();
+        let mut candidate = self.clone();
+        candidate.phase = AwakeningPhase::AcceptedByDefault { timestamp_unix };
+        candidate.last_event_at_unix = timestamp_unix;
+        log.append(
+            candidate.epoch,
+            timestamp_unix,
+            provenance,
+            &RecordedAwakeningAction::AcceptDefault,
+            AwakeningNatureTransition {
+                predecessor: &predecessor_nature,
+                result: &candidate.nature,
+            },
+            AwakeningLogPhase::AcceptedByDefault,
+        )?;
+        *self = candidate;
+        Ok(AwakeningOutcome::AcceptedByDefault)
+    }
+
     /// Applies the authenticated `/adjust <trait> <value>` form after awakening. It preserves the
     /// original confirmation status while signing the new Nature snapshot into the same audit
     /// chain.
@@ -417,7 +456,9 @@ impl AwakeningRitual {
         }
         if !matches!(
             self.phase,
-            AwakeningPhase::Confirmed { .. } | AwakeningPhase::SkippedForTesting { .. }
+            AwakeningPhase::Confirmed { .. }
+                | AwakeningPhase::SkippedForTesting { .. }
+                | AwakeningPhase::AcceptedByDefault { .. }
         ) {
             bail!("post-confirmation Nature adjustment requires a confirmed ritual");
         }
@@ -477,6 +518,7 @@ impl AwakeningRitual {
             AwakeningPhase::Confirmed { .. }
                 | AwakeningPhase::Killed { .. }
                 | AwakeningPhase::SkippedForTesting { .. }
+                | AwakeningPhase::AcceptedByDefault { .. }
         ) {
             bail!("forced Nature reroll requires a completed ritual epoch");
         }
@@ -567,6 +609,11 @@ impl AwakeningRitual {
                         operator_id: entry.operator_id.clone(),
                     };
                 }
+                RecordedAwakeningAction::AcceptDefault => {
+                    ritual.phase = AwakeningPhase::AcceptedByDefault {
+                        timestamp_unix: entry.timestamp_unix,
+                    };
+                }
             }
         }
         if phase_for(&ritual.phase) != last.phase {
@@ -617,7 +664,8 @@ impl AwakeningRitual {
     pub fn confirmed_at_unix(&self) -> Option<u64> {
         match self.phase {
             AwakeningPhase::Confirmed { timestamp_unix, .. }
-            | AwakeningPhase::SkippedForTesting { timestamp_unix, .. } => Some(timestamp_unix),
+            | AwakeningPhase::SkippedForTesting { timestamp_unix, .. }
+            | AwakeningPhase::AcceptedByDefault { timestamp_unix } => Some(timestamp_unix),
             AwakeningPhase::AwaitingConfirmation | AwakeningPhase::Killed { .. } => None,
         }
     }
@@ -625,7 +673,9 @@ impl AwakeningRitual {
     pub fn is_confirmed(&self) -> bool {
         matches!(
             self.phase,
-            AwakeningPhase::Confirmed { .. } | AwakeningPhase::SkippedForTesting { .. }
+            AwakeningPhase::Confirmed { .. }
+                | AwakeningPhase::SkippedForTesting { .. }
+                | AwakeningPhase::AcceptedByDefault { .. }
         )
     }
 
@@ -648,6 +698,9 @@ impl AwakeningRitual {
             } => format!(
                 "CONFIRMED FOR TESTING ONLY: --skip-awakening AT {timestamp_unix} BY {operator_id}"
             ),
+            AwakeningPhase::AcceptedByDefault { timestamp_unix } => {
+                format!("SAFE DEFAULT NATURE ACCEPTED LOCALLY AT {timestamp_unix}")
+            }
         }
     }
 
@@ -739,6 +792,7 @@ pub enum AwakeningLogPhase {
     Confirmed,
     Killed,
     SkippedForTesting,
+    AcceptedByDefault,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1116,6 +1170,7 @@ fn phase_for(phase: &AwakeningPhase) -> AwakeningLogPhase {
         AwakeningPhase::Confirmed { .. } => AwakeningLogPhase::Confirmed,
         AwakeningPhase::Killed { .. } => AwakeningLogPhase::Killed,
         AwakeningPhase::SkippedForTesting { .. } => AwakeningLogPhase::SkippedForTesting,
+        AwakeningPhase::AcceptedByDefault { .. } => AwakeningLogPhase::AcceptedByDefault,
     }
 }
 
@@ -1131,6 +1186,7 @@ fn transition_phase(
             AwakeningLogPhase::Confirmed
                 | AwakeningLogPhase::Killed
                 | AwakeningLogPhase::SkippedForTesting
+                | AwakeningLogPhase::AcceptedByDefault
         ) || !matches!(action, RecordedAwakeningAction::ForcedRerollEpoch)
             || source != ProvenanceSource::LocalCli
         {
@@ -1161,10 +1217,17 @@ fn transition_phase(
         {
             Ok(AwakeningLogPhase::SkippedForTesting)
         }
+        RecordedAwakeningAction::AcceptDefault
+            if previous == AwakeningLogPhase::Pending && source == ProvenanceSource::LocalCli =>
+        {
+            Ok(AwakeningLogPhase::AcceptedByDefault)
+        }
         RecordedAwakeningAction::PostConfirmationAdjust { .. }
             if matches!(
                 previous,
-                AwakeningLogPhase::Confirmed | AwakeningLogPhase::SkippedForTesting
+                AwakeningLogPhase::Confirmed
+                    | AwakeningLogPhase::SkippedForTesting
+                    | AwakeningLogPhase::AcceptedByDefault
             ) =>
         {
             Ok(previous)
@@ -1198,7 +1261,8 @@ fn validate_nature_transition(
             validate_rerolled_lineage(previous, current)?;
         }
         RecordedAwakeningAction::Operator(AwakeningAction::Yes | AwakeningAction::Kill)
-        | RecordedAwakeningAction::SkipForTesting => {
+        | RecordedAwakeningAction::SkipForTesting
+        | RecordedAwakeningAction::AcceptDefault => {
             if previous != current {
                 bail!("awakening terminal action unexpectedly changed Nature");
             }
@@ -1646,6 +1710,35 @@ mod tests {
                 .skip_for_testing(101, &xmtp, &other_log)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn local_default_acceptance_is_signed_and_distinct_from_operator_confirmation() {
+        let (_root, log, mut ritual, _xmtp) = setup();
+        let local = AwakeningProvenance::local_cli("local-default", "default-1").unwrap();
+        assert_eq!(
+            ritual.accept_default(101, &local, &log).unwrap(),
+            AwakeningOutcome::AcceptedByDefault
+        );
+        assert!(ritual.is_confirmed());
+        assert!(matches!(
+            ritual.phase(),
+            AwakeningPhase::AcceptedByDefault {
+                timestamp_unix: 101
+            }
+        ));
+        assert!(ritual.render_status().contains("SAFE DEFAULT NATURE"));
+        let entries = log.entries().unwrap();
+        assert_eq!(entries[0].normalized_action, "ACCEPT DEFAULT NATURE");
+        assert_eq!(entries[0].phase, AwakeningLogPhase::AcceptedByDefault);
+        assert_eq!(entries[0].provenance, ProvenanceSource::LocalCli);
+
+        let recovered =
+            AwakeningRitual::resume_or_recover(Some(ritual.nature().clone()), 100, &log).unwrap();
+        assert!(matches!(
+            recovered.ritual.phase(),
+            AwakeningPhase::AcceptedByDefault { .. }
+        ));
     }
 
     #[test]

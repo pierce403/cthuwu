@@ -180,12 +180,14 @@ interoperability.
   complete validated, canonical, newline-terminated contents through atomic copy-on-write. Judgment
   history consistency is not cryptographic tamper evidence. Never silently generate a new key when
   signed Evolution state or metrics/history/lineage projections exist without the original key.
-- Accept awakening and Nature-adjustment actions only after classifying a canonical active XMTP
-  operator inbox. Until an awakening epoch is confirmed, normal public conversation, inference,
-  contact mutation, and tools remain closed. `--skip-awakening` is an explicit local testing
-  override, not an operator message or a production attestation; forced rerolls start a new audited
-  epoch rather than rewriting history. Reconcile exact adjustment stress from signed `POST_ADJUST`
-  entries after crashes; reset an expired empty pending-awakening period without a judgment.
+- Accept operator-originated awakening and Nature-adjustment actions only after classifying a
+  canonical active XMTP operator inbox. Normal startup must not require an operator: fresh and
+  legacy-pending epochs append a signed local `ACCEPT DEFAULT NATURE` transition before opening
+  ordinary conversation. `--skip-awakening` remains an explicit local testing override, not an
+  operator message or a production attestation; forced rerolls start a new audited epoch rather
+  than rewriting history and use the same safe local default. Reconcile exact adjustment stress
+  from signed `POST_ADJUST` entries after crashes; reset an expired empty pending-awakening period
+  without a judgment.
   Require each signed entry's exact immediate-predecessor Nature snapshot; recover only the head or
   final signed predecessor, never a different independently valid Nature/log combination. Never
   generate a missing pre-action Nature over existing Evolution projections or alternate Nature.

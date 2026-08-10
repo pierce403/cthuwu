@@ -51,12 +51,9 @@ Last reviewed: 2026-08-09
   retries every second and retains the last verified treasury observation only until its freshness
   TTL expires; unknown or stale economics still fail closed. Base's built-in public RPC fallback is
   rate limited, so production operators should configure a dedicated `CTHUWU_RPC_ENDPOINT`.
-- A fresh unawakened node has no persisted Scales economics by design. Public admission must report
-  the pending authenticated operator Nature confirmation before checking post-awakening economics;
-  otherwise the deliberate empty pre-confirmation metrics state looks like an RPC outage.
-- While Nature confirmation is pending, normal startup prints the Nature sheet and says whether an
-  active production operator must first be added or can send `/nature` and a listed action. The
-  terminal remains read-only for awakening; only an authenticated XMTP operator message has authority.
+- A fresh or legacy-pending node records a signed local `ACCEPT DEFAULT NATURE` transition before
+  normal admission and persists current Scales economics under that activation. No operator ACL is
+  needed for ordinary conversation; operators remain optional and privileged.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
   `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
   discover intro Tentacles.
@@ -164,13 +161,14 @@ Last reviewed: 2026-08-09
   protection from a compromised service account that can read the key and re-sign state. The key is
   created atomically; missing-key startup beside signed state or metrics/history/lineage projections
   fails without implicit rekeying or adoption of orphaned projections.
-- A new awakening epoch blocks normal public conversation, contact mutation, inference, and tools.
-  Only the already authenticated active XMTP operator path may apply `YES`, relative `ADJUST`,
-  `REROLL`, or `KILL`. Local `--skip-awakening` is a visibly distinct signed testing override;
-  forced rerolls append new epochs rather than rewriting history. `KILL` enters the binding death
+- Fresh and legacy-pending awakening epochs append a signed local `ACCEPT DEFAULT NATURE` action and
+  open normal conversation without an operator ACL. Operator authorization remains optional for
+  privileged tools and later authenticated Nature controls. Local `--skip-awakening` is a visibly
+  distinct signed testing override; forced rerolls append new epochs rather than rewriting history
+  and are accepted by the same safe default policy. `KILL` enters the binding death
   path: admission closes, absorption is queued, and the 24-hour shutdown deadline is persisted.
   Signed `POST_ADJUST` entries reconcile exact current-period stress after a crash. An expired empty
-  pending-awakening metrics period resets without producing a judgment before late confirmation.
+  pending-awakening metrics period resets without producing a judgment before local activation.
   Each signed entry carries its exact immediate-predecessor Nature snapshot; recovery accepts only
   the head or final signed predecessor, and rejects a divergent Nature/log pair even if both validate
   independently. With no journal entries, a missing Nature may be generated only when no Evolution
@@ -231,8 +229,8 @@ Last reviewed: 2026-08-09
   economics before mutating Evolution state. A configured lifecycle executor is validated before
   use, but it is optional: ordinary XMTP operation continues without one while external spend,
   spawn, and absorption intents remain pending and native fixed-deadline Shutdown stays active. The
-  initial economics preflight does not enter Scales before awakening confirmation; startup repairs
-  the historical token-only pre-awakening seed but fails closed if behavioral observations are also
+  initial economics preflight does not enter Scales before Nature activation; startup repairs
+  the historical token-only pre-activation seed but fails closed if behavioral observations are also
   present. The only outage exception is read-only inspection of
   existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
   opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent

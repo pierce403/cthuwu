@@ -492,11 +492,12 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [ ] A newer incarnation must start at `Starting` and permanently fences updates from older incarnations.
   - [ ] Restarting a Tentacle preserves its Cthulhu and Tentacle IDs.
 
-### Tentacle Nature and authenticated awakening
+### Tentacle Nature and audited activation
 
 - **Stability**: in-progress
-- **Description**: Give each local Tentacle a persistent, operator-confirmed Nature that changes
-  bounded conversation and resource policy without granting autonomous authority.
+- **Description**: Give each local Tentacle a persistent, locally accepted Nature that changes
+  bounded conversation and resource policy without making an operator mandatory or granting
+  authority.
 - **Properties**:
   - Nature contains four 0–100 appetites (`engagement`, `growth`, `wealth`, and `influence`), three
     0–100 methods (`cooperation`, `stability`, and `transparency`), one closed Sacred Ban, a random
@@ -509,11 +510,11 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     The key itself is created atomically; if it is missing beside signed Nature, awakening, or
     Hermes state, or beside metrics/history/lineage projections, startup fails without silently
     rekeying or adopting orphaned projections.
-  - First boot remains behind an awakening gate. Only an already authenticated active XMTP operator
-    may answer `YES`, `ADJUST <trait> <delta>`, `REROLL`, or `KILL`; public, stale, and revoked senders
-    cannot complete the ritual or reach normal work while it is pending.
+  - First boot and legacy pending nodes append a signed `ACCEPT DEFAULT NATURE` transition locally
+    and open normal work without an operator ACL. Operator authorization remains optional and is
+    required only for the privileged operator lane and later authenticated Nature controls.
   - `state/awakening_log.md` is a signed, hash-chained, logically append-only audit journal with
-    normalized actions, hashed transport event IDs, authenticated operator provenance, restart
+    normalized actions, hashed event IDs, local or authenticated operator provenance, restart
     recovery, and immutable reroll epochs. Each update verifies and atomically copy-on-write
     replaces the complete canonical newline-terminated journal. `KILL` records and holds a request;
     it does not terminate the process.
@@ -530,7 +531,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     accepts a non-empty relative path confined below `UWUBOT_DATA_DIR/state/natures/`; absolute
     paths and `..` are rejected. `--show-nature` performs normal startup reconciliation before
     rendering and exiting; it is not read-only and conflicts with skip/reroll mutators.
-  - After confirmation, Nature produces a bounded model policy and local relationship signals. It
+  - After activation, Nature produces a bounded model policy and local relationship signals. It
     never expands a model's tool schema, operator authority, Council authority, or remote-provider
     privacy permission. Relationship values stay local and are omitted from remote model profiles.
     One retained contact can contribute at most one observation per UTC day; a return requires
@@ -547,12 +548,13 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Signed Nature persistence round-trips and rejects tampering, wrong keys, malformed
     signatures, unsafe permissions, and symlink redirection.
   - [x] Ritual tests cover every action, malformed input, authenticated provenance, duplicate and
-    backward events, confirmation, kill, signed local skip, post-confirmation adjustment, crash
-    recovery with exact stress reconciliation, expired-empty pending-period reset, immutable
+    backward events, confirmation, automatic default acceptance, kill, signed local skip,
+    post-confirmation adjustment, crash recovery with exact stress reconciliation,
+    expired-empty pending-period reset, immutable
     forced-reroll epochs, exact-predecessor recovery, divergent valid snapshot rejection, restart,
     and journal tampering.
-  - [ ] A live XMTP release exercise proves that only the configured operator can complete an
-    awakening and that public DMs remain gated before confirmation.
+  - [x] Fresh and legacy-pending nodes accept a signed safe default without any operator and preserve
+    that exact activation across restart.
   - [ ] Cross-platform startup measurements verify Nature loading and state permissions on every
     supported production host.
 
@@ -695,12 +697,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     A failed treasury refresh retries every second and retains only a prior verified observation
     that remains inside its configured freshness TTL. Freshly observed zero remains real evidence
     and maps a public holder to Unproven.
-  - Before awakening confirmation, treasury observations are validated at startup but deliberately
-    excluded from Scales state. Public admission reports the pending operator-confirmed awakening
-    before evaluating the post-awakening economics gate.
-  - Normal startup prints the pending Nature sheet and authenticated XMTP production next step. It
-    distinguishes an absent operator ACL from an already configured operator, but never accepts a
-    terminal reply as awakening authority.
+  - Before Nature activation, treasury observations are validated at startup but deliberately
+    excluded from Scales state. Normal startup immediately records the local default transition,
+    then admits public work subject to current economics.
   - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
     depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
     optional 0–100 override. `unproven` is the permissive default minimum tier.

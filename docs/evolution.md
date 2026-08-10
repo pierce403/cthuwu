@@ -14,7 +14,7 @@ mandatory leader. Configuration and deterministic local records do not prove ext
 | Component | Role | Execution boundary |
 | --- | --- | --- |
 | Nature | Seven sliders, Sacred Ban, identity, generation, inheritance/mutation, signed persistence | Influences personality and economic/lifecycle policy; never authenticates an operator |
-| Awakening | Authenticated ritual, epochs, signed append-only journal, crash reconciliation | Opens public operation after the epoch is confirmed |
+| Awakening | Local default activation, optional authenticated controls, epochs, signed append-only journal, crash reconciliation | Opens public operation without requiring an operator |
 | Scales | Daily/weekly aggregate metrics, policy bindings, stress, open snapshots, final judgments | Final judgments bind lifecycle transitions |
 | TokenEye | Per-Tentacle Base observations and local percentile tiers | Missing/stale observations block token-dependent work |
 | Economics | Bound treasury, stake, reward, spend, and revenue records | Directly drives Wealth, starvation, Influence, Growth, survival, and propagation |
@@ -39,9 +39,10 @@ local integrity secret, not a public signature and not protection from an attack
 `uwubot` OS account. Startup refuses missing or inconsistent signed state rather than regenerating a
 new identity over existing Evolution records.
 
-The awakening ritual remains an authenticated operator flow. Until its current epoch completes,
-public conversation and metric mutation remain closed. `--skip-awakening` is a local test override;
-forced rerolls create a new audited epoch.
+Normal startup accepts a generated Nature locally through a signed `ACCEPT DEFAULT NATURE` entry.
+Fresh and legacy-pending nodes therefore open public conversation without an operator. An optional
+authenticated operator may inspect and adjust Nature later. `--skip-awakening` remains a distinct
+local test override; forced rerolls create a new audited epoch which the runtime accepts by default.
 
 Nature is policy, not authority. It cannot turn a public sender, Council message, token holder, or
 skill into an operator or shell command.
@@ -224,8 +225,8 @@ Normal startup derives the XMTP treasury address and validates token configurati
 economics before creating or mutating Evolution state. A configured lifecycle executor is validated
 before use, but it is optional: without one, ordinary XMTP operation continues while external
 spend, spawn, and absorption intents remain pending. Native fixed-deadline Shutdown remains
-authoritative. Initial economics are not persisted as Scales observations until awakening is
-confirmed. Startup repairs the historical token-only pre-awakening seed, but refuses an unconfirmed
+authoritative. Initial economics are not persisted as Scales observations until Nature is
+activated. Startup repairs the historical token-only pre-activation seed, but refuses an unconfirmed
 period that also contains behavioral observations. The only outage exception is
 read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
 `Shutdown` work, the runtime opens solely to drain it during a Base outage. Persisted `Spawn`,

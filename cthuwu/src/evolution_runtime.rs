@@ -67,6 +67,9 @@ pub enum MandatoryRecoveryKind {
 #[derive(Clone, Debug)]
 pub struct EvolutionStartupOptions {
     pub skip_awakening: bool,
+    /// Accept a generated or legacy-pending Nature locally so ordinary chat never requires an
+    /// operator. Explicit testing skip remains separately audited.
+    pub auto_accept_nature: bool,
     pub reroll_nature: bool,
     pub force: bool,
     pub nature_path: Option<PathBuf>,
@@ -87,6 +90,7 @@ impl Default for EvolutionStartupOptions {
     fn default() -> Self {
         Self {
             skip_awakening: false,
+            auto_accept_nature: false,
             reroll_nature: false,
             force: false,
             nature_path: None,
@@ -706,26 +710,27 @@ impl EvolutionRuntime {
                 options.propagation_minimum_stake_basis_points,
             )?;
             let stress_changed = reconcile_adjustment_stress(&mut metrics, &awakening_log)?;
-            let initial_economics_changed = if (ritual.is_confirmed() || options.skip_awakening)
-                && let Some((snapshot, provenance)) = options.initial_node_economics
-            {
-                ensure!(
-                    provenance.holder_role == EconomicHolderRole::TentacleTreasury,
-                    "initial lifecycle economics must belong to the Tentacle treasury"
-                );
-                ensure_economic_configuration_continuity(&metrics, provenance)?;
-                metrics.record_node_token_economic_observation(
-                    snapshot,
-                    runtime_token_policy(
-                        ritual.nature(),
-                        options.propagation_minimum_stake_basis_points,
-                    )?,
-                    provenance,
-                )?;
-                true
-            } else {
-                false
-            };
+            let initial_economics_changed =
+                if (ritual.is_confirmed() || options.skip_awakening || options.auto_accept_nature)
+                    && let Some((snapshot, provenance)) = options.initial_node_economics
+                {
+                    ensure!(
+                        provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+                        "initial lifecycle economics must belong to the Tentacle treasury"
+                    );
+                    ensure_economic_configuration_continuity(&metrics, provenance)?;
+                    metrics.record_node_token_economic_observation(
+                        snapshot,
+                        runtime_token_policy(
+                            ritual.nature(),
+                            options.propagation_minimum_stake_basis_points,
+                        )?,
+                        provenance,
+                    )?;
+                    true
+                } else {
+                    false
+                };
             if history_boundary_changed
                 || binding_changed
                 || availability_changed
@@ -758,6 +763,7 @@ impl EvolutionRuntime {
                     }
                     AwakeningPhase::Confirmed { .. }
                     | AwakeningPhase::SkippedForTesting { .. }
+                    | AwakeningPhase::AcceptedByDefault { .. }
                     | AwakeningPhase::Killed { .. } => {
                         ritual.force_reroll_epoch(now, &provenance, &awakening_log)?;
                     }
@@ -766,7 +772,7 @@ impl EvolutionRuntime {
                 reconcile_metrics_binding(&mut metrics, ritual.nature(), ritual.epoch())?;
                 scales_store.save_metrics(&metrics)?;
             }
-            if options.skip_awakening {
+            if options.skip_awakening || options.auto_accept_nature {
                 match ritual.phase() {
                     AwakeningPhase::AwaitingConfirmation => {
                         if i64::try_from(now)
@@ -774,7 +780,7 @@ impl EvolutionRuntime {
                         {
                             ensure!(
                                 !metrics.has_behavior_observations(),
-                                "testing skip cannot finalize pre-confirmation observations"
+                                "Nature acceptance cannot finalize pre-confirmation observations"
                             );
                             metrics = new_runtime_metrics(
                                 EvaluationPeriod::Daily,
@@ -784,20 +790,31 @@ impl EvolutionRuntime {
                             )?;
                             scales_store.save_metrics(&metrics)?;
                         }
-                        let provenance = AwakeningProvenance::local_cli(
-                            LOCAL_CLI_ACTOR,
-                            &format!("skip-awakening-{now}-{}", std::process::id()),
-                        )?;
-                        ritual.skip_for_testing(now, &provenance, &awakening_log)?;
+                        if options.skip_awakening {
+                            let provenance = AwakeningProvenance::local_cli(
+                                LOCAL_CLI_ACTOR,
+                                &format!("skip-awakening-{now}-{}", std::process::id()),
+                            )?;
+                            ritual.skip_for_testing(now, &provenance, &awakening_log)?;
+                        } else {
+                            let provenance = AwakeningProvenance::local_cli(
+                                "local-default",
+                                &format!("accept-default-nature-{now}-{}", std::process::id()),
+                            )?;
+                            ritual.accept_default(now, &provenance, &awakening_log)?;
+                        }
                         nature_store.save(ritual.nature())?;
                     }
                     AwakeningPhase::Killed { .. } => {
-                        bail!(
-                            "a killed awakening cannot be skipped; use --reroll-nature --force to begin a new signed epoch"
-                        );
+                        if options.skip_awakening {
+                            bail!(
+                                "a killed awakening cannot be skipped; use --reroll-nature --force to begin a new signed epoch"
+                            );
+                        }
                     }
-                    AwakeningPhase::Confirmed { .. } | AwakeningPhase::SkippedForTesting { .. } => {
-                    }
+                    AwakeningPhase::Confirmed { .. }
+                    | AwakeningPhase::SkippedForTesting { .. }
+                    | AwakeningPhase::AcceptedByDefault { .. } => {}
                 }
             }
         } else {
@@ -1052,7 +1069,7 @@ impl EvolutionRuntime {
             "i'm paused safely on this node while my local operator reconciles signed state, fwiend. normal conversation is temporarily unavailable uwu."
                 .to_owned()
         } else {
-            "i'm still waking safely on this node, fwiend. normal conversation will open after my local operator confirms my Nature uwu."
+            "i'm paused safely while my local Nature transition finishes, fwiend. restart this node to recover normal conversation uwu."
                 .to_owned()
         }
     }
@@ -2240,6 +2257,7 @@ impl EvolutionRuntime {
                 }
                 AwakeningOutcome::AwaitingConfirmation => self.ritual.formatted_prompt(),
                 AwakeningOutcome::SkippedForTesting
+                | AwakeningOutcome::AcceptedByDefault
                 | AwakeningOutcome::AdjustedAfterConfirmation
                 | AwakeningOutcome::ForcedRerollEpoch => {
                     bail!("unexpected awakening outcome from an XMTP ritual action")
@@ -3767,6 +3785,57 @@ mod tests {
     }
 
     #[test]
+    fn production_default_accepts_fresh_or_legacy_pending_nature_without_an_operator() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+
+        let pending = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions::default(),
+        )
+        .unwrap();
+        assert!(!pending.permits_normal_operation());
+        drop(pending);
+
+        let active = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                auto_accept_nature: true,
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(active.permits_normal_operation());
+        assert!(matches!(
+            active.ritual.phase(),
+            AwakeningPhase::AcceptedByDefault { .. }
+        ));
+        assert!(
+            active
+                .nature_status()
+                .contains("SAFE DEFAULT NATURE ACCEPTED LOCALLY")
+        );
+        let entries = active.awakening_log.entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].normalized_action, "ACCEPT DEFAULT NATURE");
+        drop(active);
+
+        let resumed = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                auto_accept_nature: true,
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(resumed.permits_normal_operation());
+        assert_eq!(resumed.awakening_log.entries().unwrap().len(), 1);
+    }
+
+    #[test]
     fn preconfirmation_startup_economics_stay_unobserved_and_repair_legacy_seed() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
@@ -3801,7 +3870,7 @@ mod tests {
         let PublicTurnStart::Gated(message) = runtime.begin_public_turn().unwrap() else {
             panic!("unconfirmed runtime must gate public conversation");
         };
-        assert!(message.contains("still waking safely"));
+        assert!(message.contains("Nature transition finishes"));
         assert!(!message.contains("economics are unavailable"));
         assert!(
             runtime

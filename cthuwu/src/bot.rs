@@ -1209,6 +1209,37 @@ mod tests {
         )
     }
 
+    fn default_nature_bot(
+        root: &Path,
+        model: Arc<dyn Model>,
+        operators: OperatorStore,
+        tools: Arc<RecordingTools>,
+    ) -> UwUBot {
+        let harness = OperatorHarness::new(
+            Arc::new(DeterministicOperatorModel),
+            tools,
+            AgentContext::new(root, root).unwrap(),
+        );
+        UwUBot::new(
+            ContactStore::new(root).unwrap(),
+            ProcessedMessages::new(root).unwrap(),
+            model,
+            Arc::new(Mutex::new(operators)),
+            Arc::new(harness),
+            Arc::new(Mutex::new(
+                EvolutionRuntime::open(
+                    root,
+                    root,
+                    EvolutionStartupOptions {
+                        auto_accept_nature: true,
+                        ..EvolutionStartupOptions::default()
+                    },
+                )
+                .unwrap(),
+            )),
+        )
+    }
+
     fn public_bot(root: &Path) -> UwUBot {
         configured_bot(
             root,
@@ -1298,7 +1329,7 @@ mod tests {
         let bot = awaiting_bot(root.path(), model.clone(), operators, tools.clone());
 
         let blocked = send(&bot, 0, "aabbcc", "hello").await;
-        assert!(blocked.contains("still waking safely"));
+        assert!(blocked.contains("Nature transition finishes"));
         assert!(model.messages.lock().unwrap().is_empty());
         assert!(
             ContactStore::new(root.path())
@@ -1317,6 +1348,34 @@ mod tests {
         let answered = send(&bot, 3, "aabbcc", "hello again").await;
         assert!(answered.contains("answered: hello again"));
         assert_eq!(model.messages.lock().unwrap().as_slice(), ["hello again"]);
+        assert!(
+            ContactStore::new(root.path())
+                .unwrap()
+                .load("aabbcc")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn safe_default_nature_opens_public_chat_without_any_operator_acl() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let operators = OperatorStore::new(root.path(), "production").unwrap();
+        assert_eq!(operators.list().count(), 0);
+        let bot = default_nature_bot(root.path(), model.clone(), operators, tools);
+
+        let answered = send(&bot, 0, "aabbcc", "hello without an operator").await;
+        assert!(answered.contains("answered: hello without an operator"));
+        assert_eq!(
+            model.messages.lock().unwrap().as_slice(),
+            ["hello without an operator"]
+        );
         assert!(
             ContactStore::new(root.path())
                 .unwrap()

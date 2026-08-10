@@ -557,6 +557,7 @@ async fn main() -> Result<()> {
     };
     let mut evolution_options = EvolutionStartupOptions {
         skip_awakening: cli.skip_awakening && !recovering_binding_death,
+        auto_accept_nature: !recovering_binding_death,
         reroll_nature: cli.reroll_nature && !recovering_binding_death,
         force: cli.force && !recovering_binding_death,
         nature_path: cli.nature_path.clone(),
@@ -649,19 +650,6 @@ async fn main() -> Result<()> {
         lifecycle_executor,
     );
     let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
-    let active_operator_count = operators
-        .list()
-        .filter(|(_, _, status, _)| *status == "active")
-        .count();
-    let pending_awakening_prompt = evolution
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
-        .pending_awakening_prompt();
-    if let Some(guidance) =
-        awakening_startup_guidance(pending_awakening_prompt.as_deref(), active_operator_count)
-    {
-        eprintln!("{guidance}");
-    }
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
@@ -1085,30 +1073,6 @@ fn token_observation_status(config: &BlockchainConfig) -> &'static str {
     } else {
         "enabled-hardfail"
     }
-}
-
-fn awakening_startup_guidance(
-    pending_prompt: Option<&str>,
-    active_operator_count: usize,
-) -> Option<String> {
-    let prompt = pending_prompt?;
-    let next_step = if active_operator_count == 0 {
-        "NO ACTIVE PRODUCTION OPERATOR IS CONFIGURED.\n\
-         STOP THIS NODE WITH CTRL-C, THEN RUN:\n\
-         ./uwu.sh operator add <ens-name-or-0x-address> --label Dean\n\
-         RESTART ./uwu.sh AND SEND ONE ACTION BELOW FROM THAT NEWLY AUTHORIZED XMTP INBOX."
-            .to_owned()
-    } else {
-        format!(
-            "{active_operator_count} ACTIVE PRODUCTION OPERATOR INBOX(ES) CONFIGURED.\n\
-             SEND /nature FROM ONE OF THOSE INBOXES TO REPEAT THIS SHEET, THEN SEND ONE ACTION BELOW."
-        )
-    };
-    Some(format!(
-        "\nUWUBOT NATURE ONBOARDING IS WAITING FOR AN AUTHENTICATED XMTP OPERATOR.\n\
-         THIS TERMINAL IS READ-ONLY FOR AWAKENING; REPLIES MUST ARRIVE OVER XMTP PRODUCTION.\n\n\
-         {next_step}\n\n{prompt}\n"
-    ))
 }
 
 async fn observe_node_economics(
@@ -1703,23 +1667,6 @@ mod tests {
                 command: OperatorCommand::Add { .. }
             })
         ));
-    }
-
-    #[test]
-    fn awakening_startup_guidance_explains_the_authenticated_production_path() {
-        assert!(awakening_startup_guidance(None, 0).is_none());
-
-        let unconfigured = awakening_startup_guidance(Some("NATURE SHEET"), 0).unwrap();
-        assert!(unconfigured.contains("NO ACTIVE PRODUCTION OPERATOR IS CONFIGURED"));
-        assert!(unconfigured.contains("./uwu.sh operator add"));
-        assert!(unconfigured.contains("XMTP PRODUCTION"));
-        assert!(unconfigured.contains("NATURE SHEET"));
-        assert!(!unconfigured.contains("--skip-awakening"));
-
-        let configured = awakening_startup_guidance(Some("NATURE SHEET"), 1).unwrap();
-        assert!(configured.contains("1 ACTIVE PRODUCTION OPERATOR INBOX(ES) CONFIGURED"));
-        assert!(configured.contains("SEND /nature"));
-        assert!(!configured.contains("operator add"));
     }
 
     #[test]

@@ -43,7 +43,7 @@ simulation joined a live Council.
 
 | Component | Status |
 |---|---|
-| Tentacle Nature and awakening audit | **Implemented — local**; HMAC-authenticated state and operator-gated state machine |
+| Tentacle Nature and activation audit | **Implemented — local**; HMAC-authenticated state with safe automatic defaults |
 | Scales, economics, and lineage | **Implemented — local core**; final judgments drive lifecycle intents and require configured external executors for external effects |
 | Hermes-inspired anti-entropy | **Implemented — local core and persistence**; no live transport or peer-key provisioning |
 | Council metrics/lineage publication | **Not connected**; no live Council interoperability claim |
@@ -86,10 +86,10 @@ committed, so local intents and core records must not be described as completed 
 - Structured, versioned Cthulhu personalities include deterministic Archivist, Hermit, Merchant,
   Wanderer, Oracle, and Trickster personas with different local policy positions without an LLM.
 - Each Tentacle also has a random, signed local Nature with seven bounded sliders and one Sacred Ban.
-  The local runtime gates first awakening to the authenticated XMTP operator lane before normal
-  work; a live ritual release exercise remains open. Confirmed Nature supplies bounded
-  response/resource policy and local relationship signals. Those relationship values remain local
-  and are omitted from profiles sent to remote models.
+  The local runtime accepts that Nature as a signed safe default on startup, so ordinary chat never
+  requires an operator. An optional authenticated operator can inspect or adjust it later. Nature
+  supplies bounded response/resource policy and local relationship signals. Those relationship
+  values remain local and are omitted from profiles sent to remote models.
 - The Scales core accumulates aggregate metrics, keeps open-period snapshots provisional, and makes
   final judgments binding. Public wallets remain entity-scoped tier/Engagement inputs, while the
   XMTP-derived treasury address plus fresh balance/stake observations and accepted reward/spend
@@ -208,23 +208,16 @@ Rust separately holds the owner-only `state/evolution-runtime.lock` as the singl
 Evolution state. Do not delete only the XMTP database: doing so creates a new installation and can
 eventually exhaust the inbox installation limit.
 
-### Nature and first awakening
+### Nature and activation
 
-On a fresh data directory, `uwubot` creates a random Nature and waits for an active XMTP operator to
-confirm it. While that epoch is pending, normal public conversation, contact mutation, model calls,
-and tools remain gated. The operator replies with exactly one of these actions:
+On a fresh data directory, `uwubot` creates a random Nature and immediately records a signed
+`ACCEPT DEFAULT NATURE` activation before opening ordinary conversation. A node left pending by an
+older release is migrated through the same audited transition on its next startup. No operator ACL
+is needed. Nature never authorizes tools, Council actions, or an operator role.
 
-```text
-YES
-ADJUST <trait> <delta>
-REROLL
-KILL
-```
-
-`KILL` records a terminal request for the epoch but does not stop the OS process. The audit journal
-records normalized actions and hashed XMTP event IDs rather than message bodies. Confirming or
-skipping the gate does not authorize a Council or enable public/operator tools beyond their existing
-role boundaries.
+An optional authenticated operator can inspect Nature with `/nature` and make a bounded
+post-activation adjustment with `/adjust <trait> <value>`. Local forced rerolls remain audited and
+the resulting Nature is accepted by the same safe default policy.
 
 Useful local options are:
 
@@ -240,18 +233,18 @@ Useful local options are:
 missing state or finish a safe crash recovery. It is not a read-only file inspector and cannot be
 combined with `--skip-awakening` or `--reroll-nature --force`.
 
-Use `--skip-awakening` only for tests or deliberate local bring-up; it creates a signed audit event
-that is visibly distinct from XMTP operator confirmation. A forced reroll creates a new immutable
-awakening epoch. `--gossip-peers` supplies bootstrap identifiers only: without an out-of-band trusted
-key binding and a live transport adapter, it does not connect to or authenticate those peers.
+Use `--skip-awakening` only for tests; it creates a signed testing event visibly distinct from the
+normal automatic default. A forced reroll creates a new immutable awakening epoch and normal startup
+accepts its generated Nature locally. `--gossip-peers` supplies bootstrap identifiers only: without
+an out-of-band trusted key binding and a live transport adapter, it does not connect to or
+authenticate those peers.
 `--nature-path` accepts only a non-empty relative path below
 `UWUBOT_DATA_DIR/state/natures/`; absolute paths and parent traversal are rejected. The default
 snapshot remains `state/nature.json`.
 
 Signed `POST_ADJUST` audit entries are the recovery source for the exact current-period stress
-counter if a crash separates the journal and metrics writes. An expired empty metrics period while
-awakening is pending is reset without a judgment, so late confirmation starts from the current
-period rather than evaluating gated time.
+counter if a crash separates the journal and metrics writes. An expired empty metrics period left
+pending by an older release is reset without a judgment before automatic activation.
 
 Each signed awakening entry includes both its resulting Nature and the exact immediate-predecessor
 Nature snapshot. Recovery accepts only the journal head or, for the final log-ahead crash window,
@@ -263,11 +256,11 @@ Nature exist; an established node with a lost Nature must restore a consistent b
 For an offline contact-flow harness:
 
 ```bash
-./uwu.sh --data-dir /tmp/cthuwu-harness --skip-awakening --stdin-inbox 012345abcdef
+./uwu.sh --data-dir /tmp/cthuwu-harness --stdin-inbox 012345abcdef
 ```
 
-Each input line is the next message from that test inbox. The explicit testing override is required
-because stdin cannot supply an authenticated operator awakening.
+Each input line is the next message from that test inbox. Nature activates with the same safe local
+default as a production node; the harness does not require or simulate an operator.
 
 The hidden stdin harness is deliberately public-only and available only in debug builds. It cannot
 simulate an operator or a production lifecycle supervisor, even when its inbox argument matches an
