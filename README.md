@@ -358,16 +358,21 @@ creator fees are LP/swap rewards rather than an ERC-20 fee-on-transfer.
 > that account away from unrelated credentials and data, and secure every XMTP installation attached
 > to the authorized inbox. See [the operator guide](docs/operator.md) before enabling this feature.
 
-Operator authorization is keyed by the canonical full 64-character XMTP inbox ID, not a wallet
-address, prefix, display name, or message claim. Stop the Tentacle, then authorize the inbox
-locally in the same data directory and XMTP environment it uses:
+Operator authorization is stored by canonical full 64-character XMTP inbox ID, not by a mutable
+name or message claim. `operator add` accepts an ENS `.eth` name or full Ethereum address, resolves
+ENS on Ethereum mainnet, looks up that address's inbox on the selected XMTP network, and pins the
+resolved inbox locally. Stop the Tentacle, then authorize it in the same data directory and XMTP
+environment it uses:
 
 ```bash
-./uwu.sh --xmtp-env production operator add <full-inbox-id> --label Dean
+./uwu.sh operator add dean.eth --label Dean
+# or: ./uwu.sh operator add 0x0123...abcd --label Dean
 ```
 
-The command writes an active ACL record and exits; there is no XMTP activation proof to copy. Restart
-the Tentacle and newly authored messages from that inbox enter the operator harness. ACL management
+The command fails without changing the ACL if the name has no Ethereum address or that address has
+no inbox on XMTP production. It otherwise writes an active ACL record and exits; there is no XMTP
+activation proof to copy. Restart the Tentacle and newly authored messages from that inbox enter the
+operator harness. ACL management
 is not hot-reloaded: stop the Tentacle before adding, listing, or revoking, then restart after a
 change.
 

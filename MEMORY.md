@@ -93,10 +93,12 @@ Last reviewed: 2026-08-09
 - UWU observance defaults on but remains inactive until a contract is configured. The sidecar
   resolves an optional EVM address from the SDK-authenticated XMTP sender inbox, and each Tentacle
   uses its own read-only Base-8453 `balanceOf` cache; message text cannot claim the observed wallet.
-- An exact canonical 64-character XMTP inbox becomes a remote node operator immediately through
-  local `uwubot operator add`; there is no XMTP activation proof. List and revoke roles locally while
-  the Tentacle is stopped; the ACL is loaded at startup and is not hot-reloaded. Stale messages and
-  revoked inboxes stay quarantined and do not create contacts.
+- Local `uwubot operator add` takes an ENS `.eth` name or full Ethereum address, resolves ENS on
+  Ethereum mainnet and the address on the explicitly selected XMTP network, then pins the exact
+  canonical 64-character inbox as a remote node operator. There is no XMTP activation proof and ENS
+  changes do not retarget a grant. List and revoke roles locally while the Tentacle is stopped; the
+  ACL is loaded at startup and is not hot-reloaded. Stale messages and revoked inboxes stay
+  quarantined and do not create contacts.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
   readable uwu voice. Each turn's prompt inventory is derived from its actual closed schema: bounded
   `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base; an explicit

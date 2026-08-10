@@ -99,6 +99,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.
+  - `operator add` accepts an ENS `.eth` name or full Ethereum address, resolves ENS on Ethereum
+    mainnet, and uses the pinned Node SDK to resolve the canonical inbox on the explicitly selected
+    XMTP network before the Rust ACL persists it.
   - `uwubot` supervises the pinned official `@xmtp/agent-sdk@2.3.0` transport as an implementation detail.
   - The transport atomically creates or loads a dedicated wallet key and encrypted XMTP database under `UWUBOT_DATA_DIR`.
   - Environment markers prevent silent development/production state reuse.
@@ -295,9 +298,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   explicitly privileged agentic harness without exposing those capabilities to public users or the
   Council.
 - **Properties**:
-  - Local `uwubot operator add` accepts only a canonical full 64-character XMTP inbox ID and creates
-    an active environment-specific version-3 record immediately. No XMTP activation proof is
-    required.
+  - Local `uwubot operator add` accepts an ENS `.eth` name or full Ethereum address and creates an
+    active environment-specific version-3 record for the canonical XMTP inbox it resolves. A missing
+    ENS address or missing inbox fails closed. No XMTP activation proof is required, and later ENS
+    changes do not retarget an existing grant.
   - Adding or re-adding an inbox advances its generation and records the local grant time as its
     authorization boundary. Messages authored at or before that boundary cannot use tools.
   - Rust classifies the Agent SDK-authenticated `senderInboxId` and `sentAtNs` before deduplication,

@@ -50,7 +50,7 @@ use inference::{
 use model::Model;
 use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
-use sidecar::{resolve_xmtp_wallet_address, run_xmtp_sidecar};
+use sidecar::{resolve_operator_inbox, resolve_xmtp_wallet_address, run_xmtp_sidecar};
 use std::{
     collections::BTreeSet,
     env,
@@ -310,10 +310,10 @@ enum CliCommand {
 
 #[derive(Debug, Subcommand)]
 enum OperatorCommand {
-    /// Authorize an operator inbox immediately using a local timestamp fence.
+    /// Resolve an ENS name or Ethereum address and authorize its XMTP inbox.
     Add {
-        /// Full XMTP inbox ID. Wallet addresses, prefixes, and display names are not accepted.
-        inbox_id: String,
+        /// An ENS .eth name or full 0x Ethereum address.
+        identity: String,
         #[arg(long, default_value = "operator")]
         label: String,
     },
@@ -531,7 +531,14 @@ async fn main() -> Result<()> {
         .with_context(|| format!("resolving data directory {}", cli.data_dir.display()))?;
     if let Some(command) = cli.command.take() {
         let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
-        return run_management_command(operators, command);
+        return run_management_command(
+            operators,
+            command,
+            &cli.node,
+            &cli.sidecar,
+            cli.xmtp_env.as_str(),
+        )
+        .await;
     }
     if cli.council_simulate {
         let report = run_deterministic_simulation(&cli.data_dir)
@@ -1088,7 +1095,7 @@ fn awakening_startup_guidance(
     let next_step = if active_operator_count == 0 {
         "NO ACTIVE PRODUCTION OPERATOR IS CONFIGURED.\n\
          STOP THIS NODE WITH CTRL-C, THEN RUN:\n\
-         ./uwu.sh operator add <full-64-character-xmtp-inbox-id> --label Dean\n\
+         ./uwu.sh operator add <ens-name-or-0x-address> --label Dean\n\
          RESTART ./uwu.sh AND SEND ONE ACTION BELOW FROM THAT NEWLY AUTHORIZED XMTP INBOX."
             .to_owned()
     } else {
@@ -1489,11 +1496,22 @@ fn build_inference_config(
     })
 }
 
-fn run_management_command(mut operators: OperatorStore, command: CliCommand) -> Result<()> {
+async fn run_management_command(
+    mut operators: OperatorStore,
+    command: CliCommand,
+    node: &Path,
+    sidecar: &Path,
+    xmtp_environment: &str,
+) -> Result<()> {
     match command {
         CliCommand::Operator { command } => match command {
-            OperatorCommand::Add { inbox_id, label } => {
+            OperatorCommand::Add { identity, label } => {
+                let (address, inbox_id) =
+                    resolve_operator_inbox(node, sidecar, &identity, xmtp_environment)
+                        .await
+                        .context("resolving the operator's canonical XMTP inbox")?;
                 let authorized = operators.add(&inbox_id, &label)?;
+                println!("resolved operator address: {address}");
                 println!("active operator: {}", authorized.inbox_id);
                 println!("generation: {}", authorized.generation);
                 println!(
@@ -1676,15 +1694,9 @@ mod tests {
 
     #[test]
     fn parses_local_operator_management_without_changing_default_runtime() {
-        let parsed = Cli::try_parse_from([
-            "uwubot",
-            "operator",
-            "add",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--label",
-            "Dean",
-        ])
-        .unwrap();
+        let parsed =
+            Cli::try_parse_from(["uwubot", "operator", "add", "dean.eth", "--label", "Dean"])
+                .unwrap();
         assert!(matches!(
             parsed.command,
             Some(CliCommand::Operator {

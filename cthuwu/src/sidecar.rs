@@ -59,6 +59,19 @@ struct XmtpIdentityFrame {
     wallet_address: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum OperatorIdentityFrame {
+    OperatorIdentity {
+        address: String,
+        #[serde(rename = "inboxId")]
+        inbox_id: String,
+    },
+    OperatorIdentityError {
+        message: String,
+    },
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SidecarResponse {
@@ -145,6 +158,95 @@ pub async fn resolve_xmtp_wallet_address(
         bail!("XMTP identity helper derived the zero address");
     }
     Ok(address)
+}
+
+/// Resolves an ENS name or Ethereum address through Ethereum mainnet and the selected XMTP network.
+/// Only the canonical address and inbox ID cross the short-lived helper boundary.
+pub async fn resolve_operator_inbox(
+    node: &Path,
+    sidecar: &Path,
+    operator_identity: &str,
+    xmtp_environment: &str,
+) -> Result<(Address, String)> {
+    if !sidecar.is_file() {
+        bail!(
+            "XMTP transport {} is missing; run `npm ci && npm run build` in agent/ or set UWUBOT_SIDECAR",
+            sidecar.display()
+        );
+    }
+
+    let mut command = Command::new(node);
+    command
+        .arg(sidecar)
+        .arg("--resolve-operator-inbox")
+        .arg(operator_identity)
+        .env_clear()
+        .env("XMTP_ENV", xmtp_environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    copy_network_environment(&mut command);
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("resolving operator identity with {}", node.display()))?;
+    #[cfg(unix)]
+    let _process_group = ProcessGroupGuard::new(child.id());
+    let stdout = child
+        .stdout
+        .take()
+        .context("operator identity helper stdout was not piped")?;
+    let mut stdout = BufReader::new(stdout);
+    let (line, trailing, status) = timeout(Duration::from_secs(30), async {
+        let line = read_sidecar_frame(&mut stdout).await?;
+        let trailing = read_sidecar_frame(&mut stdout).await?;
+        let status = child
+            .wait()
+            .await
+            .context("waiting for operator identity helper")?;
+        Ok::<_, anyhow::Error>((line, trailing, status))
+    })
+    .await
+    .context("operator identity resolution timed out")??;
+    if !status.success() {
+        bail!("operator identity helper exited with {status}");
+    }
+    if trailing.is_some() {
+        bail!("operator identity helper emitted more than one protocol frame");
+    }
+    let line = line.context("operator identity helper exited without a result")?;
+    if line.is_empty() {
+        bail!("operator identity helper emitted an oversized result frame");
+    }
+    let frame: OperatorIdentityFrame =
+        serde_json::from_str(&line).context("operator identity helper emitted malformed JSON")?;
+    let (address, inbox_id) = match frame {
+        OperatorIdentityFrame::OperatorIdentity { address, inbox_id } => (address, inbox_id),
+        OperatorIdentityFrame::OperatorIdentityError { message } => {
+            if message.is_empty() || message.len() > 512 || message.contains(['\r', '\n']) {
+                bail!("operator identity helper emitted an invalid error");
+            }
+            bail!("{message}");
+        }
+    };
+    let address: Address = address
+        .parse()
+        .context("operator identity helper emitted an invalid EVM address")?;
+    if address == Address::ZERO {
+        bail!("operator identity helper resolved the zero address");
+    }
+    let inbox_id = normalize_inbox_id(&inbox_id)
+        .context("operator identity helper emitted an invalid XMTP inbox ID")?;
+    if inbox_id.len() != 64 {
+        bail!("operator identity helper did not emit a full XMTP inbox ID");
+    }
+    Ok((address, inbox_id))
 }
 
 pub async fn run_xmtp_sidecar(
@@ -608,6 +710,21 @@ async fn shutdown_signal() -> Result<()> {
 fn copy_transport_environment(command: &mut Command) {
     // Model credentials and other application secrets intentionally do not cross the transport
     // boundary. These are the only inherited values the Node/XMTP process may need.
+    copy_network_environment(command);
+    for name in [
+        "XMTP_WALLET_KEY",
+        "XMTP_DB_ENCRYPTION_KEY",
+        "XMTP_DB_DIRECTORY",
+        "XMTP_GATEWAY_HOST",
+        "UWUBOT_REPLY_TIMEOUT_MS",
+    ] {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+}
+
+fn copy_network_environment(command: &mut Command) {
     for name in [
         "PATH",
         "LD_LIBRARY_PATH",
@@ -623,11 +740,6 @@ fn copy_transport_environment(command: &mut Command) {
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "NODE_EXTRA_CA_CERTS",
-        "XMTP_WALLET_KEY",
-        "XMTP_DB_ENCRYPTION_KEY",
-        "XMTP_DB_DIRECTORY",
-        "XMTP_GATEWAY_HOST",
-        "UWUBOT_REPLY_TIMEOUT_MS",
     ] {
         if let Some(value) = env::var_os(name) {
             command.env(name, value);
@@ -710,6 +822,35 @@ printf '%s\n' '{"type":"xmtp_identity","walletAddress":"0x4200000000000000000000
                 .parse()
                 .unwrap()
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn operator_identity_helper_returns_only_a_valid_address_and_full_inbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let helper = directory.path().join("operator-helper.sh");
+        std::fs::write(
+            &helper,
+            r#"#!/bin/sh
+test "$1" = "--resolve-operator-inbox" || exit 2
+test "$2" = "dean.eth" || exit 3
+test "$XMTP_ENV" = "production" || exit 4
+printf '%s\n' '{"type":"operator_identity","address":"0x4200000000000000000000000000000000000006","inboxId":"abababababababababababababababababababababababababababababababab"}'
+"#,
+        )
+        .unwrap();
+
+        let (address, inbox_id) =
+            resolve_operator_inbox(Path::new("/bin/sh"), &helper, "dean.eth", "production")
+                .await
+                .unwrap();
+        assert_eq!(
+            address,
+            "0x4200000000000000000000000000000000000006"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(inbox_id, "ab".repeat(32));
     }
 
     #[cfg(unix)]

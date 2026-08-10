@@ -47,12 +47,17 @@ Tentacle before changing it; the safe launcher also prevents concurrent mutation
 directory. Its intro node normally uses:
 
 ```bash
-./uwu.sh --xmtp-env production operator add <full-xmtp-inbox-id> --label Dean
+./uwu.sh operator add dean.eth --label Dean
+# or: ./uwu.sh operator add 0x0123...abcd --label Dean
 ```
 
-The command does not start XMTP. It writes an `active` ACL record, records the local authorization
-time, and exits. Restart the Tentacle; newly authored messages cryptographically sent from that exact
-inbox may use the operator harness immediately. There is no activation message to copy.
+The command does not start the XMTP message transport. It resolves an ENS `.eth` name on Ethereum
+mainnet when needed, looks up the address's canonical inbox on XMTP production, then writes that
+inbox to an `active` ACL record with the local authorization time. A missing ENS address or missing
+production inbox fails without changing the ACL. Restart the Tentacle; newly authored messages
+cryptographically sent from that exact inbox may use the operator harness immediately. There is no
+activation message to copy. ENS is resolved only when `add` runs; later ENS changes do not silently
+move operator authority.
 
 Running `add` again advances the role generation and replaces the authorization boundary. Messages
 authored at or before the boundary get a fixed stale-message response, never reach public chat or a

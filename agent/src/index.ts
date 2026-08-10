@@ -1,5 +1,6 @@
 import type { LogLevel } from "@xmtp/agent-sdk";
 import { prepareAgentEnvironment } from "./identity.js";
+import { resolveOperatorIdentity } from "./operator-identity.js";
 import { JsonlBridge, parseTimeout } from "./protocol.js";
 
 const MAX_INBOUND_TEXT_BYTES = 16 * 1024;
@@ -41,6 +42,33 @@ function startupFailure(error: unknown): string {
 
 async function main(): Promise<void> {
   isolateProtocolOutput();
+  const resolveOperatorIndex = process.argv.indexOf("--resolve-operator-inbox");
+  if (resolveOperatorIndex !== -1) {
+    const operatorIdentity = process.argv[resolveOperatorIndex + 1];
+    if (operatorIdentity === undefined) {
+      throw new Error("--resolve-operator-inbox requires an ENS name or Ethereum address");
+    }
+    const environment = process.env.XMTP_ENV;
+    if (environment !== "production" && environment !== "dev" && environment !== "local") {
+      throw new Error("XMTP_ENV must be production, dev, or local");
+    }
+    try {
+      const resolved = await resolveOperatorIdentity(operatorIdentity, environment);
+      process.stdout.write(
+        `${JSON.stringify({ type: "operator_identity", ...resolved })}\n`,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "operator identity resolution failed";
+      process.stdout.write(
+        `${JSON.stringify({
+          type: "operator_identity_error",
+          message: message.replace(/[\r\n]+/gu, " ").slice(0, 512),
+        })}\n`,
+      );
+    }
+    return;
+  }
   const identity = await prepareAgentEnvironment();
   if (process.argv.includes("--print-xmtp-wallet-address")) {
     process.stdout.write(
