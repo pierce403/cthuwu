@@ -164,7 +164,7 @@ UWUBOT_XMTP_ENV=production ./uwu.sh
 ./uwu.sh --data-dir /secure/path/cthuwu-dev --xmtp-env dev
 ```
 
-The launcher must run as a dedicated unprivileged account. It accepts a new or empty data directory, or an existing Cthuwu directory for the selected environment; it rejects broad unrelated directories, paths overlapping the repository, and symlink redirection before changing permissions. It also rejects model credentials on the command line. Set credentials only in the environment. It strips model and identity secrets from dependency and compiler subprocesses; the final Rust process still enforces the narrower XMTP-sidecar environment allowlist. `XMTP_DB_DIRECTORY` is intentionally unsupported by this safe launcher so the database cannot escape the validated data root; transport developers can invoke the built binary directly when testing that low-level override.
+The launcher must run as a dedicated unprivileged account. It accepts a new or empty data directory, or an existing Cthuwu directory for the selected environment; it rejects broad unrelated directories, paths overlapping the repository, and symlink redirection before changing permissions. It also rejects model credentials on the command line. Host-supplied credentials belong in the environment; a missing Venice key may instead enter through the bounded XMTP provisioning flow documented below. The launcher strips model and identity secrets from dependency and compiler subprocesses; the final Rust process still enforces the narrower XMTP-sidecar environment allowlist. `XMTP_DB_DIRECTORY` is intentionally unsupported by this safe launcher so the database cannot escape the validated data root; transport developers can invoke the built binary directly when testing that low-level override.
 
 The first successful connection logs the Tentacle's public Ethereum address without logging its
 keys. The website always uses XMTP `production` and currently uses
@@ -544,9 +544,19 @@ adapter work.
 
 ## Model modes
 
-The compiled preference is Venice's TEE-backed DeepSeek V4 Flash model. Configure either
-`VENICE_API_KEY` or `UWUBOT_VENICE_API_KEY` in the runtime environment. The optional Venice timeout
-is a 1–300 second cap for operator routes and defaults to 120 seconds:
+The compiled preference is Venice's TEE-backed DeepSeek V4 Flash model. A host may configure either
+`VENICE_API_KEY` or `UWUBOT_VENICE_API_KEY` in the runtime environment. If neither exists, Cthuwu
+asks an authenticated acolyte to send `/venice-key <api-key>`. The first candidate is stored in
+owner-only `state/venice.key`, validated against the live Venice catalog and a fresh TEE attestation,
+and selected without restarting; only an active operator may replace it. Cthuwu never echoes the
+secret, but the command remains in XMTP history, so provision a dedicated revocable key.
+
+If the Tentacle has enough freshly observed treasury UWU, a validated acolyte key queues a reward to
+the SDK-authenticated sender address. The default is 1 whole UWU and
+`CTHUWU_VENICE_KEY_REWARD_WHOLE` changes it. A queued intent is not a payment: the separately
+configured lifecycle executor must return an exact confirmed Base transfer receipt.
+
+The optional Venice timeout is a 1–300 second cap for operator routes and defaults to 120 seconds:
 
 ```bash
 VENICE_API_KEY='...' \

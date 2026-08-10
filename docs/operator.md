@@ -180,6 +180,7 @@ An active operator can send:
 /qmd <semantic query>
 /provider [venice|ollama|openai|deterministic]
 /model [list|<model-id>]
+/venice-key [status|<api-key>]
 /users [limit]
 /users {"limit":20,"cursor":20}
 /user <full-xmtp-inbox-id>
@@ -192,12 +193,21 @@ bounded dispatcher as model tools. `/write` and `/edit` are parsed only as exact
 `/exec` remains the exact direct execution form; natural-language execution is separately and more
 narrowly authorized as described below.
 
-`/provider` and `/model` are runtime control commands, not model tools. They select only locally
-preconfigured providers and bounded model IDs; XMTP cannot supply an endpoint or credential. The
-selection is node-wide, persists without secrets in owner-only `state/inference.json`, and applies
+`/provider`, `/model`, and `/venice-key` are runtime control commands, not model tools. The first two
+select the closed provider set and bounded model IDs. `/venice-key` stores or replaces the Venice
+credential without echoing it. Provider/model selection persists without secrets in owner-only
+`state/inference.json`; the key is isolated in owner-only `state/venice.key`. The selection applies
 to subsequent public and operator inference. A changed route clears all bounded in-process operator
 dialogue history so context gathered under a local route is not silently replayed to a newly selected
 remote route.
+
+When no key exists, an ordinary authenticated acolyte may also send `/venice-key <api-key>`. Public
+provisioning is first-key-only: it cannot replace an existing credential. The candidate must
+authenticate against Venice's live model catalog and pass a fresh TEE attestation before it is
+accepted for reward. The secret remains in the XMTP conversation history even though Cthuwu never
+echoes or logs it, so use a dedicated revocable Venice key. If the freshly observed treasury can
+cover the configured reward, Rust queues an exact transfer to the SDK-authenticated sender address;
+only a matching confirmed executor receipt proves payment.
 
 With an effective provider that supports standard function calling, every ordinary-language turn
 receives an authoritative prompt inventory generated from the same closed schema supplied to the

@@ -112,6 +112,14 @@ pub struct ExactTokenAmount {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WholeTokenAmount {
+    pub whole_tokens: u64,
+    pub token_decimals: u8,
+    pub raw_amount: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAction {
     SpendForSurvival {
@@ -126,6 +134,16 @@ pub enum LifecycleAction {
         burn_destination: [u8; 20],
         configuration_identity: [u8; 32],
         exact_amount: ExactTokenAmount,
+    },
+    RewardVeniceKey {
+        tentacle_id: String,
+        provision_event_id_sha256: String,
+        chain_id: u64,
+        token_contract: [u8; 20],
+        treasury_address: [u8; 20],
+        acolyte_address: [u8; 20],
+        configuration_identity: [u8; 32],
+        exact_amount: WholeTokenAmount,
     },
     Absorb {
         source_id: String,
@@ -176,7 +194,23 @@ pub struct LifecycleReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmed_chain_receipt: Option<ConfirmedChainReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_transfer_receipt: Option<ConfirmedTransferReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provision_receipt: Option<ProvisionReceipt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfirmedTransferReceipt {
+    pub chain_id: u64,
+    pub transaction_hash: String,
+    pub block_number: u64,
+    pub block_timestamp_unix_seconds: u64,
+    pub token_contract: [u8; 20],
+    pub from_address: [u8; 20],
+    pub to_address: [u8; 20],
+    pub configuration_identity: [u8; 32],
+    pub exact_amount: WholeTokenAmount,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1022,7 +1056,7 @@ impl LifecycleState {
             }
         }
         let mut receipt_ids = BTreeSet::new();
-        let mut consumed_survival_transactions = BTreeSet::new();
+        let mut consumed_token_transactions = BTreeSet::new();
         for receipt in &self.receipts {
             validate_sha256(&receipt.action_id, "lifecycle receipt action ID")?;
             let intent = self.intents.get(&receipt.action_id).ok_or_else(|| {
@@ -1042,9 +1076,24 @@ impl LifecycleState {
                     .as_ref()
                     .expect("successful survival receipt was validated above")
                     .transaction_hash;
-                if !consumed_survival_transactions.insert(transaction_hash) {
+                if !consumed_token_transactions.insert(transaction_hash) {
                     return Err(EvolutionError::Invalid(
                         "survival transaction is consumed by more than one death".to_owned(),
+                    ));
+                }
+            }
+            if receipt.status == LifecycleReceiptStatus::Succeeded
+                && matches!(intent.action, LifecycleAction::RewardVeniceKey { .. })
+            {
+                let transaction_hash = &receipt
+                    .confirmed_transfer_receipt
+                    .as_ref()
+                    .expect("successful key-reward receipt was validated above")
+                    .transaction_hash;
+                if !consumed_token_transactions.insert(transaction_hash) {
+                    return Err(EvolutionError::Invalid(
+                        "one token transaction cannot satisfy more than one lifecycle action"
+                            .to_owned(),
                     ));
                 }
             }
@@ -1176,6 +1225,19 @@ impl LifecycleState {
         self.auto_spawn_enabled = enabled;
         self.bump_revision()?;
         Ok(true)
+    }
+
+    pub fn enqueue_venice_key_reward(
+        &mut self,
+        created_at_ms: u64,
+        action: LifecycleAction,
+    ) -> Result<LifecycleIntent, EvolutionError> {
+        if !matches!(action, LifecycleAction::RewardVeniceKey { .. }) {
+            return Err(EvolutionError::Invalid(
+                "Venice-key reward enqueue requires its exact action type".to_owned(),
+            ));
+        }
+        Ok(self.insert_intent(created_at_ms, action)?.clone())
     }
 
     pub fn death_pending(&self) -> bool {
@@ -1477,6 +1539,9 @@ impl LifecycleState {
                 }
                 match &intent.action {
                     LifecycleAction::Spawn { .. } if self.pending_death.is_some() => false,
+                    LifecycleAction::RewardVeniceKey { .. } if self.pending_death.is_some() => {
+                        false
+                    }
                     LifecycleAction::Shutdown {
                         after_action_id: Some(dependency),
                         ..
@@ -1493,7 +1558,8 @@ impl LifecycleState {
                         LifecycleAction::Absorb { .. } => 0_u8,
                         LifecycleAction::Shutdown { .. } => 1,
                         LifecycleAction::SpendForSurvival { .. } => 2,
-                        LifecycleAction::Spawn { .. } => 3,
+                        LifecycleAction::RewardVeniceKey { .. } => 3,
+                        LifecycleAction::Spawn { .. } => 4,
                     },
                     intent.created_at_ms,
                 )
@@ -1748,6 +1814,7 @@ impl LifecycleState {
                                 })
                         }
                         LifecycleAction::Spawn { .. } => false,
+                        LifecycleAction::RewardVeniceKey { .. } => false,
                     };
                     (same_death
                         && related.action_id != intent.action_id
@@ -1877,6 +1944,35 @@ fn validate_lifecycle_action(action: &LifecycleAction) -> Result<(), EvolutionEr
                 ));
             }
         }
+        LifecycleAction::RewardVeniceKey {
+            tentacle_id,
+            provision_event_id_sha256,
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+        } => {
+            validate_id(tentacle_id, "Venice-key reward Tentacle ID")?;
+            validate_sha256(
+                provision_event_id_sha256,
+                "Venice-key provision event ID digest",
+            )?;
+            if *chain_id != 8_453
+                || *token_contract == [0; 20]
+                || *treasury_address == [0; 20]
+                || *acolyte_address == [0; 20]
+                || treasury_address == acolyte_address
+                || *configuration_identity == [0; 32]
+            {
+                return Err(EvolutionError::Invalid(
+                    "Venice-key reward is missing its exact Base token, treasury, acolyte, or configuration binding"
+                        .to_owned(),
+                ));
+            }
+            validate_whole_token_amount(exact_amount)?;
+        }
         LifecycleAction::Absorb {
             source_id,
             target_id,
@@ -1945,6 +2041,9 @@ fn validate_lifecycle_receipt(
     if let Some(chain_receipt) = &receipt.confirmed_chain_receipt {
         validate_chain_receipt(chain_receipt)?;
     }
+    if let Some(transfer_receipt) = &receipt.confirmed_transfer_receipt {
+        validate_transfer_receipt(transfer_receipt)?;
+    }
     if let Some(provision_receipt) = &receipt.provision_receipt {
         validate_provision_receipt(provision_receipt)?;
     }
@@ -1981,6 +2080,34 @@ fn validate_lifecycle_receipt(
             {
                 return Err(EvolutionError::Invalid(
                     "survival receipt does not match the exact burn action".to_owned(),
+                ));
+            }
+        }
+        LifecycleAction::RewardVeniceKey {
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+            ..
+        } => {
+            let confirmed = receipt.confirmed_transfer_receipt.as_ref().ok_or_else(|| {
+                EvolutionError::Invalid(
+                    "successful Venice-key reward lacks confirmed transfer evidence".to_owned(),
+                )
+            })?;
+            if confirmed.chain_id != *chain_id
+                || confirmed.token_contract != *token_contract
+                || confirmed.from_address != *treasury_address
+                || confirmed.to_address != *acolyte_address
+                || confirmed.configuration_identity != *configuration_identity
+                || confirmed.exact_amount != *exact_amount
+                || confirmed.block_timestamp_unix_seconds.saturating_mul(1_000)
+                    < intent.created_at_ms
+            {
+                return Err(EvolutionError::Invalid(
+                    "Venice-key reward receipt does not match the exact transfer action".to_owned(),
                 ));
             }
         }
@@ -2023,7 +2150,7 @@ fn validate_lifecycle_receipt(
     Ok(())
 }
 
-fn lifecycle_action_id(action: &LifecycleAction) -> Result<String, EvolutionError> {
+pub(crate) fn lifecycle_action_id(action: &LifecycleAction) -> Result<String, EvolutionError> {
     let canonical = serde_json::to_vec(action)?;
     let mut digest = Sha256::new();
     digest.update(b"cthuwu-lifecycle-action-v1\0");
@@ -2076,6 +2203,70 @@ fn validate_chain_receipt(receipt: &ConfirmedChainReceipt) -> Result<(), Evoluti
     }
     validate_exact_token_amount(&receipt.exact_amount)?;
     Ok(())
+}
+
+fn validate_transfer_receipt(receipt: &ConfirmedTransferReceipt) -> Result<(), EvolutionError> {
+    if receipt.chain_id != 8_453
+        || receipt.block_number == 0
+        || receipt.block_timestamp_unix_seconds == 0
+        || receipt.token_contract == [0; 20]
+        || receipt.from_address == [0; 20]
+        || receipt.to_address == [0; 20]
+        || receipt.from_address == receipt.to_address
+        || receipt.configuration_identity == [0; 32]
+    {
+        return Err(EvolutionError::Invalid(
+            "confirmed Venice-key reward receipt has invalid chain, token, address, block, or configuration binding"
+                .to_owned(),
+        ));
+    }
+    let hash = receipt.transaction_hash.as_bytes();
+    if hash.len() != 66
+        || &hash[..2] != b"0x"
+        || !hash[2..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(EvolutionError::Invalid(
+            "confirmed transfer hash must be lowercase 0x-prefixed 32-byte hex".to_owned(),
+        ));
+    }
+    validate_whole_token_amount(&receipt.exact_amount)
+}
+
+fn validate_whole_token_amount(amount: &WholeTokenAmount) -> Result<(), EvolutionError> {
+    if amount.whole_tokens == 0 || amount.token_decimals > 77 {
+        return Err(EvolutionError::Invalid(
+            "whole-token transfer amount requires positive units and decimals <= 77".to_owned(),
+        ));
+    }
+    if amount.raw_amount != exact_whole_token_amount(amount.whole_tokens, amount.token_decimals)? {
+        return Err(EvolutionError::Invalid(
+            "whole-token transfer amount does not match its canonical base-unit formula".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn exact_whole_token_amount(
+    whole_tokens: u64,
+    token_decimals: u8,
+) -> Result<String, EvolutionError> {
+    if whole_tokens == 0 || token_decimals > 77 {
+        return Err(EvolutionError::Invalid(
+            "whole-token amount requires positive units and decimals <= 77".to_owned(),
+        ));
+    }
+    let mut raw = whole_tokens.to_string();
+    raw.extend(std::iter::repeat_n('0', usize::from(token_decimals)));
+    const U256_MAX_DECIMAL: &str =
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    if raw.len() > U256_MAX_DECIMAL.len()
+        || (raw.len() == U256_MAX_DECIMAL.len() && raw.as_str() > U256_MAX_DECIMAL)
+    {
+        return Err(EvolutionError::Limit("whole-token transfer amount"));
+    }
+    Ok(raw)
 }
 
 fn validate_exact_token_amount(amount: &ExactTokenAmount) -> Result<(), EvolutionError> {
@@ -2939,6 +3130,7 @@ mod tests {
                 external_reference: None,
                 detail: Some("transfer attempt failed".to_owned()),
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -2955,6 +3147,7 @@ mod tests {
             external_reference: Some("process-controller-ack".to_owned()),
             detail: None,
             confirmed_chain_receipt: None,
+            confirmed_transfer_receipt: None,
             provision_receipt: None,
         };
         assert!(state.acknowledge_action(receipt.clone()).unwrap().1);
@@ -2988,6 +3181,7 @@ mod tests {
                 exact_amount: survival_binding().exact_amount,
                 operation: TokenSpendOperation::Burn,
             }),
+            confirmed_transfer_receipt: None,
             provision_receipt: None,
         };
         state.acknowledge_action(receipt).unwrap();
@@ -3026,6 +3220,7 @@ mod tests {
                 exact_amount: survival_binding().exact_amount,
                 operation: TokenSpendOperation::Burn,
             }),
+            confirmed_transfer_receipt: None,
             provision_receipt: None,
         };
         assert!(state.acknowledge_action(first_receipt.clone()).is_err());

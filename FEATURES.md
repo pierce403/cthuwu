@@ -242,6 +242,15 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     recognizable all-caps theatrical voice to retain light readable uwu touches.
   - The compiled preference is Venice `e2ee-deepseek-v4-flash` in TEE-only mode; a configured Venice
     credential is the explicit opt-in that permits remote prompt egress.
+  - If no Venice credential exists, public conversation asks the authenticated acolyte for
+    `/venice-key <api-key>`. The first candidate persists in owner-only `state/venice.key`, is never
+    echoed or logged, and is removed if live catalog authentication or fresh TEE attestation fails.
+    Public senders cannot replace an existing key; an active operator can.
+  - A successfully validated first acolyte key selects Venice and, when the freshly observed
+    Tentacle treasury holds enough UWU, creates one durable reward transfer bound to the XMTP
+    provision message and authenticated sender address. The default is 1 whole UWU and
+    `CTHUWU_VENICE_KEY_REWARD_WHOLE` configures it. Intent creation is not payment: only the
+    configured lifecycle executor and an exact confirmed Base transfer receipt complete it.
   - Before Venice first receives prompt content, the runtime requires the exact live model to
     advertise text, TEE-attestation, and function-calling capabilities and performs a fresh
     nonce/model-bound baseline attestation. Capability validation is cached independently for four
@@ -254,7 +263,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     inference failures fall back to credential-free loopback Ollama and then deterministic behavior.
     A locally selected provider never falls forward to a remote provider.
   - Authenticated direct `/provider` and `/model` commands switch the node-wide route using only a
-    closed provider set and bounded model IDs. Only names persist; credentials and endpoints do not.
+    closed provider set and bounded model IDs. Provider/model names persist in
+    `state/inference.json`; the separately bounded Venice secret persists only in owner-only
+    `state/venice.key`.
   - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code
     changes. Loopback clients bypass ambient proxy settings. Ollama's configured timeout is bounded,
     and routed local model phases have a 75-second safety cap so a larger setting cannot consume the
@@ -274,6 +285,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     egress, disables Venice's supplemental system prompt, and does not claim full E2EE.
   - [x] Operator-only provider/model switching is bounded, persisted without secrets, denied to
     public users, and clears in-process operator history after a route change.
+  - [x] Tests prove missing-key prompting, public first-key hot-load, owner-only secret persistence,
+    non-echo, restart recovery, operator-only replacement, and exact authenticated reward receipts.
   - [x] Remote failure falls through loopback Ollama to deterministic local behavior without a
     local-to-remote fallback path.
   - [x] Tests cover public/operator remote budgets, the local fallback reserve, budget skips without
@@ -632,7 +645,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Normal startup derives the XMTP treasury address and validates token configuration and initial
     economics before any Evolution state mutation. A configured lifecycle executor is validated
     before use, but it is optional: without one, ordinary XMTP operation continues while external
-    spend, spawn, and absorption intents remain pending. Native fixed-deadline Shutdown remains
+    spend, spawn, absorption, and Venice-key reward intents remain pending. Native fixed-deadline Shutdown remains
     authoritative. Pre-confirmation economics are not persisted as Scales observations; startup
     repairs the historical token-only pre-awakening seed, while refusing any pre-awakening state
     that also contains behavioral observations. The only outage exception is read-only inspection
@@ -642,6 +655,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - The revenue-split core calculates configurable shares, defaulting to 15% parent Tentacle, 10%
     operating acolyte, 5% recruiter, and 70% earning Tentacle. No authenticated revenue source or
     payout executor is committed, so this does not claim a live payment.
+  - Validated acolyte Venice-key provisioning is a separate authenticated earning event. A funded
+    Tentacle creates a fixed whole-UWU transfer intent for the sender; it remains unpaid until the
+    lifecycle executor returns an exact matching confirmed Base receipt.
 - **Test Criteria**:
   - [x] Tests cover normalized Nature weights, metric updates, wealth, thresholds,
     provisional-versus-final evaluation, stress penalties, and randomized valid inputs.
@@ -731,6 +747,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     `--token-tier-intensity`, `--token-decimals`, and `--token-total-supply` have corresponding
     `CTHUWU_*` environment variables. RPC endpoint values are hidden/sanitized because provider URLs
     may contain credentials. The RPC, contract, decimals, and supply default to the live deployment.
+    `CTHUWU_VENICE_KEY_REWARD_WHOLE` sets the whole-token key reward and defaults to 1.
   - The contract must be a nonzero valid address. The RPC adapter revalidates Base chain ID before
     each balance call and may use a per-holder outage backoff. Backoff cannot convert missing
     evidence into permission or add a delay once required economic evidence is fresh. It currently

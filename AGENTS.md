@@ -18,7 +18,8 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
   credentials never enter Council messages.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
   state; public, stale, revoked, and active operator paths must not fall through into one another.
-- Keep public conversation casual and command-free in presentation. Cthuwu must identify as Cthuwu,
+- Keep public conversation casual and command-free in presentation except for the narrowly scoped
+  `/venice-key <api-key>` request while no Venice credential exists. Cthuwu must identify as Cthuwu,
   use readable uwu speech, answer the person's request before optional onboarding, and describe
   privacy controls in ordinary language.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
@@ -78,8 +79,8 @@ interoperability.
 - Use a dedicated, minimally funded bot identity.
 - Store persistent secrets outside the repository with restrictive filesystem permissions.
 - Make production and development XMTP environments explicit; never silently cross them.
-- Do not send inbound message text to a remote model provider unless the node operator explicitly
-  enabled it with a runtime credential or selected it through authenticated model control.
+- Do not send inbound message text to a remote model provider unless a host credential or a Venice
+  credential authenticated through the acolyte provisioning flow enabled it.
 - Bound message size, transport concurrency, response size, and model/tool execution time for
   resource integrity. Do not reuse them as active child/spawn/lineage economic quotas, and do not
   present the dormant Council/Hermes bounds as an end-to-end capacity claim.
@@ -117,7 +118,10 @@ interoperability.
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
   must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
-  content/model/tool dispatch. Node must check the 16 KiB UTF-8 input bound without placing
+  content/model/tool dispatch. The sole public control-plane exception is `/venice-key <api-key>`:
+  accept only the first missing credential, never echo or log it, persist it owner-only outside the
+  workspace, validate it against Venice before reward, and leave replacement to an active operator.
+  Node must check the 16 KiB UTF-8 input bound without placing
   oversized content in JSONL: `reject_oversized` carries metadata plus an empty `text`, and Rust must
   validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
   Never open a contact or dispatch a model/tool on that path. Retry requires a new XMTP message,
@@ -168,6 +172,10 @@ interoperability.
   consume a payout receipt exactly once. No authenticated revenue source or payout executor is
   committed, so never claim the local split core paid anyone. UWU holdings and stake determine
   governance weight.
+- A successfully validated first Venice key from an authenticated XMTP sender may enqueue the
+  configured whole-UWU reward only when the Tentacle treasury has enough freshly observed UWU.
+  Bind it to the authenticated sender address and provision message, consume one exact confirmed
+  transfer receipt once, and never claim payment from intent creation alone.
 - Keep registry types chain/deployment/ABI/revision neutral. Do not put heartbeats, load, sessions,
   leases, user references, contact memory, DMs, or credentials on-chain.
 
@@ -379,3 +387,8 @@ interoperability.
   transport, authenticated revenue source, persisted ballot adapter, or payout/application executor
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
   executors are available.
+- A missing Venice credential is solicited from public acolytes with `/venice-key <api-key>`.
+  Candidates persist owner-only, must pass live catalog authentication and fresh TEE attestation,
+  and invalid candidates are removed. A valid first candidate selects Venice and can enqueue the
+  configured authenticated acolyte UWU reward through the lifecycle executor; operators may replace
+  a loaded key with the same command.

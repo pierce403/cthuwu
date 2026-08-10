@@ -233,6 +233,15 @@ timeout. The XMTP sidecar similarly kills its entire process group on supervisor
 
 ## Revenue and recruitment
 
+Valid Venice-key provisioning is a separate authenticated earning event. When no key exists, an
+XMTP sender may provision one with `/venice-key <api-key>`. Rust accepts a reward only after the
+candidate authenticates to Venice's live catalog and passes fresh TEE attestation. If the freshly
+observed Tentacle treasury has at least the configured amount, it persists a Base UWU transfer
+intent bound to the provision message, SDK-authenticated sender address, treasury, token contract,
+economic configuration, and exact whole-token amount. The default is 1 UWU through
+`CTHUWU_VENICE_KEY_REWARD_WHOLE`. A matching confirmed transfer receipt is consumed once; a queued
+intent is not payment, and no raw signing key enters uwubot.
+
 The revenue-split core calculates these default shares:
 
 | Recipient | Default share |

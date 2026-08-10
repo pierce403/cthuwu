@@ -187,6 +187,10 @@ struct Cli {
     )]
     token_total_supply: u64,
 
+    /// Whole UWU paid for the first accepted Venice key from an authenticated acolyte.
+    #[arg(long, env = "CTHUWU_VENICE_KEY_REWARD_WHOLE", default_value_t = 1)]
+    venice_key_reward_whole: u64,
+
     /// Enable mandatory local token economics. Missing/failed observations block normal work.
     #[arg(
         long,
@@ -476,6 +480,14 @@ async fn main() -> Result<()> {
         {
             bail!("CTHUWU_PROPAGATION_MINIMUM_STAKE_BPS must not exceed 10000");
         }
+        if mandatory_recovery == MandatoryRecoveryKind::None
+            && (cli.venice_key_reward_whole == 0
+                || cli.venice_key_reward_whole > cli.token_total_supply)
+        {
+            bail!(
+                "CTHUWU_VENICE_KEY_REWARD_WHOLE must be positive and no larger than the configured whole-token supply"
+            );
+        }
         if !matches!(
             mandatory_recovery,
             MandatoryRecoveryKind::CompletedShutdown
@@ -677,6 +689,8 @@ async fn main() -> Result<()> {
         operator_harness,
         evolution.clone(),
     )
+    .with_model_control(router.clone())
+    .with_venice_key_reward(cli.venice_key_reward_whole)
     .with_token_observance(token_eye.clone(), blockchain.clone());
 
     info!(
@@ -1047,6 +1061,7 @@ fn acknowledge_native_shutdown_with_detail(
             external_reference: Some(external_reference.to_owned()),
             detail: Some(detail.to_owned()),
             confirmed_chain_receipt: None,
+            confirmed_transfer_receipt: None,
             provision_receipt: None,
         })?;
     Ok(())
@@ -1190,7 +1205,9 @@ async fn run_autonomy_supervisor(
 
             let requires_current_economics = matches!(
                 intent.action,
-                LifecycleAction::SpendForSurvival { .. } | LifecycleAction::Spawn { .. }
+                LifecycleAction::SpendForSurvival { .. }
+                    | LifecycleAction::RewardVeniceKey { .. }
+                    | LifecycleAction::Spawn { .. }
             );
             if requires_current_economics
                 && !evolution
@@ -1226,9 +1243,12 @@ async fn run_autonomy_supervisor(
                     continue;
                 }
                 Some(Ok(receipt)) => {
-                    let refresh_after_spend =
-                        matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
-                            && receipt.status == LifecycleReceiptStatus::Succeeded;
+                    let refresh_after_spend = matches!(
+                        intent.action,
+                        LifecycleAction::SpendForSurvival { .. }
+                            | LifecycleAction::RewardVeniceKey { .. }
+                    ) && receipt.status
+                        == LifecycleReceiptStatus::Succeeded;
                     if acknowledge_executor_receipt(&evolution, &intent, receipt)?
                         && refresh_after_spend
                     {

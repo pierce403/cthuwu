@@ -27,6 +27,12 @@ Last reviewed: 2026-08-09
   explicitly disables Venice-native search and supplemental system prompting. It then falls back to
   proxy-bypassing loopback Ollama and deterministic behavior on any failure. It does not implement or
   claim full E2EE or independent quote verification.
+- With no Venice credential, public acolytes are asked for `/venice-key <api-key>`. The first
+  candidate persists owner-only in `state/venice.key`, is never echoed, and must authenticate to the
+  live catalog and pass fresh TEE attestation; invalid candidates are removed and only operators may
+  replace a loaded key. A funded treasury queues the configured whole-UWU reward to the
+  SDK-authenticated sender, but only an exact confirmed lifecycle-executor transfer receipt is
+  payment.
 - The bridge's default end-to-end envelope is 300 seconds. Rust preserves one second for the XMTP
   response, then applies role-specific inference budgets only after authenticating the sender: public
   work is capped at 120 seconds and public remote inference at 30 seconds, while operator work can
@@ -40,8 +46,8 @@ Last reviewed: 2026-08-09
   current or web-verifiable information; ordinary chatter, stable facts, and repair completions get
   no search schema.
 - Authenticated `/provider` and `/model` commands persist only the node-wide provider/model names in
-  protected `state/inference.json`; they cannot accept an endpoint or credential. Route changes
-  clear in-process operator dialogue history.
+  protected `state/inference.json`; `/venice-key` stores the secret separately in owner-only
+  `state/venice.key`. Route changes clear in-process operator dialogue history.
 - Text-only one-to-one DMs are the first vertical slice.
 - Browser identities are generated and connected automatically, then persisted in local storage.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development

@@ -335,7 +335,7 @@ impl OpenAiCompatibleModel {
         Ok(message)
     }
 
-    async fn ensure_venice_tee(&self, deadline: InferenceDeadline) -> Result<()> {
+    pub(crate) async fn ensure_venice_tee(&self, deadline: InferenceDeadline) -> Result<()> {
         let Some(mode) = &self.venice_tee else {
             return Ok(());
         };

@@ -7,7 +7,7 @@ use crate::{
     },
     matching::suggest_matches,
     model::{Model, ModelPolicy, ModelRequest},
-    operator::OperatorHarness,
+    operator::{ModelControl, OperatorHarness},
     principal::{OperatorStore, PrincipalRole},
     token_eye::{Address, BalanceObservation, ObservationFreshness, ReputationTier, TokenEye},
 };
@@ -26,11 +26,13 @@ pub struct UwUBot {
     contacts: ContactStore,
     processed: ProcessedMessages,
     model: Arc<dyn Model>,
+    model_control: Option<Arc<dyn ModelControl>>,
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
     token_eye: Option<Arc<TokenEye>>,
     blockchain: BlockchainConfig,
+    venice_key_reward_whole: u64,
 }
 
 struct AuthenticatedMessage<'a> {
@@ -82,11 +84,13 @@ impl UwUBot {
             contacts,
             processed,
             model,
+            model_control: None,
             operators,
             operator_harness,
             evolution,
             token_eye: None,
             blockchain: BlockchainConfig::default(),
+            venice_key_reward_whole: 1,
         }
     }
 
@@ -97,6 +101,16 @@ impl UwUBot {
     ) -> Self {
         self.token_eye = token_eye;
         self.blockchain = blockchain;
+        self
+    }
+
+    pub fn with_model_control(mut self, model_control: Arc<dyn ModelControl>) -> Self {
+        self.model_control = Some(model_control);
+        self
+    }
+
+    pub fn with_venice_key_reward(mut self, whole_tokens: u64) -> Self {
+        self.venice_key_reward_whole = whole_tokens.max(1);
         self
     }
 
@@ -276,7 +290,12 @@ impl UwUBot {
                 "THIS OPERATOR ROLE IS REVOKED. I WILL EXECUTE NOTHING FOR THIS INBOX.".to_owned()
             }
             PrincipalRole::User => {
-                self.receive_user(message.inbox_id, message.sender_address, message.text)
+                self.receive_user(
+                    message.message_id,
+                    message.inbox_id,
+                    message.sender_address,
+                    message.text,
+                )
                     .await?
             }
         };
@@ -285,6 +304,7 @@ impl UwUBot {
 
     async fn receive_user(
         &self,
+        message_id: &str,
         inbox_id: &str,
         authenticated_sender_address: Option<&str>,
         text: &str,
@@ -305,6 +325,87 @@ impl UwUBot {
             }
         };
         let mut turn_guard = PublicTurnGuard::new(self.evolution.clone(), turn.token);
+
+        if let Some(command) = text.trim().strip_prefix('/') {
+            let (name, arguments) = command
+                .split_once(char::is_whitespace)
+                .unwrap_or((command, ""));
+            if name.eq_ignore_ascii_case("venice-key") {
+                let Some(control) = &self.model_control else {
+                    return Ok("this Tentacle can't load Venice credentials in its current runtime, fwiend."
+                        .to_owned());
+                };
+                return Ok(match control.venice_key_command(arguments, false) {
+                    Ok(reply) if reply.changed => {
+                        if control.validate_venice_key().await.is_err() {
+                            let _ = control.clear_venice_key();
+                            return Ok("that candidate key did not authenticate with Venice and pass the fresh TEE check, so i removed it and paid nothing. another acolyte can try `/venice-key <api-key>`, uwu."
+                                .to_owned());
+                        }
+                        let reward = match (
+                            authenticated_sender_address.and_then(|value| Address::from_str(value).ok()),
+                            self.token_eye.as_ref(),
+                            self.blockchain.xmtp_wallet,
+                        ) {
+                            (Some(acolyte), Some(observer), Some(treasury)) => {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|duration| duration.as_secs())
+                                    .unwrap_or(0);
+                                match observer.observe_fresh_required(treasury, now).await {
+                                    Ok(observation)
+                                        if observation.balance.whole_units(self.blockchain.token_decimals)
+                                            >= self.venice_key_reward_whole =>
+                                    {
+                                        match self.evolution
+                                            .lock()
+                                            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))
+                                            .and_then(|mut evolution| {
+                                                evolution.enqueue_venice_key_reward(
+                                                    message_id,
+                                                    *acolyte.as_bytes(),
+                                                    self.venice_key_reward_whole,
+                                                    now,
+                                                )
+                                            }) {
+                                            Ok(reward) => reward,
+                                            Err(error) => {
+                                                warn!(%error, "could not persist Venice-key reward intent");
+                                                None
+                                            }
+                                        }
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        if reward.is_some() {
+                            format!(
+                                "{} i also queued ur authenticated address for a {} UWU key reward; payment needs the configured executor and a matching confirmed Base receipt, uwu.",
+                                reply.response, self.venice_key_reward_whole
+                            )
+                        } else {
+                            format!(
+                                "{} this Tentacle could not currently prove enough treasury UWU for a key reward, so i won't pretend a payment happened.",
+                                reply.response
+                            )
+                        }
+                    }
+                    Ok(reply) => reply.response,
+                    Err(_) => "i couldn't safely load that Venice key. send one non-whitespace key after `/venice-key`, fwiend."
+                        .to_owned(),
+                });
+            }
+        }
+
+        if let Some(control) = &self.model_control
+            && matches!(control.venice_key_configured(), Ok(false))
+        {
+            return Ok("this Tentacle needs a Venice key for its remote mind, fwiend. if u trust this node with one, send `/venice-key <api-key>` and i'll store it owner-only without echoing it. the command itself will still remain in ur XMTP conversation history, uwu."
+                .to_owned());
+        }
+
         let token_observation = match self
             .observe_authenticated_wallet(authenticated_sender_address)
             .await
@@ -1023,11 +1124,60 @@ mod tests {
         operator::{DeterministicOperatorModel, OperatorToolRuntime, ToolReceipt},
         scales::ScalesStore,
     };
-    use std::{path::Path, sync::Mutex as StdMutex};
+    use std::{
+        path::Path,
+        sync::{
+            Mutex as StdMutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
 
     const OPERATOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct FailingModel;
+
+    struct TestVeniceControl {
+        configured: AtomicBool,
+        valid: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelControl for TestVeniceControl {
+        fn provider_command(&self, _arguments: &str) -> Result<crate::operator::ControlReply> {
+            unreachable!()
+        }
+
+        fn model_command(&self, _arguments: &str) -> Result<crate::operator::ControlReply> {
+            unreachable!()
+        }
+
+        fn venice_key_configured(&self) -> Result<bool> {
+            Ok(self.configured.load(Ordering::SeqCst))
+        }
+
+        fn venice_key_command(
+            &self,
+            arguments: &str,
+            _allow_replace: bool,
+        ) -> Result<crate::operator::ControlReply> {
+            anyhow::ensure!(!arguments.trim().is_empty(), "missing key");
+            self.configured.store(true, Ordering::SeqCst);
+            Ok(crate::operator::ControlReply {
+                response: "key stored without echo".to_owned(),
+                changed: true,
+            })
+        }
+
+        async fn validate_venice_key(&self) -> Result<()> {
+            anyhow::ensure!(self.valid, "invalid test key");
+            Ok(())
+        }
+
+        fn clear_venice_key(&self) -> Result<()> {
+            self.configured.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     #[async_trait::async_trait]
     impl Model for FailingModel {
@@ -1383,6 +1533,66 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn public_acolyte_is_prompted_for_and_can_hot_load_a_missing_venice_key() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let control = Arc::new(TestVeniceControl {
+            configured: AtomicBool::new(false),
+            valid: true,
+        });
+        let bot = default_nature_bot(
+            root.path(),
+            model.clone(),
+            OperatorStore::new(root.path(), "production").unwrap(),
+            tools,
+        )
+        .with_model_control(control.clone());
+
+        let asked = send(&bot, 0, "aabbcc", "hello").await;
+        assert!(asked.contains("/venice-key <api-key>"));
+        assert!(model.messages.lock().unwrap().is_empty());
+
+        let loaded = send(&bot, 1, "aabbcc", "/venice-key secret-value").await;
+        assert!(loaded.contains("key stored without echo"));
+        assert!(!loaded.contains("secret-value"));
+        assert!(control.configured.load(Ordering::SeqCst));
+
+        let answered = send(&bot, 2, "aabbcc", "hello after loading").await;
+        assert!(answered.contains("answered: hello after loading"));
+    }
+
+    #[tokio::test]
+    async fn invalid_public_venice_key_is_removed_and_never_rewarded() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Arc::new(TestVeniceControl {
+            configured: AtomicBool::new(false),
+            valid: false,
+        });
+        let bot = default_nature_bot(
+            root.path(),
+            Arc::new(DeterministicModel),
+            OperatorStore::new(root.path(), "production").unwrap(),
+            Arc::new(RecordingTools {
+                calls: StdMutex::new(Vec::new()),
+            }),
+        )
+        .with_model_control(control.clone());
+
+        let rejected = send(&bot, 0, "aabbcc", "/venice-key junk").await;
+        assert!(rejected.contains("removed it and paid nothing"));
+        assert!(!rejected.contains("junk"));
+        assert!(!control.configured.load(Ordering::SeqCst));
+
+        let retry = send(&bot, 1, "aabbcc", "hello").await;
+        assert!(retry.contains("/venice-key <api-key>"));
     }
 
     #[tokio::test]

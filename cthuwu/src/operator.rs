@@ -106,10 +106,19 @@ pub struct ControlReply {
     pub changed: bool,
 }
 
+#[async_trait]
 pub trait ModelControl: Send + Sync {
     fn provider_command(&self, arguments: &str) -> Result<ControlReply>;
 
     fn model_command(&self, arguments: &str) -> Result<ControlReply>;
+
+    fn venice_key_configured(&self) -> Result<bool>;
+
+    fn venice_key_command(&self, arguments: &str, allow_replace: bool) -> Result<ControlReply>;
+
+    async fn validate_venice_key(&self) -> Result<()>;
+
+    fn clear_venice_key(&self) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -224,7 +233,7 @@ impl OperatorHarness {
             .join(",");
 
         let runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model,/venice-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -452,15 +461,16 @@ impl OperatorHarness {
         if name == "help" {
             return Ok(operator_help());
         }
-        if matches!(name, "provider" | "model") {
+        if matches!(name, "provider" | "model" | "venice-key") {
             let control = self
                 .model_control
                 .as_ref()
                 .context("runtime model control is not configured")?;
-            let reply = if name == "provider" {
-                control.provider_command(arguments)?
-            } else {
-                control.model_command(arguments)?
+            let reply = match name {
+                "provider" => control.provider_command(arguments)?,
+                "model" => control.model_command(arguments)?,
+                "venice-key" => control.venice_key_command(arguments, true)?,
+                _ => unreachable!(),
             };
             if reply.changed {
                 self.history
@@ -560,6 +570,7 @@ fn operator_help() -> String {
         "`/qmd <query>` — QUERY THE NODE'S PRECONFIGURED QMD INDEX.",
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
+        "`/venice-key [status|<api-key>]` — SHOW WHETHER A VENICE KEY IS LOADED OR STORE/REPLACE IT WITHOUT ECHOING IT.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
         "`/nature` AND `/adjust <trait> <value>` — INSPECT OR SIGNED-AUDIT THE LOCAL NATURE.",
@@ -3010,6 +3021,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl ModelControl for FakeModelControl {
         fn provider_command(&self, arguments: &str) -> Result<ControlReply> {
             self.calls
@@ -3031,6 +3043,33 @@ mod tests {
                 response: format!("SELECTED MODEL: `{arguments}`"),
                 changed: true,
             })
+        }
+
+        fn venice_key_configured(&self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn venice_key_command(
+            &self,
+            arguments: &str,
+            _allow_replace: bool,
+        ) -> Result<ControlReply> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("venice-key".to_owned(), arguments.to_owned()));
+            Ok(ControlReply {
+                response: "VENICE CREDENTIAL LOADED".to_owned(),
+                changed: true,
+            })
+        }
+
+        async fn validate_venice_key(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn clear_venice_key(&self) -> Result<()> {
+            Ok(())
         }
     }
 

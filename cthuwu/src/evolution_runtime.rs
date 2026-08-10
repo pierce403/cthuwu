@@ -13,7 +13,7 @@ use crate::{
         DEATH_GRACE_PERIOD_MS, LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent,
         LifecycleReceipt, LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage,
         LineageStore, SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle,
-        exact_raw_token_amount,
+        WholeTokenAmount, exact_raw_token_amount, exact_whole_token_amount,
     },
     hermes::{
         HermesNode, HermesStore, KnowledgeItem, KnowledgePayload, MAX_GOSSIP_PEERS,
@@ -415,6 +415,7 @@ impl EvolutionRuntime {
             external_reference: Some("native-transport-never-started".to_owned()),
             detail: Some("fixed-deadline startup shutdown".to_owned()),
             confirmed_chain_receipt: None,
+            confirmed_transfer_receipt: None,
             provision_receipt: None,
         };
         let (action, changed) = lifecycle.acknowledge_action(receipt.clone())?;
@@ -1331,6 +1332,13 @@ impl EvolutionRuntime {
                         effective_exclusions.insert(intent.action_id.clone());
                     }
                 }
+                LifecycleAction::RewardVeniceKey { .. } => {
+                    if self.lifecycle.pending_death.is_some()
+                        || !self.node_economics_is_current(now_unix_seconds)
+                    {
+                        effective_exclusions.insert(intent.action_id.clone());
+                    }
+                }
                 LifecycleAction::Absorb { .. } | LifecycleAction::Shutdown { .. } => {}
             }
         }
@@ -1445,7 +1453,10 @@ impl EvolutionRuntime {
             return Err(error.into());
         }
         if receipt.status == LifecycleReceiptStatus::Succeeded
-            && matches!(action, LifecycleAction::SpendForSurvival { .. })
+            && matches!(
+                action,
+                LifecycleAction::SpendForSurvival { .. } | LifecycleAction::RewardVeniceKey { .. }
+            )
         {
             self.node_economics_available = false;
         }
@@ -1504,8 +1515,8 @@ impl EvolutionRuntime {
             "node economics timestamp is too far in the future"
         );
         ensure!(
-            self.economics_provenance_follows_latest_survival_spend(provenance),
-            "node economics must be observed after the latest confirmed survival burn"
+            self.economics_provenance_follows_latest_token_transaction(provenance),
+            "node economics must be observed after the latest confirmed token transaction"
         );
         let policy = runtime_token_policy(
             self.ritual.nature(),
@@ -1656,6 +1667,64 @@ impl EvolutionRuntime {
         self.node_economics_available = false;
     }
 
+    pub fn enqueue_venice_key_reward(
+        &mut self,
+        provision_event_id: &str,
+        acolyte_address: [u8; 20],
+        whole_tokens: u64,
+        now_unix_seconds: u64,
+    ) -> Result<Option<LifecycleIntent>> {
+        if !self.node_economics_is_current(now_unix_seconds) {
+            return Ok(None);
+        }
+        ensure!(
+            acolyte_address != [0; 20],
+            "reward acolyte address cannot be zero"
+        );
+        let economics = self
+            .metrics
+            .token_economics
+            .context("current node economics are missing")?;
+        let provenance = economics
+            .provenance
+            .context("current node economics lack treasury provenance")?;
+        ensure!(
+            provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+            "Venice-key rewards must spend from the Tentacle treasury"
+        );
+        ensure!(
+            provenance.holder_address != acolyte_address,
+            "Tentacle treasury cannot reward itself for a Venice key"
+        );
+        let mut event_digest = Sha256::new();
+        event_digest.update(b"cthuwu-venice-key-provision-v1\0");
+        event_digest.update(provision_event_id.as_bytes());
+        let event_digest = format!("{:x}", event_digest.finalize());
+        let action = LifecycleAction::RewardVeniceKey {
+            tentacle_id: self.lifecycle.tentacle_id.clone(),
+            provision_event_id_sha256: event_digest,
+            chain_id: provenance.chain_id,
+            token_contract: provenance.token_contract,
+            treasury_address: provenance.holder_address,
+            acolyte_address,
+            configuration_identity: provenance.configuration_identity,
+            exact_amount: WholeTokenAmount {
+                whole_tokens,
+                token_decimals: self.survival_token_decimals,
+                raw_amount: exact_whole_token_amount(whole_tokens, self.survival_token_decimals)?,
+            },
+        };
+        let action_id = crate::evolution::lifecycle_action_id(&action)?;
+        let existed = self.lifecycle.intents.contains_key(&action_id);
+        let intent = self
+            .lifecycle
+            .enqueue_venice_key_reward(now_unix_seconds.saturating_mul(1_000), action)?;
+        if !existed {
+            self.lifecycle_store.save(&self.lifecycle)?;
+        }
+        Ok(Some(intent))
+    }
+
     pub fn mark_node_economics_unavailable_if_stale(&mut self, now_unix_seconds: u64) -> bool {
         if self.node_economics_is_current(now_unix_seconds) {
             return false;
@@ -1676,11 +1745,11 @@ impl EvolutionRuntime {
                     && provenance.observed_at_unix_seconds <= now_unix_seconds
                     && now_unix_seconds.saturating_sub(provenance.observed_at_unix_seconds)
                         <= self.node_economics_ttl_seconds
-                    && self.economics_provenance_follows_latest_survival_spend(provenance)
+                    && self.economics_provenance_follows_latest_token_transaction(provenance)
             })
     }
 
-    fn economics_provenance_follows_latest_survival_spend(
+    fn economics_provenance_follows_latest_token_transaction(
         &self,
         provenance: EconomicObservationProvenance,
     ) -> bool {
@@ -1689,20 +1758,25 @@ impl EvolutionRuntime {
             .iter()
             .filter(|receipt| receipt.status == LifecycleReceiptStatus::Succeeded)
             .filter_map(|receipt| {
-                self.lifecycle
-                    .intents
-                    .get(&receipt.action_id)
-                    .filter(|intent| {
-                        matches!(intent.action, LifecycleAction::SpendForSurvival { .. })
-                    })?;
-                receipt.confirmed_chain_receipt.as_ref()
+                let intent = self.lifecycle.intents.get(&receipt.action_id)?;
+                match intent.action {
+                    LifecycleAction::SpendForSurvival { .. } => receipt
+                        .confirmed_chain_receipt
+                        .as_ref()
+                        .map(|chain| (chain.block_timestamp_unix_seconds, chain.block_number)),
+                    LifecycleAction::RewardVeniceKey { .. } => receipt
+                        .confirmed_transfer_receipt
+                        .as_ref()
+                        .map(|chain| (chain.block_timestamp_unix_seconds, chain.block_number)),
+                    _ => None,
+                }
             })
-            .max_by_key(|receipt| (receipt.block_timestamp_unix_seconds, receipt.block_number))
-            .is_none_or(|receipt| {
-                provenance.observed_at_unix_seconds >= receipt.block_timestamp_unix_seconds
+            .max()
+            .is_none_or(|(block_timestamp, block_number)| {
+                provenance.observed_at_unix_seconds >= block_timestamp
                     && provenance
                         .observed_block_number
-                        .is_none_or(|block| block >= receipt.block_number)
+                        .is_none_or(|block| block >= block_number)
             })
     }
 
@@ -3162,6 +3236,29 @@ fn validate_pending_lifecycle_intents(
                         .is_some_and(|pending| pending.judgment_id == *judgment_id),
                 "pending absorption is not bound to the exact local Death and lineage target"
             ),
+            LifecycleAction::RewardVeniceKey {
+                tentacle_id,
+                chain_id,
+                token_contract,
+                treasury_address,
+                configuration_identity,
+                exact_amount,
+                ..
+            } => {
+                let provenance = current_metrics
+                    .token_economics
+                    .and_then(|economics| economics.provenance)
+                    .context("pending Venice-key reward requires bound node economics")?;
+                ensure!(
+                    tentacle_id == local_id
+                        && *chain_id == provenance.chain_id
+                        && *token_contract == provenance.token_contract
+                        && *treasury_address == provenance.holder_address
+                        && *configuration_identity == provenance.configuration_identity
+                        && exact_amount.token_decimals == survival_token_decimals,
+                    "pending Venice-key reward does not match current bound Tentacle economics"
+                );
+            }
             LifecycleAction::Spawn {
                 parent_id,
                 judgment_id,
@@ -4123,6 +4220,7 @@ mod tests {
                 external_reference: Some("a".repeat(64)),
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -4391,6 +4489,7 @@ mod tests {
                 external_reference: None,
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: Some(crate::evolution::ProvisionReceipt {
                     child_id: "late-child".to_owned(),
                     child_nature_fingerprint: child_nature.fingerprint().unwrap(),
@@ -4433,6 +4532,7 @@ mod tests {
                 external_reference: Some("8".repeat(64)),
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -4480,6 +4580,7 @@ mod tests {
                 external_reference: None,
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: Some(crate::evolution::ProvisionReceipt {
                     child_id: "bounded-clock-child".to_owned(),
                     child_nature_fingerprint: child_nature.fingerprint().unwrap(),
@@ -4523,6 +4624,7 @@ mod tests {
                 external_reference: None,
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: Some(crate::evolution::ProvisionReceipt {
                     child_id: "unbounded-clock-child".to_owned(),
                     child_nature_fingerprint: future_nature.fingerprint().unwrap(),
@@ -5808,6 +5910,7 @@ mod tests {
                 external_reference: None,
                 detail: Some("provisioner failed".to_owned()),
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -5839,6 +5942,7 @@ mod tests {
                 external_reference: None,
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: Some(crate::evolution::ProvisionReceipt {
                     child_id: "provisioned-child".to_owned(),
                     child_nature_fingerprint: child_nature.fingerprint().unwrap(),
@@ -5908,6 +6012,7 @@ mod tests {
             external_reference: None,
             detail: None,
             confirmed_chain_receipt: None,
+            confirmed_transfer_receipt: None,
             provision_receipt: Some(crate::evolution::ProvisionReceipt {
                 child_id: "lineage-ahead-child".to_owned(),
                 child_nature_fingerprint: child_nature.fingerprint().unwrap(),
@@ -5981,6 +6086,7 @@ mod tests {
                 external_reference: Some("native-transport-stopped".to_owned()),
                 detail: None,
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -6400,6 +6506,7 @@ mod tests {
                 external_reference: None,
                 detail: Some("burn transaction was not accepted".to_owned()),
                 confirmed_chain_receipt: None,
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -6473,6 +6580,7 @@ mod tests {
                     exact_amount,
                     operation: crate::evolution::TokenSpendOperation::Burn,
                 }),
+                confirmed_transfer_receipt: None,
                 provision_receipt: None,
             })
             .unwrap();
@@ -6499,7 +6607,7 @@ mod tests {
                 )
                 .unwrap_err()
                 .to_string()
-                .contains("after the latest confirmed survival burn")
+                .contains("after the latest confirmed token transaction")
         );
         runtime
             .record_node_economic_observation(
@@ -6516,6 +6624,109 @@ mod tests {
             )
             .unwrap();
         assert!(runtime.node_economics_available);
+    }
+
+    #[test]
+    fn authenticated_venice_key_reward_is_durable_and_requires_exact_transfer_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        let provenance = EconomicObservationProvenance::base(
+            [1; 20],
+            EconomicHolderRole::TentacleTreasury,
+            [2; 20],
+            now,
+            Some(10),
+            [3; 32],
+        )
+        .unwrap();
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 1,
+                    stake_basis_points: 0,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                provenance,
+            )
+            .unwrap();
+
+        let intent = runtime
+            .enqueue_venice_key_reward("xmtp-message-1", [4; 20], 1, now)
+            .unwrap()
+            .unwrap();
+        let LifecycleAction::RewardVeniceKey {
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+            ..
+        } = intent.action.clone()
+        else {
+            panic!("expected Venice-key reward action");
+        };
+        assert_eq!(exact_amount.raw_amount, "1000000000000000000");
+        assert_eq!(
+            runtime
+                .next_due_lifecycle_action(now)
+                .unwrap()
+                .unwrap()
+                .action_id,
+            intent.action_id
+        );
+
+        let mut transfer = crate::evolution::ConfirmedTransferReceipt {
+            chain_id,
+            transaction_hash: format!("0x{}", "a".repeat(64)),
+            block_number: 11,
+            block_timestamp_unix_seconds: now,
+            token_contract,
+            from_address: treasury_address,
+            to_address: [5; 20],
+            configuration_identity,
+            exact_amount,
+        };
+        assert!(
+            runtime
+                .ack_lifecycle_action(LifecycleReceipt {
+                    action_id: intent.action_id.clone(),
+                    completed_at_ms: now.saturating_mul(1_000),
+                    status: LifecycleReceiptStatus::Succeeded,
+                    external_reference: None,
+                    detail: None,
+                    confirmed_chain_receipt: None,
+                    confirmed_transfer_receipt: Some(transfer.clone()),
+                    provision_receipt: None,
+                })
+                .is_err()
+        );
+
+        transfer.to_address = acolyte_address;
+        assert!(
+            runtime
+                .ack_lifecycle_action(LifecycleReceipt {
+                    action_id: intent.action_id.clone(),
+                    completed_at_ms: now.saturating_mul(1_000),
+                    status: LifecycleReceiptStatus::Succeeded,
+                    external_reference: None,
+                    detail: None,
+                    confirmed_chain_receipt: None,
+                    confirmed_transfer_receipt: Some(transfer),
+                    provision_receipt: None,
+                })
+                .unwrap()
+        );
+        assert!(!runtime.node_economics_available);
+        drop(runtime);
+
+        let resumed =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        assert!(resumed.lifecycle.receipt(&intent.action_id).is_some());
     }
 
     #[cfg(unix)]

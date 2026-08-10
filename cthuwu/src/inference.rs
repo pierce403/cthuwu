@@ -37,6 +37,7 @@ pub const DEFAULT_VENICE_TIMEOUT_SECONDS: u64 = 120;
 const VENICE_ENDPOINT: &str = "https://api.venice.ai/api/v1";
 const INFERENCE_CONFIG_VERSION: u32 = 1;
 const MAX_INFERENCE_CONFIG_BYTES: u64 = 16 * 1024;
+const MAX_VENICE_KEY_BYTES: u64 = 4 * 1024;
 const MAX_MODEL_ID_CHARS: usize = 128;
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 const PUBLIC_REMOTE_ATTEMPT_LIMIT: Duration = Duration::from_secs(30);
@@ -135,6 +136,7 @@ impl StoredInferenceConfig {
 struct InferenceStore {
     state_dir: PathBuf,
     path: PathBuf,
+    venice_key_path: PathBuf,
     xmtp_environment: String,
 }
 
@@ -146,10 +148,13 @@ impl InferenceStore {
         let state_dir = data_dir.join("state");
         ensure_private_directory(&state_dir)?;
         let path = state_dir.join("inference.json");
+        let venice_key_path = state_dir.join("venice.key");
         reject_symlink(&path)?;
+        reject_symlink(&venice_key_path)?;
         Ok(Self {
             state_dir,
             path,
+            venice_key_path,
             xmtp_environment: xmtp_environment.to_owned(),
         })
     }
@@ -207,6 +212,55 @@ impl InferenceStore {
             .with_context(|| format!("replacing {}", self.path.display()))?;
         sync_directory(&self.state_dir)
     }
+
+    fn load_venice_key(&self) -> Result<Option<String>> {
+        reject_symlink(&self.venice_key_path)?;
+        let metadata = match fs::metadata(&self.venice_key_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspecting {}", self.venice_key_path.display()));
+            }
+        };
+        if !metadata.is_file() || metadata.len() > MAX_VENICE_KEY_BYTES {
+            bail!("stored Venice credential must be a bounded regular file");
+        }
+        assert_owner_only(&metadata)?;
+        let key = fs::read_to_string(&self.venice_key_path)
+            .with_context(|| format!("reading {}", self.venice_key_path.display()))?;
+        Ok(Some(validate_venice_key(&key)?))
+    }
+
+    fn save_venice_key(&self, key: &str) -> Result<()> {
+        let key = validate_venice_key(key)?;
+        reject_symlink(&self.venice_key_path)?;
+        let mut temp = NamedTempFile::new_in(&self.state_dir).with_context(|| {
+            format!(
+                "creating temporary Venice credential in {}",
+                self.state_dir.display()
+            )
+        })?;
+        restrict_file(temp.as_file(), "temporary Venice credential")?;
+        temp.write_all(key.as_bytes())?;
+        temp.write_all(b"\n")?;
+        temp.as_file().sync_all()?;
+        temp.persist(&self.venice_key_path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("replacing {}", self.venice_key_path.display()))?;
+        sync_directory(&self.state_dir)
+    }
+
+    fn remove_venice_key(&self) -> Result<()> {
+        reject_symlink(&self.venice_key_path)?;
+        match fs::remove_file(&self.venice_key_path) {
+            Ok(()) => sync_directory(&self.state_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("removing {}", self.venice_key_path.display()))
+            }
+        }
+    }
 }
 
 struct ProviderModels {
@@ -218,6 +272,7 @@ struct ProviderModels {
 struct RouterState {
     selection: StoredInferenceConfig,
     models: ProviderModels,
+    venice_api_key: Option<String>,
     generation: u64,
     unhealthy_until: HashMap<(Provider, InferenceLane), Instant>,
     last_effective: Option<Provider>,
@@ -246,6 +301,7 @@ impl Candidate {
     }
 }
 
+#[derive(Clone)]
 struct ProviderSettings {
     venice_endpoint: String,
     venice_api_key: Option<String>,
@@ -275,9 +331,13 @@ impl InferenceRouter {
             }
         }
         validate_loopback_endpoint(&config.ollama_endpoint)?;
+        let venice_api_key = normalized_secret(config.venice_api_key)
+            .map(|key| validate_venice_key(&key))
+            .transpose()?
+            .or(store.load_venice_key()?);
         let settings = ProviderSettings {
             venice_endpoint: VENICE_ENDPOINT.to_owned(),
-            venice_api_key: normalized_secret(config.venice_api_key),
+            venice_api_key: venice_api_key.clone(),
             venice_timeout: validate_provider_timeout("Venice", config.venice_timeout)?,
             ollama_endpoint: config.ollama_endpoint,
             ollama_timeout: validate_provider_timeout("Ollama", config.ollama_timeout)?,
@@ -290,6 +350,7 @@ impl InferenceRouter {
             state: RwLock::new(RouterState {
                 selection,
                 models,
+                venice_api_key,
                 generation: 0,
                 unhealthy_until: HashMap::new(),
                 last_effective: None,
@@ -307,7 +368,9 @@ impl InferenceRouter {
             .state
             .write()
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
-        state.models = build_models(&self.settings, &state.selection)?;
+        let mut settings = self.settings.clone();
+        settings.venice_api_key = state.venice_api_key.clone();
+        state.models = build_models(&settings, &state.selection)?;
         Ok(())
     }
 
@@ -410,7 +473,7 @@ impl InferenceRouter {
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
         let selected = state.selection.provider;
         let selected_model = state.selection.model(selected).unwrap_or("built-in");
-        let venice_configured = if self.settings.venice_api_key.is_some() {
+        let venice_configured = if state.venice_api_key.is_some() {
             "YES"
         } else {
             "NO"
@@ -505,7 +568,9 @@ impl InferenceRouter {
                 changed: false,
             });
         }
-        let replacement = build_one_model(&self.settings, provider, &model)?;
+        let mut settings = self.settings.clone();
+        settings.venice_api_key = state.venice_api_key.clone();
+        let replacement = build_one_model(&settings, provider, &model)?;
         let mut next = state.selection.clone();
         next.set_model(provider, model.clone())?;
         self.store.save(&next)?;
@@ -562,7 +627,7 @@ impl InferenceRouter {
         Ok(format!(
             "CONFIGURED MODEL SLOTS:\n- VENICE TEE: `{}`{}\n- OLLAMA LOCAL: `{}`\n- OPENAI-COMPATIBLE: `{}`{}\n- DETERMINISTIC: BUILT IN\n\nSWITCH PROVIDERS WITH `/provider <name>`, THEN SET THAT PROVIDER'S MODEL WITH `/model <model-id>`.",
             state.selection.venice_model,
-            if self.settings.venice_api_key.is_some() {
+            if state.venice_api_key.is_some() {
                 ""
             } else {
                 " (NO CREDENTIAL; WILL FALL BACK LOCALLY)"
@@ -578,6 +643,7 @@ impl InferenceRouter {
     }
 }
 
+#[async_trait]
 impl ModelControl for InferenceRouter {
     fn provider_command(&self, arguments: &str) -> Result<ControlReply> {
         let argument = arguments.trim();
@@ -615,6 +681,121 @@ impl ModelControl for InferenceRouter {
         }
         self.switch_model(argument)
     }
+
+    fn venice_key_configured(&self) -> Result<bool> {
+        Ok(self
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?
+            .venice_api_key
+            .is_some())
+    }
+
+    fn venice_key_command(&self, arguments: &str, allow_replace: bool) -> Result<ControlReply> {
+        let argument = arguments.trim();
+        if argument.is_empty() || argument.eq_ignore_ascii_case("status") {
+            return Ok(ControlReply {
+                response: if self.venice_key_configured()? {
+                    "A VENICE CREDENTIAL IS LOADED. ITS VALUE WILL NEVER BE DISPLAYED.".to_owned()
+                } else {
+                    "NO VENICE CREDENTIAL IS LOADED. SEND `/venice-key <api-key>` TO PROVISION ONE."
+                        .to_owned()
+                },
+                changed: false,
+            });
+        }
+        let key = validate_venice_key(argument)?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
+        if state.venice_api_key.is_some() && !allow_replace {
+            return Ok(ControlReply {
+                response: "a Venice key is already loaded, fwiend. only an active operator may replace it."
+                    .to_owned(),
+                changed: false,
+            });
+        }
+        let mut settings = self.settings.clone();
+        settings.venice_api_key = Some(key.clone());
+        let model = build_one_model(&settings, Provider::Venice, &state.selection.venice_model)?
+            .context("a Venice credential did not produce a configured Venice model")?;
+        self.store.save_venice_key(&key)?;
+        let mut next = state.selection.clone();
+        next.provider = Provider::Venice;
+        self.store.save(&next)?;
+        let replaced = state.venice_api_key.is_some();
+        state.selection = next;
+        state.models.venice = Some(model);
+        state.venice_api_key = Some(key);
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .context("inference route generation exhausted")?;
+        state
+            .unhealthy_until
+            .retain(|(provider, _), _| *provider != Provider::Venice);
+        state.last_effective = None;
+        state.last_failure = None;
+        Ok(ControlReply {
+            response: if replaced {
+                "I REPLACED THE OWNER-ONLY VENICE CREDENTIAL AND SELECTED VENICE, OPERATOR, UWU. THE KEY WILL NEVER BE ECHOED."
+                    .to_owned()
+            } else if allow_replace {
+                "I STORED THE OWNER-ONLY VENICE CREDENTIAL AND SELECTED VENICE, OPERATOR, UWU. THE KEY WILL NEVER BE ECHOED."
+                    .to_owned()
+            } else {
+                "i tucked the Venice key into owner-only local storage and selected Venice, fwiend. i won't ever echo it back, uwu."
+                    .to_owned()
+            },
+            changed: true,
+        })
+    }
+
+    async fn validate_venice_key(&self) -> Result<()> {
+        let model = self
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?
+            .models
+            .venice
+            .clone()
+            .context("no Venice credential is loaded")?;
+        model
+            .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
+            .await
+    }
+
+    fn clear_venice_key(&self) -> Result<()> {
+        self.store.remove_venice_key()?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
+        state.venice_api_key = None;
+        state.models.venice = None;
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .context("inference route generation exhausted")?;
+        state
+            .unhealthy_until
+            .retain(|(provider, _), _| *provider != Provider::Venice);
+        state.last_effective = None;
+        state.last_failure = None;
+        Ok(())
+    }
+}
+
+fn validate_venice_key(value: &str) -> Result<String> {
+    let key = value.trim();
+    if key.is_empty() || key.len() as u64 > MAX_VENICE_KEY_BYTES {
+        bail!("Venice API key must be 1-{} bytes", MAX_VENICE_KEY_BYTES);
+    }
+    if key.chars().any(char::is_whitespace) || key.chars().any(char::is_control) {
+        bail!("Venice API key must be one non-whitespace token");
+    }
+    Ok(key.to_owned())
 }
 
 impl InferenceRouter {
@@ -1275,6 +1456,62 @@ mod tests {
         let status = restarted.provider_command("").unwrap().response;
         assert!(status.contains("`ollama`"));
         assert!(status.contains("`llama3.2:3b`"));
+    }
+
+    #[test]
+    fn venice_key_command_hot_loads_owner_only_state_without_echo_and_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let router = InferenceRouter::new(config(root.path())).unwrap();
+        assert!(!router.venice_key_configured().unwrap());
+
+        let reply = router
+            .venice_key_command("acolyte-secret-key", false)
+            .unwrap();
+        assert!(reply.changed);
+        assert!(!reply.response.contains("acolyte-secret-key"));
+        assert!(router.venice_key_configured().unwrap());
+
+        let blocked = router
+            .venice_key_command("replacement-from-public", false)
+            .unwrap();
+        assert!(!blocked.changed);
+        assert!(!blocked.response.contains("replacement-from-public"));
+
+        let key_path = root.path().join("state/venice.key");
+        assert_eq!(
+            std::fs::read_to_string(&key_path).unwrap().trim(),
+            "acolyte-secret-key"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert!(
+            !std::fs::read_to_string(root.path().join("state/inference.json"))
+                .unwrap()
+                .contains("acolyte-secret-key")
+        );
+
+        drop(router);
+        let restarted = InferenceRouter::new(config(root.path())).unwrap();
+        assert!(restarted.venice_key_configured().unwrap());
+        let status = restarted.provider_command("").unwrap().response;
+        assert!(status.contains("SELECTED PROVIDER: `venice`"));
+        assert!(status.contains("VENICE CREDENTIAL CONFIGURED: YES"));
+
+        let replaced = restarted
+            .venice_key_command("operator-replacement", true)
+            .unwrap();
+        assert!(replaced.changed);
+        assert!(!replaced.response.contains("operator-replacement"));
+        assert_eq!(
+            std::fs::read_to_string(key_path).unwrap().trim(),
+            "operator-replacement"
+        );
     }
 
     #[test]
