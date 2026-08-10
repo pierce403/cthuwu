@@ -11,6 +11,10 @@ smoke_fail() {
 }
 
 cleanup_smoke_root() {
+  if [[ -n "${smoke_rpc_pid:-}" ]] && kill -0 "$smoke_rpc_pid" 2>/dev/null; then
+    kill "$smoke_rpc_pid" 2>/dev/null || true
+    wait "$smoke_rpc_pid" 2>/dev/null || true
+  fi
   if [[ -n "${smoke_writer_pid:-}" ]] && kill -0 "$smoke_writer_pid" 2>/dev/null; then
     kill "$smoke_writer_pid" 2>/dev/null || true
     wait "$smoke_writer_pid" 2>/dev/null || true
@@ -33,9 +37,35 @@ wrong_target_dir="$smoke_root/ambient cargo target"
 inbox_fifo="$smoke_root/inbox.fifo"
 smoke_holder_pid=""
 smoke_writer_pid=""
+smoke_rpc_pid=""
+rpc_port_file="$smoke_root/rpc.port"
+executor="$smoke_root/lifecycle-executor"
+wallet="0x1111111111111111111111111111111111111111"
+printf '#!/bin/sh\nexit 1\n' >"$executor"
+chmod 700 "$executor"
+python3 "$SMOKE_REPO_ROOT/scripts/mock-base-rpc.py" \
+  --port-file "$rpc_port_file" --wallet "$wallet" &
+smoke_rpc_pid=$!
+for ((attempt = 0; attempt < 100; attempt += 1)); do
+  [[ -s "$rpc_port_file" ]] && break
+  kill -0 "$smoke_rpc_pid" 2>/dev/null || smoke_fail "mock Base RPC exited during startup"
+  sleep 0.05
+done
+[[ -s "$rpc_port_file" ]] || smoke_fail "mock Base RPC did not publish its port"
+rpc_endpoint="http://127.0.0.1:$(<"$rpc_port_file")"
+economics_environment=(
+  CTHUWU_RPC_ENDPOINT="$rpc_endpoint"
+  CTHUWU_TOKEN_CONTRACT=0x2222222222222222222222222222222222222222
+  CTHUWU_TENTACLE_WALLET="$wallet"
+  CTHUWU_TREASURY_ATTESTATION_SIGNATURE="0x$(printf '0%.0s' {1..63})1$(printf '0%.0s' {1..63})11b"
+  CTHUWU_LIFECYCLE_EXECUTOR="$executor"
+)
 smoke_environment=(
   env
   NODE_ENV=production
+  # The release launcher is exercised here, but the stdin harness is intentionally compiled only
+  # when debug assertions are enabled. Keep this override confined to the disposable smoke build.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
   CARGO_TARGET_DIR="$wrong_target_dir"
   CARGO_BUILD_TARGET=wasm32-unknown-unknown
   RUSTC=/definitely/not/the/validated/rustc
@@ -46,9 +76,10 @@ mkfifo "$inbox_fifo"
 (
   cd -- "$smoke_root"
   exec "${smoke_environment[@]}" \
+    "${economics_environment[@]}" \
     UWUBOT_DATA_DIR="$state_dir" \
     UWUBOT_XMTP_ENV=dev \
-    "$SMOKE_REPO_ROOT/uwu.sh" --stdin-inbox aabbcc <"$inbox_fifo"
+    "$SMOKE_REPO_ROOT/uwu.sh" --skip-awakening --stdin-inbox aabbcc <"$inbox_fifo"
 ) &
 smoke_holder_pid=$!
 sleep 300 >"$inbox_fifo" &
@@ -74,9 +105,11 @@ concurrent_output="$(
   (
     cd -- "$smoke_root"
     "${smoke_environment[@]}" \
+      "${economics_environment[@]}" \
       "$SMOKE_REPO_ROOT/uwu.sh" \
         --data-dir "$state_dir" \
         --xmtp-env dev \
+        --skip-awakening \
         --stdin-inbox aabbcc </dev/null 2>&1
   )
 )"
@@ -104,9 +137,11 @@ smoke_holder_pid=""
 (
   cd -- "$smoke_root"
   "${smoke_environment[@]}" \
+    "${economics_environment[@]}" \
     "$SMOKE_REPO_ROOT/uwu.sh" \
       --data-dir "$state_dir" \
       --xmtp-env dev \
+      --skip-awakening \
       --stdin-inbox aabbcc </dev/null
 )
 

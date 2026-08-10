@@ -1394,17 +1394,17 @@ impl EvolutionRuntime {
         {
             self.node_economics_available = false;
         }
-        if receipt.status == LifecycleReceiptStatus::Succeeded {
-            if let Err(error) = self.apply_completed_lifecycle_action(
+        if receipt.status == LifecycleReceiptStatus::Succeeded
+            && let Err(error) = self.apply_completed_lifecycle_action(
                 &receipt.action_id,
                 &action,
                 receipt.completed_at_ms,
                 receipt.external_reference.as_deref(),
                 receipt_observed_at_ms,
-            ) {
-                self.degraded = true;
-                return Err(error);
-            }
+            )
+        {
+            self.degraded = true;
+            return Err(error);
         }
         Ok(true)
     }
@@ -2033,16 +2033,13 @@ impl EvolutionRuntime {
     }
 
     fn auto_spawn_from_grant(&mut self, grant: &EvolutionHistoryRecord, at_ms: u64) -> Result<()> {
-        let desired_children = if self.propagation_minimum_stake_basis_points == 0 {
-            1_u16
-        } else {
-            grant
-                .metrics
-                .token_economics
-                .map_or(0, |economics| economics.snapshot.stake_basis_points)
-                / self.propagation_minimum_stake_basis_points
-        }
-        .max(1);
+        let desired_children = grant
+            .metrics
+            .token_economics
+            .map_or(0, |economics| economics.snapshot.stake_basis_points)
+            .checked_div(self.propagation_minimum_stake_basis_points)
+            .unwrap_or(1)
+            .max(1);
         let short_judgment = grant
             .judgment_id
             .get(..16)

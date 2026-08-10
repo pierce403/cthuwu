@@ -419,7 +419,14 @@ mod tests {
 
     #[test]
     fn test_timeout_override_is_bounded_to_the_instance() {
-        let executable = std::env::current_exe().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("executor");
+        fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let executor = LifecycleExecutor::new(executable)
             .unwrap()
             .with_timeout(Duration::from_millis(1));

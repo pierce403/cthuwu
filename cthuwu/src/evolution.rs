@@ -1324,14 +1324,14 @@ impl LifecycleState {
         let action_ids = self
             .intents
             .values()
-            .filter_map(|intent| {
+            .filter(|&intent| {
                 matches!(
                     &intent.action,
                     LifecycleAction::SpendForSurvival { judgment_id: existing, .. }
                         if existing == judgment_id && self.receipt(&intent.action_id).is_none()
                 )
-                .then(|| intent.action_id.clone())
             })
+            .map(|intent| intent.action_id.clone())
             .collect::<Vec<_>>();
         let mut changed = false;
         for action_id in action_ids {
@@ -1400,15 +1400,15 @@ impl LifecycleState {
         let expired_spend_ids = self
             .intents
             .values()
-            .filter_map(|intent| {
+            .filter(|&intent| {
                 matches!(
                     &intent.action,
                     LifecycleAction::SpendForSurvival { judgment_id: action_judgment, .. }
                         if action_judgment == &judgment_id
                             && self.receipt(&intent.action_id).is_none()
                 )
-                .then(|| intent.action_id.clone())
             })
+            .map(|intent| intent.action_id.clone())
             .collect::<Vec<_>>();
         for action_id in expired_spend_ids {
             changed |= self.canceled_action_ids.insert(action_id);
@@ -1715,14 +1715,14 @@ impl LifecycleState {
             let related_absorptions = self
                 .intents
                 .values()
-                .filter_map(|related| {
+                .filter(|&related| {
                     matches!(
                         &related.action,
                         LifecycleAction::Absorb { judgment_id: related_id, .. }
                             if related_id == judgment_id
                     )
-                    .then(|| related.action_id.clone())
                 })
+                .map(|related| related.action_id.clone())
                 .collect::<BTreeSet<_>>();
             let canceled = self
                 .intents
@@ -1759,7 +1759,7 @@ impl LifecycleState {
             let completed_absorptions = self
                 .intents
                 .values()
-                .filter_map(|related| {
+                .filter(|&related| {
                     matches!(
                         &related.action,
                         LifecycleAction::Absorb { judgment_id: related_id, .. }
@@ -1768,8 +1768,8 @@ impl LifecycleState {
                                     receipt.status == LifecycleReceiptStatus::Succeeded
                                 })
                     )
-                    .then(|| related.action_id.clone())
                 })
+                .map(|related| related.action_id.clone())
                 .collect::<Vec<_>>();
             for action_id in completed_absorptions {
                 self.pending_absorption_projection_action_ids
