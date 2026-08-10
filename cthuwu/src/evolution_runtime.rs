@@ -98,7 +98,7 @@ impl Default for EvolutionStartupOptions {
             node_economics_ttl_seconds: 120,
             initial_node_economics: None,
             child_bootstrap: None,
-            survival_total_supply_whole: 1_000_000_000,
+            survival_total_supply_whole: 100_000_000_000,
             survival_token_decimals: 18,
         }
     }

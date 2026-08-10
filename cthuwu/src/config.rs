@@ -5,15 +5,21 @@ use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 
 pub const BASE_MAINNET_CHAIN_ID: u64 = 8_453;
 pub const DEFAULT_BASE_RPC_ENDPOINT: &str = "https://mainnet.base.org";
+pub const DEFAULT_UWU_TOKEN_CONTRACT: &str = "0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07";
 pub const DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS: u64 = 60;
 pub const UWU_TOKEN_DECIMALS: u8 = 18;
-pub const REQUESTED_UWU_TOTAL_SUPPLY: u64 = 1_000_000_000;
+pub const UWU_TOTAL_SUPPLY: u64 = 100_000_000_000;
+const DEFAULT_UWU_TOKEN_CONTRACT_ADDRESS: Address = Address::from_bytes([
+    0x9d, 0xba, 0x3a, 0xe7, 0x00, 0x2d, 0xae, 0xfd, 0x73, 0x24, 0xe7, 0xb9, 0xf8, 0x29, 0xed, 0x31,
+    0xcb, 0x5f, 0x0b, 0x07,
+]);
 
 pub struct BlockchainConfigInput<'a> {
     pub observe_tokens: bool,
     pub rpc_endpoint: String,
     pub token_contract: Option<&'a str>,
-    pub tentacle_wallet: Option<&'a str>,
+    /// Address locally derived from the persistent XMTP identity key.
+    pub xmtp_wallet: Option<Address>,
     pub stake_contract: Option<&'a str>,
     pub token_decimals: u8,
     pub total_supply_whole: u64,
@@ -27,9 +33,9 @@ pub struct BlockchainConfig {
     pub observe_tokens: bool,
     pub rpc_endpoint: String,
     pub token_contract: Option<Address>,
-    /// Treasury whose verified holdings drive this Tentacle's Wealth and starvation state.
-    pub tentacle_wallet: Option<Address>,
-    /// Optional ERC-20-compatible staking receipt contract queried with `balanceOf(tentacle_wallet)`.
+    /// The XMTP identity wallet whose holdings drive this Tentacle's Wealth and starvation state.
+    pub xmtp_wallet: Option<Address>,
+    /// Optional ERC-20-compatible staking receipt contract queried with `balanceOf(xmtp_wallet)`.
     pub stake_contract: Option<Address>,
     pub token_decimals: u8,
     pub total_supply_whole: u64,
@@ -47,7 +53,7 @@ impl fmt::Debug for BlockchainConfig {
             .field("observe_tokens", &self.observe_tokens)
             .field("rpc_endpoint", &"<redacted>")
             .field("token_contract", &self.token_contract)
-            .field("tentacle_wallet", &self.tentacle_wallet)
+            .field("xmtp_wallet", &self.xmtp_wallet)
             .field("stake_contract", &self.stake_contract)
             .field("token_decimals", &self.token_decimals)
             .field("total_supply_whole", &self.total_supply_whole)
@@ -61,13 +67,15 @@ impl fmt::Debug for BlockchainConfig {
 impl Default for BlockchainConfig {
     fn default() -> Self {
         Self {
-            observe_tokens: true,
+            // `Cli` enables production observation by default after deriving the XMTP wallet.
+            // Library consumers remain inert until they provide that identity binding explicitly.
+            observe_tokens: false,
             rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-            token_contract: None,
-            tentacle_wallet: None,
+            token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT_ADDRESS),
+            xmtp_wallet: None,
             stake_contract: None,
             token_decimals: UWU_TOKEN_DECIMALS,
-            total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+            total_supply_whole: UWU_TOTAL_SUPPLY,
             observe_interval: Duration::from_secs(DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS),
             minimum_tier: ReputationTier::Unproven,
             tier_intensity_override: None,
@@ -81,7 +89,7 @@ impl BlockchainConfig {
             observe_tokens,
             rpc_endpoint,
             token_contract,
-            tentacle_wallet,
+            xmtp_wallet,
             stake_contract,
             token_decimals,
             total_supply_whole,
@@ -94,6 +102,8 @@ impl BlockchainConfig {
         if !observe_tokens {
             return Ok(Self {
                 observe_tokens: false,
+                token_contract: None,
+                xmtp_wallet: None,
                 ..Self::default()
             });
         }
@@ -125,13 +135,8 @@ impl BlockchainConfig {
         if token_contract == Some(Address::ZERO) {
             bail!("CTHUWU_TOKEN_CONTRACT must not be the zero address");
         }
-        let tentacle_wallet = tentacle_wallet
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(Address::from_str)
-            .transpose()?;
-        if tentacle_wallet == Some(Address::ZERO) {
-            bail!("CTHUWU_TENTACLE_WALLET must not be the zero address");
+        if xmtp_wallet == Some(Address::ZERO) {
+            bail!("the XMTP identity must not derive the zero address");
         }
         let stake_contract = stake_contract
             .map(str::trim)
@@ -144,14 +149,14 @@ impl BlockchainConfig {
         if token_contract.is_none() {
             bail!("CTHUWU_TOKEN_CONTRACT is required while token economics are enabled");
         }
-        if tentacle_wallet.is_none() {
-            bail!("CTHUWU_TENTACLE_WALLET is required while token economics are enabled");
+        if xmtp_wallet.is_none() {
+            bail!("an XMTP identity wallet is required while token economics are enabled");
         }
         Ok(Self {
             observe_tokens,
             rpc_endpoint,
             token_contract,
-            tentacle_wallet,
+            xmtp_wallet,
             stake_contract,
             token_decimals,
             total_supply_whole,
@@ -231,7 +236,7 @@ impl BlockchainConfig {
                 .as_bytes(),
         );
         digest.update(
-            self.tentacle_wallet
+            self.xmtp_wallet
                 .map_or(Address::ZERO, |address| address)
                 .as_bytes(),
         );
@@ -239,30 +244,6 @@ impl BlockchainConfig {
         digest.update(self.total_supply_whole.to_be_bytes());
         digest.update(propagation_minimum_stake_basis_points.to_be_bytes());
         digest.finalize().into()
-    }
-
-    /// Canonical personal-sign message proving control of the exact configured treasury identity.
-    pub fn treasury_attestation_message(
-        &self,
-        propagation_minimum_stake_basis_points: u16,
-    ) -> Result<String> {
-        let token_contract = self
-            .token_contract
-            .context("token contract is required for treasury attestation")?;
-        let treasury = self
-            .tentacle_wallet
-            .context("Tentacle wallet is required for treasury attestation")?;
-        let stake_contract = self.stake_contract.unwrap_or(Address::ZERO);
-        let identity = self.economic_configuration_identity(propagation_minimum_stake_basis_points);
-        let mut identity_hex = String::with_capacity(64);
-        for byte in identity {
-            use std::fmt::Write as _;
-            write!(&mut identity_hex, "{byte:02x}")?;
-        }
-        Ok(format!(
-            "CTHUWU treasury attestation v1\nchain_id={BASE_MAINNET_CHAIN_ID}\ntoken_contract={token_contract}\ntreasury={treasury}\nstake_contract={stake_contract}\ntoken_decimals={}\ntotal_supply={}\npropagation_minimum_stake_bps={propagation_minimum_stake_basis_points}\nconfiguration_identity=0x{identity_hex}",
-            self.token_decimals, self.total_supply_whole,
-        ))
     }
 
     pub fn effective_tier_intensity(&self, nature_cooperation: u8) -> u8 {
@@ -281,11 +262,11 @@ mod tests {
         BlockchainConfig::from_values(BlockchainConfigInput {
             observe_tokens: true,
             rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-            token_contract: Some("0x2222222222222222222222222222222222222222"),
-            tentacle_wallet: Some(wallet),
+            token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+            xmtp_wallet: Some(wallet.parse().unwrap()),
             stake_contract: Some("0x3333333333333333333333333333333333333333"),
             token_decimals: UWU_TOKEN_DECIMALS,
-            total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+            total_supply_whole: UWU_TOTAL_SUPPLY,
             observe_interval_seconds: 60,
             minimum_tier: ReputationTier::Unproven,
             tier_intensity_override: None,
@@ -294,8 +275,17 @@ mod tests {
     }
 
     #[test]
-    fn enabled_startup_requires_a_contract_and_tentacle_treasury() {
+    fn library_defaults_carry_live_coordinates_without_an_unbound_observer() {
         let config = BlockchainConfig::default();
+        assert_eq!(config.rpc_endpoint, DEFAULT_BASE_RPC_ENDPOINT);
+        assert_eq!(
+            config.token_contract,
+            Some(DEFAULT_UWU_TOKEN_CONTRACT.parse().unwrap())
+        );
+        assert_eq!(config.token_decimals, 18);
+        assert_eq!(config.total_supply_whole, 100_000_000_000);
+        assert!(config.xmtp_wallet.is_none());
+        assert!(!config.observe_tokens);
         assert!(config.build_token_eye().unwrap().is_none());
         assert_eq!(config.minimum_tier, ReputationTier::Unproven);
         assert_eq!(config.effective_tier_intensity(100), 0);
@@ -308,11 +298,11 @@ mod tests {
             BlockchainConfig::from_values(BlockchainConfigInput {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-                token_contract: None,
-                tentacle_wallet: None,
+                token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+                xmtp_wallet: None,
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 60,
                 minimum_tier: ReputationTier::Unproven,
                 tier_intensity_override: None,
@@ -328,10 +318,10 @@ mod tests {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
                 token_contract: Some("not-an-address"),
-                tentacle_wallet: Some(TEST_WALLET),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 0,
                 minimum_tier: ReputationTier::Initiate,
                 tier_intensity_override: None,
@@ -343,10 +333,10 @@ mod tests {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
                 token_contract: Some("0x0000000000000000000000000000000000000000"),
-                tentacle_wallet: Some(TEST_WALLET),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 60,
                 minimum_tier: ReputationTier::Unproven,
                 tier_intensity_override: None,
@@ -357,11 +347,11 @@ mod tests {
             BlockchainConfig::from_values(BlockchainConfigInput {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-                token_contract: None,
-                tentacle_wallet: Some(TEST_WALLET),
+                token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: 78,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 60,
                 minimum_tier: ReputationTier::Unproven,
                 tier_intensity_override: None,
@@ -372,11 +362,11 @@ mod tests {
             BlockchainConfig::from_values(BlockchainConfigInput {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-                token_contract: None,
-                tentacle_wallet: Some(TEST_WALLET),
+                token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 60,
                 minimum_tier: ReputationTier::Unproven,
                 tier_intensity_override: Some(101),
@@ -387,11 +377,11 @@ mod tests {
             BlockchainConfig::from_values(BlockchainConfigInput {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-                token_contract: None,
-                tentacle_wallet: Some(TEST_WALLET),
+                token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
-                total_supply_whole: REQUESTED_UWU_TOTAL_SUPPLY,
+                total_supply_whole: UWU_TOTAL_SUPPLY,
                 observe_interval_seconds: 0,
                 minimum_tier: ReputationTier::Unproven,
                 tier_intensity_override: None,
@@ -402,8 +392,8 @@ mod tests {
             BlockchainConfig::from_values(BlockchainConfigInput {
                 observe_tokens: true,
                 rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-                token_contract: None,
-                tentacle_wallet: Some(TEST_WALLET),
+                token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+                xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
                 stake_contract: None,
                 token_decimals: UWU_TOKEN_DECIMALS,
                 total_supply_whole: 0,
@@ -421,7 +411,7 @@ mod tests {
             observe_tokens: false,
             rpc_endpoint: String::new(),
             token_contract: Some("not-an-address"),
-            tentacle_wallet: Some("also-not-an-address"),
+            xmtp_wallet: Some(Address::ZERO),
             stake_contract: Some("still-not-an-address"),
             token_decimals: u8::MAX,
             total_supply_whole: 0,
@@ -440,8 +430,8 @@ mod tests {
         let result = BlockchainConfig::from_values(BlockchainConfigInput {
             observe_tokens: true,
             rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
-            token_contract: Some("0x2222222222222222222222222222222222222222"),
-            tentacle_wallet: Some(TEST_WALLET),
+            token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT),
+            xmtp_wallet: Some(TEST_WALLET.parse().unwrap()),
             stake_contract: None,
             token_decimals: 77,
             total_supply_whole: 2,
@@ -453,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn treasury_attestation_binds_wallet_stake_policy_and_configuration_identity() {
+    fn configuration_identity_binds_the_xmtp_wallet_and_stake_policy() {
         let first = enabled_config(TEST_WALLET);
         let second = enabled_config("0x4444444444444444444444444444444444444444");
         assert_ne!(
@@ -464,15 +454,5 @@ mod tests {
             first.economic_configuration_identity(100),
             first.economic_configuration_identity(101)
         );
-
-        let message = first.treasury_attestation_message(100).unwrap();
-        assert!(message.starts_with("CTHUWU treasury attestation v1\nchain_id=8453\n"));
-        assert!(message.contains("token_contract=0x2222222222222222222222222222222222222222"));
-        assert!(message.contains("treasury=0x1111111111111111111111111111111111111111"));
-        assert!(message.contains("stake_contract=0x3333333333333333333333333333333333333333"));
-        assert!(message.contains("total_supply=1000000000"));
-        assert!(message.contains("propagation_minimum_stake_bps=100"));
-        assert!(message.contains("configuration_identity=0x"));
-        assert_ne!(message, second.treasury_attestation_message(100).unwrap());
     }
 }

@@ -91,15 +91,14 @@ Public wallets and Tentacle treasury wallets are separate roles:
 - an accepted executor receipt whose asserted fields match a survival-spend intent can cancel
   pending Death; Rust does not independently query that transaction or block.
 
-`CTHUWU_TENTACLE_WALLET` binds the node treasury without importing its key. The operator runs
-`--print-treasury-attestation`, personal-signs that exact canonical output in an external wallet,
-and supplies the recoverable signature as `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Initial
-observation and every treasury/stake refresh verify it through Base's `ecrecover` precompile and
-require the recovered signer to equal the configured wallet. No private key enters Rust.
+The node treasury is the EVM address derived from the same persistent private key used by its XMTP
+identity. Rust obtains that address from a strict identity-only sidecar startup frame and uses it for
+every treasury/stake refresh. There is no separately configured treasury wallet or ownership
+signature, and no private key enters Rust.
 
 The live observer calls `balanceOf(..., "latest")`, which supplies no block number, so it records
 local wall-clock time, sets `observed_block_number` to `None`, and omits `observedBlockNumber` from
-JSON. Token decimals and total supply are configured, treasury-attested normalization assumptions;
+JSON. Token decimals and total supply are configured normalization assumptions;
 Rust does not currently call `decimals()` or `totalSupply()` to compare them with the contract.
 
 Unknown, stale, malformed, or wrong-chain token evidence blocks the affected interaction, Scales
@@ -286,8 +285,8 @@ persisted ballot/application adapter. Never place private keys in these files.
 ## Verification focus
 
 Tests should cover Nature inheritance/mutation, awakening recovery, period finality, treasury/public
-wallet separation, canonical treasury-attestation binding, Base `ecrecover` signer equality on every
-economic refresh, RPC hard failure, Wealth/starvation/stake calculations, automatic Death admission
+wallet separation, stable XMTP-wallet derivation and strict identity-frame parsing, RPC hard
+failure, Wealth/starvation/stake calculations, automatic Death admission
 gating, 24-hour deadlines, survival receipt cancellation, auto/manual spawn, reusable-grant and
 exact-child idempotency, lineage cycle rejection, revenue-split calculation, governance
 disposition/application records, outbox draining through Base outage, startup configuration

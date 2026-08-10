@@ -41,8 +41,17 @@ function startupFailure(error: unknown): string {
 
 async function main(): Promise<void> {
   isolateProtocolOutput();
-  const { Agent } = await import("@xmtp/agent-sdk");
   const identity = await prepareAgentEnvironment();
+  if (process.argv.includes("--print-xmtp-wallet-address")) {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "xmtp_identity",
+        walletAddress: identity.walletAddress,
+      })}\n`,
+    );
+    return;
+  }
+  const { Agent } = await import("@xmtp/agent-sdk");
   // Agent SDK debug mode enables native structured logging on stdout. The
   // sidecar protocol owns that file descriptor, so diagnostics stay off there.
   delete process.env.XMTP_FORCE_DEBUG_LEVEL;

@@ -246,15 +246,14 @@ Last reviewed: 2026-08-09
 
 ## UWU token architecture decisions
 
-- Token name and symbol are `UWU`; it is a standard transferable ERC-20 planned for Base mainnet
-  chain ID `8453`, with 18 decimals by default. No balance or stake is required to start a Tentacle,
+- Token name and symbol are `UWU`; the live transferable Clanker v4 ERC-20 is deployed on Base
+  mainnet chain ID `8453` at `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`, with 18 decimals and
+  100 billion tokens. No balance or stake is required to start a Tentacle,
   and the default interaction tier is `unproven`. Fresh configured stake is required to spawn;
   public sender balances never supply node stake evidence.
-- The requested supply is one billion UWU, but current Clanker v4 standard deployment uses a fixed
-  100 billion tokens with 18 decimals. Launch must either adopt that standard or use a reviewed
-  custom/nonstandard path for one billion. Runtime normalization defaults to the requested one
-  billion but exposes `CTHUWU_TOKEN_DECIMALS` and `CTHUWU_TOKEN_TOTAL_SUPPLY`; post-launch values must
-  match the deployed contract. These values are configured and treasury-attested assumptions today;
+- Runtime normalization defaults to the live contract's 100-billion-token supply and 18 decimals
+  and exposes `CTHUWU_TOKEN_DECIMALS` and `CTHUWU_TOKEN_TOTAL_SUPPLY` for explicit overrides. These
+  values are configured assumptions today;
   Rust does not call `decimals()` or `totalSupply()` to verify them.
 - Standard Clanker creator fees are LP/swap rewards rather than an ERC-20 fee-on-transfer. Staking,
   reward, fee-on-transfer, survival-spend, and revenue contracts still require deployment and
@@ -264,11 +263,10 @@ Last reviewed: 2026-08-09
   `eth_call`, validates bounded HTTP responses, and sanitizes errors that could expose a
   credential-bearing RPC URL. It accepts no private key; transactions cross the lifecycle executor
   to a separately isolated signer/key service.
-- Node economics is bound to `CTHUWU_TENTACLE_WALLET`. Operators run
-  `--print-treasury-attestation`, personal-sign that exact canonical output in an external wallet,
-  and set `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Initial observation and every treasury/stake
-  refresh verify the recoverable signature through Base's `ecrecover` precompile and require the
-  recovered signer to equal the configured wallet. No private key enters Rust.
+- Node economics uses the EVM address derived from the same persistent private key as the XMTP
+  identity. A strict identity-only sidecar startup frame supplies the address to Rust before normal
+  runtime; there is no external treasury-wallet setting or ownership signature. No private key
+  enters Rust.
 - A public holder address comes from SDK-authenticated XMTP envelope metadata. Missing/stale address
   or RPC evidence blocks the token-dependent interaction; message content cannot supply or override it.
 - The integrated call site currently observes public one-to-one DM senders. `TokenEye` accepts any
@@ -307,9 +305,6 @@ Last reviewed: 2026-08-09
 - CLI/environment configuration is `--rpc-endpoint`/`CTHUWU_RPC_ENDPOINT`,
   `--token-contract`/`CTHUWU_TOKEN_CONTRACT`, `--token-decimals`/`CTHUWU_TOKEN_DECIMALS`,
   `--token-total-supply`/`CTHUWU_TOKEN_TOTAL_SUPPLY`,
-  `--tentacle-wallet`/`CTHUWU_TENTACLE_WALLET`,
-  `--treasury-attestation-signature`/`CTHUWU_TREASURY_ATTESTATION_SIGNATURE`, plus the
-  `--print-treasury-attestation` message workflow,
   `--observe-tokens`/`CTHUWU_OBSERVE_TOKENS`,
   `--observe-interval`/`CTHUWU_OBSERVE_INTERVAL`, `--min-tier`/`CTHUWU_MIN_TIER`, and
   `--token-tier-intensity`/`CTHUWU_TOKEN_TIER_INTENSITY`.
@@ -412,8 +407,8 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
   widening the compiled skill authority?
 - How should a separately provisioned child prove that a local lineage spawn record corresponds to
   its actual XMTP identity and running process?
-- Will UWU launch with current standard Clanker v4 supply of 100 billion, or use a reviewed
-  custom/nonstandard deployment to preserve the requested one-billion supply?
+- When should the observer replace configured decimals/supply assumptions with block-pinned
+  `decimals()` and `totalSupply()` reads from the live UWU contract?
 
 ## Current milestone
 
@@ -432,14 +427,13 @@ absorption/shutdown grace period; final PropagationRights plus stake can auto-sp
 exceeds 70. Live XMTP awakening remains a release exercise, Hermes has no network transport or
 peer-key provisioning, and external effects require configured receipt-producing executors.
 
-The local/pre-launch UWU milestone adds SDK-authenticated EVM sender metadata, strict Base/ERC-20
+The live-token/local-observer UWU milestone adds SDK-authenticated EVM sender metadata, strict Base/ERC-20
 observation, per-Tentacle percentile tiers, public/entity and treasury/node role separation, active
 Wealth/starvation/stake/reward/spend economics, token-governance disposition/application records,
-and a default 15% parent/10% acolyte/5% recruiter split core. It has no deployed contract, token
-signer, authenticated revenue source, persisted ballot adapter, payout/application executor, or
-external provisioner; those effects remain blocked until a configured executor produces receipts.
-The launch supply decision remains open because requested
-one billion differs from current Clanker v4 standard 100 billion.
+and a default 15% parent/10% acolyte/5% recruiter split core. The UWU contract is live with the
+Clanker v4 100-billion-token supply; there is no token signer, authenticated revenue source,
+persisted ballot adapter, payout/application executor, or external provisioner in the repository,
+so those effects remain blocked until a configured executor produces receipts.
 
 The 2026-08-01 manual XMTP `dev` release-gate run passed browser identity, exactly-once reply,
 contact onboarding, bilateral matching, deletion, and restart/persistence checks. Sanitized evidence

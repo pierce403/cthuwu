@@ -602,9 +602,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     their provenance individually.
   - Every Base mutation, provision, and absorption persists a unique intent and completes only after
     a locally validated executor receipt. Shutdown instead completes through the native Rust
-    supervisor/controller receipt after XMTP stops. The repository currently commits no signer,
-    provisioner, absorption service, or UWU contract, so absent external effects are reported
-    blocked. Transaction hash, block, and timestamp fields are executor assertions that Rust checks
+    supervisor/controller receipt after XMTP stops. The UWU ERC-20 is live; the repository currently
+    commits no signer, provisioner, absorption service, or survival/staking/reward transaction
+    adapter, so absent external effects are reported blocked. Transaction hash, block, and timestamp
+    fields are executor assertions that Rust checks
     structurally and against the intent; Rust does not independently query the Base receipt or block.
   - The executor protocol currently has only one final JSON response and no persisted submitted-
     transaction reconciliation. A survival burn may broadcast before grace while that response is
@@ -660,9 +661,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   fresh local balances for configurable conversation tiers, active node economics, and
   token-weighted governance records.
 - **Properties**:
-  - UWU uses name `UWU`, symbol `UWU`, 18 decimals by default, and Base mainnet chain ID `8453`.
-    There is no minimum balance or stake to start a Tentacle. The contract address is configured
-    after launch and is never hard-coded.
+  - UWU uses name `UWU`, symbol `UWU`, 18 decimals, and Base mainnet chain ID `8453`. The live
+    Clanker v4 contract is `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`, with a 100-billion-token
+    supply. There is no minimum balance or stake to start a Tentacle.
   - Token observation defaults on. When economic operation is enabled, missing contract, RPC,
     treasury, or stake evidence blocks the affected operation. The Agent SDK supplies an EVM address
     resolved from the transport-authenticated XMTP sender inbox; message text
@@ -688,48 +689,43 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - A public-sender balance contributes only to that entity's tier and Engagement. A separately
     bound Tentacle treasury, stake, reward, and spend source drives Wealth, starvation, Influence,
     Growth, propagation, and survival; public balances cannot impersonate node economics.
-  - `CTHUWU_TENTACLE_WALLET` names the treasury. The operator runs
-    `--print-treasury-attestation`, personal-signs its exact canonical output externally, and sets
-    `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Initial observation and every treasury/stake refresh
-    verify the recoverable signature through Base's `ecrecover` precompile and require the recovered
-    signer to equal the configured wallet. No private key enters Rust.
+  - The sidecar derives the Tentacle treasury address from the same persistent private key used by
+    its XMTP identity and returns that address over a strict, bounded startup frame. Rust uses the
+    derived address for every treasury/stake observation. There is no separately configured wallet,
+    ownership signature, or private key in Rust.
   - The `RecordedTokenEconomics` schema can carry holder role/address, chain, contract, optional
     block, observed time, configured token metadata, configuration identity, and a source label and
     uses idempotent event history. The current live path sets the block to none, uses local wall-clock
-    time, and treats treasury-attested decimals/supply as configured assumptions; the source label is
+    time, and treats configured decimals/supply as normalization assumptions; the source label is
     not an independently authenticated external identity.
   - `token_gov.rs` provides deterministic holding/stake-weighted ballots for closed Nature, Council,
     economic, and skill-propagation subjects. Accepted results produce binding dispositions and
     application records in the core. No persisted ballot adapter is committed; results remain
     unapplied until a configured adapter stores them and returns a validated receipt.
-  - No private key, deployed UWU contract, signer, staking/reward/revenue contract, provisioner, or
-    live Council/Nature application adapter is committed in this repository. Normal runtime rejects
+  - No private key, signer, staking/reward/revenue contract, provisioner, or live Council/Nature
+    application adapter is committed in this repository. Normal runtime rejects
     `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor must call a separately isolated signer/key
     service rather than receive a raw key from uwubot.
   - The revenue-split core uses configurable shares: 15% parent, 10% operating acolyte, 5%
     recruiter, and 70% earning Tentacle by default. The intended model rewards recruitment, but no
     authenticated revenue source or payout executor is committed.
-  - `--rpc-endpoint`, `--token-contract`, `--tentacle-wallet`,
-    `--treasury-attestation-signature`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
+  - `--rpc-endpoint`, `--token-contract`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
     `--token-tier-intensity`, `--token-decimals`, and `--token-total-supply` have corresponding
-    `CTHUWU_*` environment variables; `--print-treasury-attestation` prints the canonical message
-    without starting normal runtime. RPC endpoint values are hidden/sanitized because provider URLs
-    may contain credentials.
+    `CTHUWU_*` environment variables. RPC endpoint values are hidden/sanitized because provider URLs
+    may contain credentials. The RPC, contract, decimals, and supply default to the live deployment.
   - The contract must be a nonzero valid address. The RPC adapter revalidates Base chain ID before
     each balance call and may use a per-holder outage backoff. Backoff cannot convert missing
     evidence into permission or add a delay once required economic evidence is fresh. It currently
     queries `balanceOf(..., "latest")` only; it does not fetch a block number, `decimals()`,
     `totalSupply()`, or transaction receipts.
-  - The requested one-billion supply is not current Clanker v4 standard. Clanker v4 currently uses
-    100 billion tokens with 18 decimals; launch must choose that standard or a reviewed
-    custom/nonstandard one-billion deployment. Standard Clanker fees are LP/swap creator rewards,
-    not an ERC-20 fee-on-transfer.
+  - The deployed Clanker v4 token uses 100 billion tokens with 18 decimals. Standard Clanker fees
+    are LP/swap creator rewards, not an ERC-20 fee-on-transfer.
 - **Test Criteria**:
   - [x] Unit tests cover strict Ethereum addresses and quantities, ABI `balanceOf` construction and
     parsing, per-call Base chain-ID binding, response validation, one-token percentile eligibility,
     100/10-holder Whale/Elder sample floors, ties, cache expiration, bounded retry backoff,
-    stale/unknown hard failure, zero-contract rejection, canonical treasury-attestation binding,
-    recoverable-signature parsing, and `ecrecover` request/response validation.
+    stale/unknown hard failure, zero-contract rejection, stable XMTP-wallet derivation, and strict
+    parsing of the identity-only sidecar frame.
   - [x] Model-policy tests prove tier-dependent bounded response depth, Nature intensity zero, and
     that UWU facts explicitly deny operator authority.
   - [x] Scales/runtime tests prove public/treasury role separation, untrustworthy-observation failure,
@@ -737,7 +733,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - [x] Token-governance tests cover proposal IDs, tier-weighted approval, cooperative-Nature
     weighting, duplicate ballots, zero-weight Unproven voting, configured tier
     floors, bounds, quorum, abstention handling, and binding application records.
-  - [ ] A deployed UWU contract on Base passes live zero/sub-token/tier-boundary balance reads,
+  - [ ] The deployed UWU contract on Base passes live zero/sub-token/tier-boundary balance reads,
     cache expiry, RPC outage, and wrong-chain tests. A launch adapter also verifies `decimals()`,
     `totalSupply()`, block-pinned observations, and executor receipt transaction/block assertions
     directly against Base.
@@ -745,8 +741,8 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     cryptographically bound addresses and preserve one local cache per Tentacle.
   - [ ] A live governance adapter binds ballots to exact authenticated addresses and trustworthy
     observations and returns receipts for applied Council or Nature changes.
-  - [ ] The launch decision resolves requested one-billion supply versus current Clanker v4
-    100-billion standard and updates the configured normalization reference accordingly.
+  - [x] Runtime and documentation defaults match the live UWU address, Base mainnet RPC, 18
+    decimals, and the deployed Clanker v4 100-billion-token supply.
 
 See [docs/token.md](docs/token.md) for launch and activation and
 [docs/guardrail-audit.md](docs/guardrail-audit.md) for unrelated policy limits found during the

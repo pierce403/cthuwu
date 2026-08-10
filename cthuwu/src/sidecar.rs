@@ -3,6 +3,7 @@ use crate::{
     contact::normalize_inbox_id,
     deadline::{DEFAULT_PUBLIC_WORK_BUDGET, InferenceLane, scope_authenticated_deadline},
     principal::PrincipalRole,
+    token_eye::Address,
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -49,11 +50,101 @@ struct InboundText {
     text: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct XmtpIdentityFrame {
+    #[serde(rename = "type")]
+    frame_type: String,
+    #[serde(rename = "walletAddress")]
+    wallet_address: String,
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SidecarResponse {
     Reply { id: String, text: String },
     Ignore { id: String },
+}
+
+/// Loads or creates the same persistent XMTP identity used by the live sidecar and returns its
+/// locally derived EVM address. The private key remains inside the Node identity process; only the
+/// address crosses stdout in one bounded frame.
+pub async fn resolve_xmtp_wallet_address(
+    node: &Path,
+    sidecar: &Path,
+    data_dir: &Path,
+    xmtp_environment: &str,
+) -> Result<Address> {
+    if !sidecar.is_file() {
+        bail!(
+            "XMTP transport {} is missing; run `npm ci && npm run build` in agent/ or set UWUBOT_SIDECAR",
+            sidecar.display()
+        );
+    }
+
+    let mut command = Command::new(node);
+    command
+        .arg(sidecar)
+        .arg("--print-xmtp-wallet-address")
+        .env_clear()
+        .env("UWUBOT_DATA_DIR", data_dir)
+        .env("UWUBOT_XMTP_ENV", xmtp_environment)
+        .env("XMTP_ENV", xmtp_environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    copy_transport_environment(&mut command);
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("loading XMTP identity with {}", node.display()))?;
+    #[cfg(unix)]
+    let _process_group = ProcessGroupGuard::new(child.id());
+    let stdout = child
+        .stdout
+        .take()
+        .context("XMTP identity helper stdout was not piped")?;
+    let mut stdout = BufReader::new(stdout);
+    let (line, trailing, status) = timeout(Duration::from_secs(30), async {
+        let line = read_sidecar_frame(&mut stdout).await?;
+        let trailing = read_sidecar_frame(&mut stdout).await?;
+        let status = child
+            .wait()
+            .await
+            .context("waiting for XMTP identity helper")?;
+        Ok::<_, anyhow::Error>((line, trailing, status))
+    })
+    .await
+    .context("XMTP identity helper timed out")??;
+    if !status.success() {
+        bail!("XMTP identity helper exited with {status}");
+    }
+    if trailing.is_some() {
+        bail!("XMTP identity helper emitted more than one protocol frame");
+    }
+    let line = line.context("XMTP identity helper exited without an address")?;
+    if line.is_empty() {
+        bail!("XMTP identity helper emitted an oversized address frame");
+    }
+    let frame: XmtpIdentityFrame =
+        serde_json::from_str(&line).context("XMTP identity helper emitted malformed JSON")?;
+    if frame.frame_type != "xmtp_identity" {
+        bail!("XMTP identity helper emitted an unsupported frame");
+    }
+    let address: Address = frame
+        .wallet_address
+        .parse()
+        .context("XMTP identity helper emitted an invalid EVM address")?;
+    if address == Address::ZERO {
+        bail!("XMTP identity helper derived the zero address");
+    }
+    Ok(address)
 }
 
 pub async fn run_xmtp_sidecar(
@@ -590,6 +681,36 @@ fn validate_request(request: &InboundText) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn identity_helper_returns_the_xmtp_derived_wallet_address() {
+        let directory = tempfile::tempdir().unwrap();
+        let helper = directory.path().join("identity-helper.sh");
+        std::fs::write(
+            &helper,
+            r#"#!/bin/sh
+test "$1" = "--print-xmtp-wallet-address" || exit 2
+printf '%s\n' '{"type":"xmtp_identity","walletAddress":"0x4200000000000000000000000000000000000006"}'
+"#,
+        )
+        .unwrap();
+
+        let address = resolve_xmtp_wallet_address(
+            Path::new("/bin/sh"),
+            &helper,
+            directory.path(),
+            "production",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            address,
+            "0x4200000000000000000000000000000000000006"
+                .parse()
+                .unwrap()
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]

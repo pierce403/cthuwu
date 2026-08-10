@@ -235,8 +235,10 @@ interoperability.
   consistent-backup restoration; do not claim that nothing was written. Treat `--show-nature` as a
   reconciling startup path, not a read-only inspector, and keep it mutually exclusive with skip and
   reroll mutators.
-- Validate all normal-runtime token configuration and treasury ownership before creating or mutating
-  Evolution state. The only outage exception is a read-only inspection of existing lifecycle state;
+- Derive the Tentacle's token holder from the same persistent XMTP wallet key used by the Agent SDK;
+  never add a separate treasury-wallet setting or signature ceremony. Validate normal-runtime token
+  configuration and initial economics before opening Evolution state. XMTP identity bootstrapping
+  may create its owner-only identity file first. The only outage exception is a read-only inspection of existing lifecycle state;
   if it finds already-binding `Absorb` or `Shutdown` work, open solely to drain those intents.
   During a Base/RPC outage, defer `Spawn`, survival `Spend`, and new token-dependent decisions. Do not
   impose a fixed child/spawn/lineage-lifecycle file-size cap—validate each record and its provenance
@@ -261,12 +263,10 @@ interoperability.
   `balanceOf(address)`. Transaction execution belongs behind the lifecycle executor and a separately
   isolated signer/key service. Reject `CTHUWU_ECONOMICS_PRIVATE_KEY`; never place a raw token key in
   the uwubot environment, observance state, configuration, or logs.
-- Bind Tentacle economics to `CTHUWU_TENTACLE_WALLET`. Operators first run
-  `--print-treasury-attestation`, personal-sign that exact canonical output with the configured
-  treasury, and provide the recoverable signature through
-  `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Before every treasury/stake refresh, verify the signature
-  by calling Base's `ecrecover` precompile and require the recovered address to equal the configured
-  wallet. The private key never enters Rust, configuration, state, or logs.
+- Bind Tentacle economics to the address locally derived by the sidecar from
+  `state/xmtp-identity.json`. Emit only one bounded identity frame to Rust, then use that exact
+  address for every node UWU/stake observation. The private key remains in the existing owner-only
+  XMTP identity state and is never copied into token configuration or logs.
 - Launch the lifecycle executor from a cleared, allowlisted environment with caller-controlled
   loader paths removed. Forward only Rust's validated exact `CTHUWU_RPC_ENDPOINT` as a `CTHUWU_*`
   setting; never copy ambient contract, wallet, amount, vault, payout, child-root, or configuration
@@ -286,15 +286,15 @@ interoperability.
   only holdings of at least one token, default Whale requires 100 eligible local holders, default
   Elder requires 10, and tied balances receive the same tier. Token holdings never authorize an
   XMTP operator, operator tool, Council action, or shell command.
-- Revalidate Base chain ID before every live balance and `ecrecover` call and reject the zero
+- Revalidate Base chain ID before every live balance call and reject the zero
   contract address. There is no live transaction-receipt RPC call yet. RPC failure degrades service
   by refusing token-dependent work; it must not silently preserve ordinary operation with unknown
   economics.
 - `RecordedTokenEconomics` is active node state. Current live treasury/stake reads bind the holder
-  role/address, revalidated chain ID, configured contract, local observation time, and attested
+  role/address, revalidated chain ID, configured contract, local observation time, and derived
   configuration identity. `balanceOf(..., "latest")` supplies no block number, so persist
-  `observed_block_number = None` and omit `observedBlockNumber` from JSON; configured decimals and
-  supply are treasury-signed normalization assumptions, not `decimals()` or `totalSupply()` results,
+  `observed_block_number = None` and omit `observedBlockNumber` from JSON; deployed defaults for
+  decimals and supply are configured normalization assumptions, not `decimals()` or `totalSupply()` results,
   and a local source label is not external identity proof. Use durable intents and idempotent
   receipts rather than last-writer state. Treat
   transaction hash, block, and timestamp fields returned by an executor as assertions that Rust
@@ -306,9 +306,9 @@ interoperability.
   credentials, or shell/tool access. No persisted ballot adapter or payout/application executor is
   committed; report core results as unapplied until a configured adapter durably stores the ballot
   and returns a validated application receipt.
-- Do not describe the requested one-billion UWU supply as Clanker standard. Current Clanker v4 uses
-  a fixed 100-billion supply with 18 decimals; launching one billion requires a custom/nonstandard
-  deployment decision. Standard Clanker creator fees are LP/swap rewards, not fee-on-transfer.
+- The live UWU contract is `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` on Base mainnet
+  (`8453`) with Clanker v4's 100-billion supply and 18 decimals. Keep these as production defaults.
+  Standard Clanker creator fees are LP/swap rewards, not fee-on-transfer.
 
 ## Coding conventions
 
@@ -370,10 +370,10 @@ interoperability.
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.
 - The UWU phase implements a Base-8453 local `balanceOf` observer, local percentile tiers,
   Nature-scaled response differences, entity-scoped public Engagement, active bound node economics,
-  personal-sign/ecrecover treasury ownership verification, binding governance records, and durable
-  lifecycle/economic execution intents. No UWU contract,
-  transaction signer, external provisioner, absorption adapter, or production Council/Hermes
+  XMTP-wallet-derived treasury identity, binding governance records, and durable lifecycle/economic
+  execution intents. The live Clanker v4 UWU contract is
+  `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`; no transaction signer, external provisioner,
+  absorption adapter, or production Council/Hermes
   transport, authenticated revenue source, persisted ballot adapter, or payout/application executor
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
-  executors are available. The requested one-billion supply still requires a custom
-  deployment decision because current Clanker v4 uses a fixed 100-billion supply.
+  executors are available.

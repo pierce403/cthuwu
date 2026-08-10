@@ -9,6 +9,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
+import { privateKeyToAccount } from "viem/accounts";
 
 export const XMTP_ENVIRONMENTS = ["local", "dev", "production"] as const;
 
@@ -25,6 +26,7 @@ export type PersistentIdentity = {
 export type LoadedIdentity = PersistentIdentity & {
   identityPath: string;
   dbDirectory: string;
+  walletAddress: `0x${string}`;
 };
 
 type RandomBytes = (size: number) => Uint8Array;
@@ -73,6 +75,10 @@ export function canonicalDbEncryptionKey(value: string): `0x${string}` {
     );
   }
   return `0x${value.replace(/^0x/u, "").toLowerCase()}`;
+}
+
+export function walletAddressFromKey(walletKey: string): `0x${string}` {
+  return privateKeyToAccount(canonicalWalletKey(walletKey)).address;
 }
 
 function generateWalletKey(random: RandomBytes): `0x${string}` {
@@ -264,7 +270,12 @@ export async function loadOrCreateIdentity(
     options.dbDirectory ?? path.join(stateDirectory, "xmtp", options.environment),
   );
   await ensureEnvironmentMarker(dbDirectory, options.environment);
-  return { ...identity, identityPath, dbDirectory };
+  return {
+    ...identity,
+    identityPath,
+    dbDirectory,
+    walletAddress: walletAddressFromKey(identity.walletKey),
+  };
 }
 
 export async function prepareAgentEnvironment(

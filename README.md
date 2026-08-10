@@ -47,7 +47,7 @@ simulation joined a live Council.
 | Scales, economics, and lineage | **Implemented — local core**; final judgments drive lifecycle intents and require configured external executors for external effects |
 | Hermes-inspired anti-entropy | **Implemented — local core and persistence**; no live transport or peer-key provisioning |
 | Council metrics/lineage publication | **Not connected**; no live Council interoperability claim |
-| UWU token observance and economic inputs | **Implemented — local/pre-launch**; local tiers plus bound treasury/stake/reward/spend state; contract deployment still pending |
+| UWU token observance and economic inputs | **Implemented — live Base defaults**; Clanker v4 UWU plus XMTP-wallet-bound treasury/stake/reward/spend state |
 | UWU token-weighted governance core | **Implemented — local core**; accepted ballots return binding dispositions/application records; persisted ballots and live application adapters are absent |
 
 Evolution state is per Tentacle. Its local HMAC tags are integrity checks under an owner-only
@@ -91,8 +91,8 @@ committed, so local intents and core records must not be described as completed 
   response/resource policy and local relationship signals. Those relationship values remain local
   and are omitted from profiles sent to remote models.
 - The Scales core accumulates aggregate metrics, keeps open-period snapshots provisional, and makes
-  final judgments binding. Public wallets remain entity-scoped tier/Engagement inputs, while a
-  treasury ownership attestation plus fresh balance/stake observations and accepted reward/spend
+  final judgments binding. Public wallets remain entity-scoped tier/Engagement inputs, while the
+  XMTP-derived treasury address plus fresh balance/stake observations and accepted reward/spend
   records affect Wealth, starvation, Influence, Growth, propagation, and lifecycle decisions. Chain
   fields on executor receipts are not independently RPC-verified yet. Scales has no artificial
   counter ceilings: count fields saturate at `u32::MAX` and accumulated totals at `u64::MAX`, while
@@ -275,37 +275,25 @@ active operator record.
 
 ### UWU token observation
 
-UWU is planned as a transferable 18-decimal ERC-20 on Base mainnet (`8453`). No minimum stake is
-required to start a Tentacle, but fresh configured stake is required to spawn. Normal runtime also
-requires an attested Tentacle treasury and lifecycle executor. Configure real values, print the
-canonical message, and capture it without the CLI's final line delimiter:
+UWU is live as a transferable 18-decimal Clanker v4 ERC-20 on Base mainnet (`8453`) at
+`0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`, with a supply of 100 billion. No minimum stake is
+required to start a Tentacle, but fresh configured stake is required to spawn. The RPC, contract,
+decimals, and supply all have production defaults:
 
 ```bash
 export CTHUWU_RPC_ENDPOINT="${CTHUWU_RPC_ENDPOINT:-https://mainnet.base.org}"
-: "${CTHUWU_TOKEN_CONTRACT:?set the verified nonzero UWU contract address}"
-: "${CTHUWU_TENTACLE_WALLET:?set the Tentacle treasury address}"
+export CTHUWU_TOKEN_CONTRACT="${CTHUWU_TOKEN_CONTRACT:-0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07}"
 : "${CTHUWU_LIFECYCLE_EXECUTOR:?set an absolute verified executor path}"
-export CTHUWU_TOKEN_CONTRACT CTHUWU_TENTACLE_WALLET CTHUWU_LIFECYCLE_EXECUTOR
+export CTHUWU_RPC_ENDPOINT CTHUWU_TOKEN_CONTRACT CTHUWU_LIFECYCLE_EXECUTOR
 export CTHUWU_TOKEN_DECIMALS="${CTHUWU_TOKEN_DECIMALS:-18}"
-export CTHUWU_TOKEN_TOTAL_SUPPLY="${CTHUWU_TOKEN_TOTAL_SUPPLY:-1000000000}"
-
-TREASURY_ATTESTATION="$(./uwu.sh --print-treasury-attestation)"
-printf '%s\n' "$TREASURY_ATTESTATION"
-```
-
-Personal-sign the exact value in `TREASURY_ATTESTATION` with that treasury using an external wallet,
-then provide its recoverable 65-byte signature and start the node:
-
-```bash
-: "${CTHUWU_TREASURY_ATTESTATION_SIGNATURE:?set the external personal-sign result}"
-export CTHUWU_TREASURY_ATTESTATION_SIGNATURE
+export CTHUWU_TOKEN_TOTAL_SUPPLY="${CTHUWU_TOKEN_TOTAL_SUPPLY:-100000000000}"
 ./uwu.sh
 ```
 
-Relevant options include `--rpc-endpoint`, `--token-contract`, `--tentacle-wallet`,
-`--treasury-attestation-signature`, `--print-treasury-attestation`, `--observe-tokens`,
-`--observe-interval`, `--min-tier`, `--token-tier-intensity`, `--token-decimals`, and
-`--token-total-supply`; corresponding `CTHUWU_*` variables are listed in
+Token-specific configuration requires no environment variables. Relevant overrides include
+`--rpc-endpoint`, `--token-contract`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
+`--token-tier-intensity`, `--token-decimals`, and `--token-total-supply`; corresponding
+`CTHUWU_*` variables are listed in
 [the token guide](docs/token.md).
 
 The sidecar obtains a public EVM address from the SDK-authenticated XMTP sender inbox. Rust checks
@@ -314,21 +302,14 @@ identify its block, so the live observation records local wall-clock time, sets
 `observed_block_number` to `None`, and omits `observedBlockNumber` from JSON. Rust currently does not
 query ERC-20 `decimals()` or `totalSupply()`.
 Each Tentacle caches and ranks its own observations; there is no central holder registry. Unknown
-and stale results block the affected interaction. A separately configured, cryptographically bound
-treasury/stake source feeds Tentacle Wealth, starvation, Influence, Growth, survival, and
-propagation. Public wallets are never substituted for the Tentacle treasury.
+and stale results block the affected interaction. The sidecar derives the Tentacle treasury address
+from the same persistent XMTP wallet key used by the Agent SDK and sends only that address to Rust.
+The derived wallet feeds Tentacle Wealth, starvation, Influence, Growth, survival, and propagation;
+public sender wallets are never substituted for it. There is no separate wallet setting or ownership
+signature.
 
-`CTHUWU_TENTACLE_WALLET` names that treasury. `--print-treasury-attestation` binds the Base chain,
-token/stake contracts, treasury, configured decimals/supply assumptions, propagation stake policy,
-and configuration identity into one canonical personal-sign message. Signing proves control of the
-configured treasury over those settings; it does not prove that the contract reports the same
-decimals or total supply. On initial preflight and every economic refresh, Rust asks Base's
-`ecrecover` precompile to recover the signer from
-`CTHUWU_TREASURY_ATTESTATION_SIGNATURE` and requires it to equal the configured treasury. No private
-key enters Rust, the repository, local state, or logs.
-
-Normal-runtime token configuration, ownership attestation, initial balance/stake reads, and executor
-validation complete before startup creates or mutates Evolution state. The only outage exception is
+Normal-runtime XMTP identity derivation, token configuration, initial balance/stake reads, and
+executor validation complete before Evolution opens. The only outage exception is
 a read-only inspection of existing lifecycle state; if that finds already-binding `Absorb` or
 `Shutdown`, the runtime opens solely to drain those intents. With observation enabled, malformed and
 zero contract addresses fail startup. External spending, staking, rewards, revenue distribution,
@@ -336,9 +317,9 @@ provisioning, and absorption use durable intents and idempotent receipts from co
 Shutdown instead uses a native Rust supervisor/controller receipt after XMTP stops. Once opened, the
 lifecycle outbox keeps draining
 absorption and fixed-deadline shutdown during a Base outage. Spawn and survival Spend wait for fresh
-bound economics, and new token-dependent decisions remain blocked. No deployed contract, signer,
-authenticated revenue source, payout executor, or external provisioner is committed, so those
-external effects remain blocked until configured.
+bound economics, and new token-dependent decisions remain blocked. The UWU token contract is live;
+no transaction signer, authenticated revenue source, payout executor, or external provisioner is
+committed, so those external effects remain blocked until configured.
 
 Transaction hash, block number, and block timestamp in a lifecycle receipt are assertions returned
 by that executor. Rust validates their shape and binding to the exact intent, but it does not yet
@@ -361,11 +342,8 @@ trust and pin that full dependency chain separately.
 On Unix, the executor is also a process-group leader; cleanup kills the entire group, including
 signer/provisioner descendants, after success, failure, or timeout.
 
-The requested one-billion UWU supply remains a launch choice, not a Clanker standard: current
-Clanker v4 documentation specifies a fixed 100-billion-token supply with 18 decimals. Using one
-billion therefore requires a reviewed custom/nonstandard deployment, or the launch must adopt the
-current Clanker standard. Standard Clanker creator fees are LP/swap rewards rather than an ERC-20
-fee-on-transfer.
+The live UWU deployment uses Clanker v4's 100-billion-token supply and 18 decimals. Standard Clanker
+creator fees are LP/swap rewards rather than an ERC-20 fee-on-transfer.
 
 ## XMTP operator role
 

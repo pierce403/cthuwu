@@ -29,8 +29,9 @@ use autonomy::LifecycleExecutor;
 use bot::UwUBot;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use config::{
-    BASE_MAINNET_CHAIN_ID, BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
-    DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS, REQUESTED_UWU_TOTAL_SUPPLY, UWU_TOKEN_DECIMALS,
+    BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
+    DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS, DEFAULT_UWU_TOKEN_CONTRACT, UWU_TOKEN_DECIMALS,
+    UWU_TOTAL_SUPPLY,
 };
 use contact::ContactStore;
 use cthuwu_council::run_deterministic_simulation;
@@ -49,7 +50,7 @@ use inference::{
 use model::Model;
 use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
-use sidecar::run_xmtp_sidecar;
+use sidecar::{resolve_xmtp_wallet_address, run_xmtp_sidecar};
 use std::{
     collections::BTreeSet,
     env,
@@ -60,7 +61,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage::{ensure_private_directory, sync_directory};
-use token_eye::{EthereumSignature, JsonRpcTokenTransport, ReputationTier, TokenEye};
+use token_eye::{Address, ReputationTier, TokenEye};
 use tokio::sync::watch;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -162,21 +163,13 @@ struct Cli {
     )]
     rpc_endpoint: String,
 
-    /// Deployed UWU ERC-20 address. Required while token economics are enabled.
-    #[arg(long, env = "CTHUWU_TOKEN_CONTRACT")]
-    token_contract: Option<String>,
-
-    /// Treasury address whose UWU balance drives this Tentacle's Wealth and survival.
-    #[arg(long, env = "CTHUWU_TENTACLE_WALLET")]
-    tentacle_wallet: Option<String>,
-
-    /// Personal-sign proof over the printed canonical treasury-attestation message.
+    /// Live UWU Clanker v4 ERC-20 address on Base mainnet.
     #[arg(
         long,
-        env = "CTHUWU_TREASURY_ATTESTATION_SIGNATURE",
-        hide_env_values = true
+        env = "CTHUWU_TOKEN_CONTRACT",
+        default_value = DEFAULT_UWU_TOKEN_CONTRACT
     )]
-    treasury_attestation_signature: Option<String>,
+    token_contract: Option<String>,
 
     /// Optional ERC-20-compatible staking receipt contract queried for propagation stake.
     #[arg(long, env = "CTHUWU_STAKE_CONTRACT")]
@@ -186,11 +179,11 @@ struct Cli {
     #[arg(long, env = "CTHUWU_TOKEN_DECIMALS", default_value_t = UWU_TOKEN_DECIMALS)]
     token_decimals: u8,
 
-    /// Whole-token supply used for local normalization (requested UWU default: 1 billion).
+    /// Whole-token supply used for local normalization (Clanker v4: 100 billion).
     #[arg(
         long,
         env = "CTHUWU_TOKEN_TOTAL_SUPPLY",
-        default_value_t = REQUESTED_UWU_TOTAL_SUPPLY
+        default_value_t = UWU_TOTAL_SUPPLY
     )]
     token_total_supply: u64,
 
@@ -298,10 +291,6 @@ struct Cli {
     )]
     show_nature: bool,
 
-    /// Print the exact treasury-ownership message to personal-sign, then exit without state writes.
-    #[arg(long, default_value_t = false)]
-    print_treasury_attestation: bool,
-
     /// Untrusted bootstrap peer hints. Live gossip still requires authenticated key binding.
     #[arg(long, env = "UWUBOT_GOSSIP_PEERS", value_delimiter = ',')]
     gossip_peers: Vec<String>,
@@ -391,8 +380,6 @@ struct EconomicDependencies {
     blockchain: BlockchainConfig,
     token_eye: Option<Arc<TokenEye>>,
     stake_eye: Option<Arc<TokenEye>>,
-    attestor: Arc<JsonRpcTokenTransport>,
-    treasury_signature: EthereumSignature,
     propagation_minimum_stake_basis_points: u16,
     initial_node_economics: Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>,
 }
@@ -401,8 +388,6 @@ struct AutonomyDependencies {
     blockchain: BlockchainConfig,
     token_eye: Option<Arc<TokenEye>>,
     stake_eye: Option<Arc<TokenEye>>,
-    attestor: Arc<JsonRpcTokenTransport>,
-    treasury_signature: EthereumSignature,
     propagation_minimum_stake_basis_points: u16,
     executor: Arc<LifecycleExecutor>,
 }
@@ -417,8 +402,6 @@ impl EconomicDependencies {
             blockchain: self.blockchain,
             token_eye: self.token_eye,
             stake_eye: self.stake_eye,
-            attestor: self.attestor,
-            treasury_signature: self.treasury_signature,
             propagation_minimum_stake_basis_points,
             executor,
         }
@@ -433,14 +416,6 @@ async fn main() -> Result<()> {
         .init();
 
     let mut cli = Cli::parse();
-    if cli.print_treasury_attestation {
-        let blockchain = blockchain_config_from_cli(&cli)?;
-        println!(
-            "{}",
-            blockchain.treasury_attestation_message(cli.propagation_minimum_stake_basis_points)?
-        );
-        return Ok(());
-    }
     let starts_normal_runtime = cli.command.is_none() && !cli.council_simulate && !cli.show_nature;
     let mut mandatory_recovery = if starts_normal_runtime {
         EvolutionRuntime::mandatory_recovery_kind(&cli.data_dir)?
@@ -592,7 +567,7 @@ async fn main() -> Result<()> {
         },
         node_economics_ttl_seconds: cli.observe_interval.saturating_mul(2).max(1),
         survival_total_supply_whole: if recovering_binding_death && cli.token_total_supply == 0 {
-            REQUESTED_UWU_TOTAL_SUPPLY
+            UWU_TOTAL_SUPPLY
         } else {
             cli.token_total_supply
         },
@@ -747,27 +722,21 @@ async fn build_economic_dependencies(
     cli: &Cli,
     require_initial_observation: bool,
 ) -> Result<EconomicDependencies> {
-    let blockchain = blockchain_config_from_cli(cli)?;
+    let xmtp_wallet = resolve_xmtp_wallet_address(
+        &cli.node,
+        &cli.sidecar,
+        &cli.data_dir,
+        cli.xmtp_env.as_str(),
+    )
+    .await
+    .context("deriving the UWU wallet from the persistent XMTP identity")?;
+    let blockchain = blockchain_config_from_cli(cli, Some(xmtp_wallet))?;
     let token_eye = blockchain.build_token_eye()?;
     let stake_eye = blockchain.build_stake_eye()?;
-    let treasury_signature: EthereumSignature = cli
-        .treasury_attestation_signature
-        .as_deref()
-        .context(
-            "CTHUWU_TREASURY_ATTESTATION_SIGNATURE is required; run --print-treasury-attestation and personal-sign its exact output with the configured treasury",
-        )?
-        .parse()
-        .map_err(anyhow::Error::new)?;
-    let attestor = Arc::new(
-        JsonRpcTokenTransport::for_chain(&blockchain.rpc_endpoint, BASE_MAINNET_CHAIN_ID)
-            .map_err(anyhow::Error::new)?,
-    );
     let initial_node_economics = match observe_node_economics(
         &blockchain,
         token_eye.as_ref(),
         stake_eye.as_ref(),
-        &attestor,
-        treasury_signature,
         cli.propagation_minimum_stake_basis_points,
     )
     .await
@@ -786,8 +755,6 @@ async fn build_economic_dependencies(
         blockchain,
         token_eye,
         stake_eye,
-        attestor,
-        treasury_signature,
         propagation_minimum_stake_basis_points: cli.propagation_minimum_stake_basis_points,
         initial_node_economics,
     })
@@ -891,8 +858,6 @@ async fn drain_startup_recovery(
                 &economics.blockchain,
                 economics.token_eye.as_ref(),
                 economics.stake_eye.as_ref(),
-                &economics.attestor,
-                economics.treasury_signature,
                 economics.propagation_minimum_stake_basis_points,
             )
             .await?
@@ -963,16 +928,12 @@ async fn observe_with_death_preemption(
     blockchain: &BlockchainConfig,
     token_eye: Option<&Arc<TokenEye>>,
     stake_eye: Option<&Arc<TokenEye>>,
-    attestor: &JsonRpcTokenTransport,
-    treasury_signature: EthereumSignature,
     propagation_minimum_stake_basis_points: u16,
 ) -> Result<Option<Result<Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>>>> {
     let mut observation = Box::pin(observe_node_economics(
         blockchain,
         token_eye,
         stake_eye,
-        attestor,
-        treasury_signature,
         propagation_minimum_stake_basis_points,
     ));
     let death_was_pending = evolution
@@ -1078,12 +1039,12 @@ fn acknowledge_native_shutdown_with_detail(
     Ok(())
 }
 
-fn blockchain_config_from_cli(cli: &Cli) -> Result<BlockchainConfig> {
+fn blockchain_config_from_cli(cli: &Cli, xmtp_wallet: Option<Address>) -> Result<BlockchainConfig> {
     BlockchainConfig::from_values(BlockchainConfigInput {
         observe_tokens: cli.observe_tokens,
         rpc_endpoint: cli.rpc_endpoint.clone(),
         token_contract: cli.token_contract.as_deref(),
-        tentacle_wallet: cli.tentacle_wallet.as_deref(),
+        xmtp_wallet,
         stake_contract: cli.stake_contract.as_deref(),
         token_decimals: cli.token_decimals,
         total_supply_whole: cli.token_total_supply,
@@ -1105,8 +1066,6 @@ async fn observe_node_economics(
     config: &BlockchainConfig,
     token_eye: Option<&Arc<TokenEye>>,
     stake_eye: Option<&Arc<TokenEye>>,
-    attestor: &JsonRpcTokenTransport,
-    treasury_signature: EthereumSignature,
     propagation_minimum_stake_basis_points: u16,
 ) -> Result<Option<(TokenEconomicSnapshot, EconomicObservationProvenance)>> {
     if !config.observe_tokens {
@@ -1114,18 +1073,11 @@ async fn observe_node_economics(
     }
     let observer = token_eye.context("token economics are enabled without an UWU observer")?;
     let holder = config
-        .tentacle_wallet
-        .context("token economics are enabled without CTHUWU_TENTACLE_WALLET")?;
+        .xmtp_wallet
+        .context("token economics are enabled without an XMTP identity wallet")?;
     let contract = config
         .token_contract
         .context("token economics are enabled without CTHUWU_TOKEN_CONTRACT")?;
-    let attestation_message =
-        config.treasury_attestation_message(propagation_minimum_stake_basis_points)?;
-    attestor
-        .verify_personal_signature(attestation_message.as_bytes(), treasury_signature, holder)
-        .await
-        .map_err(anyhow::Error::new)
-        .context("configured Tentacle treasury ownership proof failed")?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock predates the Unix epoch")?
@@ -1177,8 +1129,6 @@ async fn run_autonomy_supervisor(
         blockchain,
         token_eye,
         stake_eye,
-        attestor,
-        treasury_signature,
         propagation_minimum_stake_basis_points,
         executor,
     } = dependencies;
@@ -1291,8 +1241,6 @@ async fn run_autonomy_supervisor(
                 &blockchain,
                 token_eye.as_ref(),
                 stake_eye.as_ref(),
-                &attestor,
-                treasury_signature,
                 propagation_minimum_stake_basis_points,
             )
             .await?;
@@ -1603,14 +1551,27 @@ mod tests {
             DEFAULT_TOKEN_OBSERVE_INTERVAL_SECONDS
         );
         assert_eq!(standalone.min_tier, TokenTierArg::Unproven);
-        assert!(standalone.token_contract.is_none());
+        assert_eq!(
+            standalone.token_contract.as_deref(),
+            Some(DEFAULT_UWU_TOKEN_CONTRACT)
+        );
         assert_eq!(standalone.token_decimals, UWU_TOKEN_DECIMALS);
-        assert_eq!(standalone.token_total_supply, REQUESTED_UWU_TOTAL_SUPPLY);
+        assert_eq!(standalone.token_total_supply, UWU_TOTAL_SUPPLY);
         assert_eq!(standalone.web_search_safesearch, BraveSafeSearch::Off);
 
         let council = Cli::try_parse_from(["uwubot", "--council-simulate"]).unwrap();
         assert!(council.council_simulate);
-        assert!(blockchain_config_from_cli(&standalone).is_err());
+        assert!(blockchain_config_from_cli(&standalone, None).is_err());
+        let xmtp_wallet: Address = "0x4200000000000000000000000000000000000006"
+            .parse()
+            .unwrap();
+        let blockchain = blockchain_config_from_cli(&standalone, Some(xmtp_wallet)).unwrap();
+        assert_eq!(blockchain.xmtp_wallet, Some(xmtp_wallet));
+        assert_eq!(
+            blockchain.token_contract,
+            Some(DEFAULT_UWU_TOKEN_CONTRACT.parse().unwrap())
+        );
+        assert_eq!(blockchain.total_supply_whole, 100_000_000_000);
     }
 
     #[test]

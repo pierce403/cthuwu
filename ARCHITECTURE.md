@@ -25,11 +25,11 @@ claim that a running Tentacle has joined a live Council.
   decisions, lineage records, durable execution intents/receipts, and the Hermes-inspired
   anti-entropy core have owner-only persistence and focused Rust tests. Nature/awakening signatures
   are local HMAC tags.
-- **Implemented — local/pre-launch:** the UWU ERC-20 observer verifies Base chain ID `8453`, calls
+- **Implemented — live token/local observer:** the UWU ERC-20 observer verifies Base chain ID `8453`, calls
   `balanceOf`, keeps local balance/tier state, and separates public entity observations from bound
   treasury/stake/reward/spend economics. Node economics drive Wealth, starvation, Influence, Growth,
-  propagation, and survival. No contract, signer, or external lifecycle executor has been deployed
-  or configured in the repository.
+  propagation, and survival. The live Clanker v4 contract defaults to
+  `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`; no signer or external lifecycle executor is included.
 - **Experimental boundary:** XMTP Council-group and ERC-8004 adapters.
 - **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
   provisioning. The anti-entropy state machine is not evidence of network interoperability.
@@ -209,10 +209,9 @@ Default Whale (top 1%) requires at least 100 eligible local holders; Elder (top 
 ties share a tier without address-order tie-breaking. Nature cooperation or an explicit 0–100
 override scales the response differences. Unknown, stale, malformed, and wrong-chain observations
 block the affected interaction or lifecycle action. Token tier cannot authorize the operator
-lane or tools. Decimals and whole-token supply are configured and treasury-attested normalization
-assumptions; the runtime does not call ERC-20 `decimals()` or `totalSupply()`. A deployment can
-explicitly select the requested one billion or current Clanker v4's standard 100 billion without
-pretending they are the same launch. See
+lane or tools. Decimals and whole-token supply default to the live contract's 18 decimals and
+100-billion-token supply; they remain configured normalization assumptions because the runtime does
+not call ERC-20 `decimals()` or `totalSupply()`. See
 [docs/token.md](docs/token.md).
 
 The RPC adapter validates a nonzero contract and rechecks Base chain ID before every balance call.
@@ -221,18 +220,16 @@ independent, but backoff never turns unknown evidence into permission. After req
 fresh, no economic delay is added. It does not query the block containing a `latest` response,
 contract decimals, or total supply.
 
-Node economics is bound to `CTHUWU_TENTACLE_WALLET` without importing its private key. The operator
-runs `--print-treasury-attestation`, personal-signs that exact canonical output in an external
-wallet, and supplies the recoverable signature as
-`CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. The message binds chain, token/stake contracts, treasury,
-token metadata, propagation-stake policy, and configuration identity. Initial observation and every
-treasury/stake refresh call Base's `ecrecover` precompile and require the recovered signer to equal
-the configured treasury. No private key enters Rust.
+Node economics is bound to the wallet derived from the persistent XMTP identity key. Before normal
+runtime opens, Rust asks the sidecar for a strict identity-only frame and uses its derived EVM
+address for every treasury/stake read. The same key is subsequently used by the Agent SDK for XMTP;
+there is no separately configurable treasury wallet or ownership-signature ceremony. No private key
+enters Rust.
 
 `RecordedTokenEconomics` is active node state. Its schema can carry holder role/address, chain,
 contract, optional block, observed time, configured token metadata, configuration identity, and a
 source label. The current live read path supplies local wall-clock time, no block number, and
-treasury-signed configured decimals/supply. It revalidates the chain ID and calls the configured
+configured decimals/supply. It revalidates the chain ID and calls the configured
 nonzero contract address, but does not verify contract bytecode. Its local source label is not an
 independently authenticated external identity. Event IDs and receipts replace last-writer state.
 No authenticated revenue source or payout executor is wired, so the split core does not prove a
@@ -590,7 +587,7 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 |---|---|---|
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
-| XMTP SDK / Base RPC → token observer | Authenticated entity EVM address, configured treasury/stake bindings, treasury attestation signature, RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict role/address/quantity/ABI validation, chain ID `8453`, local observation time, attested configuration identity, no observed block for `latest`, Base `ecrecover` on every treasury/stake refresh, recovered-signer equality with `CTHUWU_TENTACLE_WALLET`, sanitized errors, local cache, hard failure for missing/stale evidence; configured decimals/supply are assumptions and no private key enters Rust |
+| XMTP SDK / Base RPC → token observer | Authenticated entity EVM address, sidecar-derived XMTP treasury address, RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict identity-frame/address/quantity/ABI validation, one persistent key for XMTP and the treasury address, chain ID `8453`, local observation time, configuration identity, no observed block for `latest`, sanitized errors, local cache, hard failure for missing/stale evidence; configured decimals/supply are assumptions and no private key enters Rust |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, manual-spawn/skill requests | Role classification before parsing, signed audit, provisional/final distinction; final lifecycle effects derive from persisted state, not message claims |

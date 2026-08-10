@@ -17,13 +17,12 @@ come from authenticated transport or explicit node configuration.
 | Transfer model | Fully transferable ERC-20 |
 | Initial operator stake | None required to start a Tentacle |
 | Spawn stake | Required by the active per-Tentacle economic policy |
-| Supply target | 1,000,000,000 UWU |
-| Decimals | 18 unless the deployed contract says otherwise |
-| Contract | Not deployed or committed in this repository |
+| Supply | 100,000,000,000 UWU |
+| Decimals | 18 |
+| Contract | `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` |
 
-Current Clanker v4 uses a fixed 100-billion-token supply. A one-billion supply therefore requires a
-custom/nonstandard deployment decision; it must not be described as the Clanker default. The final
-contract address and audited ABI must be configured after launch.
+The live contract is a Clanker v4 token on Base mainnet. Runtime defaults match the deployment;
+operators may override the RPC or contract for explicit testing and migration only.
 
 ## Configuration
 
@@ -32,53 +31,47 @@ Existing observance configuration includes:
 ```text
 --rpc-endpoint <url>
 --token-contract <0x-address>
---tentacle-wallet <0x-address>
---treasury-attestation-signature <0x-signature>
---print-treasury-attestation
+--token-decimals <0-77>
+--token-total-supply <whole-tokens>
 --observe-tokens <true|false>
 --min-tier <whale|elder|acolyte|initiate|unproven>
 
 CTHUWU_RPC_ENDPOINT
 CTHUWU_TOKEN_CONTRACT
-CTHUWU_TENTACLE_WALLET
-CTHUWU_TREASURY_ATTESTATION_SIGNATURE
+CTHUWU_TOKEN_DECIMALS
+CTHUWU_TOKEN_TOTAL_SUPPLY
 CTHUWU_OBSERVE_INTERVAL
 ```
 
-Aggressive economics additionally requires a configured Tentacle treasury address, a fresh stake
-source, and receipt-producing executors for any on-chain mutation. The repository does not contain a
-deployed UWU contract, private key, transaction signer, burn contract, staking contract, reward
-contract, authenticated revenue source, revenue router, persisted ballot adapter,
+The RPC defaults to `https://mainnet.base.org`, the contract defaults to the live address above,
+decimals default to `18`, and supply defaults to `100000000000`. The XMTP identity wallet is not a
+configuration value: it is derived automatically from the same persistent key used by the Agent SDK.
+
+Aggressive economics additionally requires a fresh stake source and receipt-producing executors for
+on-chain mutation. The repository does not contain a transaction signer, burn contract, staking
+contract, reward contract, authenticated revenue source, revenue router, persisted ballot adapter,
 payout/application executor, or external provisioner. Do not claim a spend, stake, reward, revenue
 distribution, governance application, child provision, or absorption completed merely because a
 local intent or core record was created. Do not claim Shutdown completed until the Rust supervisor
 has stopped XMTP and written its native local receipt.
 
-Private keys are supplied only to the external attesting wallet or a separately isolated signer/key
-service, never to Rust, CLI values, the uwubot environment, observance state, logs, or the
-repository. Normal runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor receives
-no raw signing key. RPC URLs may contain credentials and are redacted from diagnostics.
+The XMTP private key remains in the existing owner-only sidecar identity state. Only its derived EVM
+address crosses the sidecar protocol into Rust. Economic transaction keys belong in a separately
+isolated signer service, never in CLI values, observance state, logs, or the repository. Normal
+runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor receives no raw signing key.
+RPC URLs may contain credentials and are redacted from diagnostics.
 
-### Treasury ownership attestation
+### XMTP wallet binding
 
-`CTHUWU_TENTACLE_WALLET` binds node economics to one configured treasury. Establish that binding
-without giving Rust the treasury key:
+At startup the Node sidecar loads or atomically creates `state/xmtp-identity.json`, derives the EVM
+address from that identity's secp256k1 wallet key, and emits one bounded identity frame. Rust parses
+only that address and uses it as the Tentacle treasury holder for UWU and optional stake
+`balanceOf` calls. The live Agent SDK process subsequently loads the same file and key.
 
-1. Set the RPC endpoint, token and optional stake contracts, `CTHUWU_TENTACLE_WALLET`, token
-   metadata, and propagation-stake policy.
-2. Run `./uwu.sh --print-treasury-attestation` and capture its canonical output exactly, excluding
-   only the CLI's final line delimiter.
-3. Personal-sign that exact message with the configured treasury in an external wallet.
-4. Set the resulting recoverable 65-byte signature as
-   `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`, then start the node with the same configuration.
-
-The canonical message binds Base chain ID `8453`, token and stake contracts, treasury, configured
-decimals/supply assumptions, propagation-stake policy, and configuration identity. The signature
-proves that the treasury signed those settings; it does not prove the contract reports the same
-metadata. Initial observation and every periodic treasury/stake refresh verify the signature through
-Base's `ecrecover` precompile and require the recovered signer to equal
-`CTHUWU_TENTACLE_WALLET`. Changing any bound configuration requires a new signature. No private key
-enters Rust.
+There is no separate treasury address, ownership signature, or setup ceremony. A missing, corrupt,
+environment-mismatched, zero, malformed, or multi-frame identity result blocks production startup.
+The economic configuration identity binds the derived XMTP wallet, chain, contracts, decimals,
+supply, and propagation-stake policy.
 
 ## Local observance
 
@@ -86,7 +79,7 @@ enters Rust.
 revalidates Base chain ID `8453`. It validates JSON-RPC quantities, response bounds, the ERC-20 ABI
 shape, and configured contract. Calls use the `latest` block tag, whose response contains no block
 number; current observations therefore carry local wall-clock time, set `observed_block_number` to
-`None`, and omit `observedBlockNumber` from JSON. Configured and treasury-attested decimals, supply,
+`None`, and omit `observedBlockNumber` from JSON. Configured decimals, supply,
 and configuration identity normalize the balance, but Rust does not call ERC-20 `decimals()` or
 `totalSupply()` to verify them. Observations are cached per address and ranked only within the
 Tentacle's local sample.
@@ -119,9 +112,10 @@ Retry/backoff may protect the RPC endpoint, but it must not turn unknown economi
 operation or introduce a delay after all required economic evidence is fresh and the action is
 authorized.
 
-Normal startup validates token configuration, treasury ownership, initial economics, and the
-lifecycle executor before creating or mutating Evolution state. The only outage exception is a
-read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
+Normal startup derives the persistent XMTP wallet, validates token configuration and initial
+economics, and validates the lifecycle executor before creating or mutating Evolution state. XMTP
+identity creation may occur before the RPC preflight because that identity is itself the wallet
+source. The only outage exception is a read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
 `Shutdown` work, the runtime may open solely to drain that work even while Base is unavailable.
 Persisted `Spawn` and survival `Spend`, plus new token-dependent decisions, wait for fresh bound
 economics.
@@ -145,7 +139,7 @@ interaction policy, not an operator-authentication mechanism.
 
 ## Active Tentacle economics
 
-`RecordedTokenEconomics` consumes cryptographically and configurationally bound node observations.
+`RecordedTokenEconomics` consumes identity-derived and configurationally bound node observations.
 It is part of the Scales input rather than an optional reporting surface:
 
 - treasury balance is the primary Wealth input;
@@ -163,7 +157,7 @@ accumulated totals at `u64::MAX`; per-sample and persistence-integrity bounds re
 Economic records can carry role, address, chain, contract, optional block, observed time, configured
 token metadata, configuration identity, and a source label. The current live path supplies a
 revalidated chain ID, the configured nonzero contract address, local observation time, no block
-number, and treasury-signed configured metadata; it does not verify contract bytecode, and its local
+number, and configured token metadata; it does not verify contract bytecode, and its local
 source label is not independently authenticated external identity. Event and receipt IDs prevent
 last-writer state and replayed transactions. The revenue-split core has no authenticated revenue
 source or payout executor and therefore records no live allocation.
@@ -262,25 +256,23 @@ until a configured adapter durably stores the ballot/application and returns a s
 Governance subjects cannot grant operator authority, disclose credentials, or inject arbitrary
 shell/tool commands.
 
-## Post-launch activation
+## Production verification
 
-1. Deploy and audit the chosen one-billion UWU ERC-20 and any staking, survival-spend, reward, and
-   revenue-routing contracts.
-2. Record the Base contract addresses, ABI revisions, decimals, and deployment blocks.
-3. Configure independent Base RPC endpoints and `CTHUWU_TENTACLE_WALLET`.
-4. Print the canonical treasury attestation, personal-sign the exact output externally, and set
-   `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`; do not provide the wallet key to Rust.
-5. Configure transaction signer/executor identities without exposing their keys to observance or
+1. Confirm Base chain ID `8453`, deployed bytecode, symbol, `18` decimals, and
+   `100000000000` whole-token supply for
+   `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` using an independent RPC or explorer.
+2. Start a fresh Tentacle with no token-specific environment variables and verify its observed holder
+   equals the address derived from `state/xmtp-identity.json`.
+3. Exercise zero, stale, unavailable, malformed, and wrong-chain hard-failure cases.
+4. Configure transaction signer/executor identities without exposing their keys to observance or
    logs.
-6. Verify chain ID, treasury signer recovery, contract bytecode, `balanceOf`, `decimals()`,
-   `totalSupply()`, block-pinned observations, transaction receipts, and reorg behavior. The current
-   Rust adapter implements only chain ID, `balanceOf(..., "latest")`, and treasury signer recovery.
-7. Exercise zero, stale, unavailable, wrong-chain, and invalid-attestation hard-failure cases.
-8. Exercise Wealth, starvation, survival spend, automatic spawn, revenue payout, and governance
-   application against test contracts and receipt-producing adapters.
-9. Enable production effects only after receipts can be independently reconciled.
+5. Verify block-pinned observations, transaction receipts, and reorg behavior before assigning
+   production value to survival spending. The current Rust observer implements chain-ID validation
+   and `balanceOf(..., "latest")`; decimals and supply are deployment defaults rather than live RPC
+   metadata reads.
+6. Exercise Wealth, starvation, survival spend, automatic spawn, revenue payout, and governance
+   application against receipt-producing adapters.
 
-Until those steps are complete, local deterministic policy and durable intent creation can be
-tested, but the repository must continue to say that the UWU contract, signer, authenticated revenue
+The UWU token contract is live. Separate signer, staking/burn/reward contracts, authenticated revenue
 source, persisted ballot adapter, payout/application executor, provisioner, and live peer-to-peer
-Council/Hermes transports are not committed.
+Council/Hermes transports remain external integration work.

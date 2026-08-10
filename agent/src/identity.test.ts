@@ -8,6 +8,7 @@ import {
   loadOrCreateIdentity,
   parseEnvironment,
   prepareAgentEnvironment,
+  walletAddressFromKey,
 } from "./identity.js";
 
 const temporaryDirectories: string[] = [];
@@ -50,6 +51,8 @@ describe("XMTP identity persistence", () => {
     expect(second.walletKey).toBe(first.walletKey);
     expect(second.dbEncryptionKey).toBe(first.dbEncryptionKey);
     expect(first.walletKey).toMatch(/^0x[0-9a-f]{64}$/u);
+    expect(first.walletAddress).toMatch(/^0x[0-9a-fA-F]{40}$/u);
+    expect(second.walletAddress).toBe(first.walletAddress);
     expect(first.dbEncryptionKey).toMatch(/^0x[0-9a-f]{64}$/u);
     expect(JSON.parse(await readFile(first.identityPath, "utf8"))).toMatchObject({
       version: 1,
@@ -155,5 +158,11 @@ describe("identity configuration validation", () => {
     expect(canonicalDbEncryptionKey("BB".repeat(32))).toBe(`0x${"bb".repeat(32)}`);
     expect(() => canonicalWalletKey(`0x${"00".repeat(32)}`)).toThrow("not a valid");
     expect(() => canonicalDbEncryptionKey("abcd")).toThrow("exactly 64");
+  });
+
+  it("derives the canonical EVM wallet from the persisted XMTP key", () => {
+    expect(walletAddressFromKey(`0x${"00".repeat(31)}01`)).toBe(
+      "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+    );
   });
 });

@@ -64,14 +64,13 @@ is removed:
 This requires cryptographic and configuration provenance. A user's wallet cannot be substituted for
 the Tentacle treasury, and a stale cache entry cannot be treated as a current stake. Current
 `balanceOf(..., "latest")` reads supply no block number and use local wall-clock observation time;
-configured decimals and supply are signed assumptions rather than `decimals()` or `totalSupply()`
+configured decimals and supply are assumptions rather than `decimals()` or `totalSupply()`
 results.
 
-Treasury provenance now includes an ownership proof. The operator configures
-`CTHUWU_TENTACLE_WALLET`, runs `--print-treasury-attestation`, personal-signs that exact canonical
-output externally, and supplies `CTHUWU_TREASURY_ATTESTATION_SIGNATURE`. Initial observation and
-every treasury/stake refresh verify the recoverable signature through Base's `ecrecover` precompile
-and require the recovered signer to equal the configured wallet. No private key enters Rust.
+Treasury provenance now uses the EVM address deterministically derived from the same persistent key
+as the node's XMTP identity. Rust receives that address through a strict identity-only sidecar frame
+and uses it for every treasury/stake refresh. There is no separately configured treasury wallet or
+ownership signature, and no private key enters Rust.
 
 ### Neutral unknown balances
 
@@ -147,8 +146,8 @@ external child/resource can remain orphaned.
 These controls preserve the meaning of an authorized economic effect:
 
 - transport-authenticated XMTP roles and cryptographic wallet/address bindings;
-- the canonical treasury attestation and Base `ecrecover` signer equality on every treasury/stake
-  refresh, without providing a private key to Rust;
+- deterministic XMTP-wallet derivation and strict identity-frame parsing on every startup, without
+  providing a private key to Rust;
 - revalidated Base chain ID and configured contract, local observation time,
   `observed_block_number = None` (omitted from JSON) for current `latest` reads, and treasury-signed
   configuration identity;
