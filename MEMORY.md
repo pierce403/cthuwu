@@ -311,9 +311,9 @@ Last reviewed: 2026-08-09
 - Unknown, stale, malformed, or wrong-chain observations block the dependent interaction, Scales
   evaluation, or lifecycle effect. Failed refresh preserves diagnostic state rather than fabricating
   zero. A freshly observed zero maps a public address to Unproven.
-- Tier response differences are bounded and scaled by `100 - Nature.cooperation` unless an operator
-  supplies a 0–100 override. A tier can alter public response depth/tone but never grants XMTP
-  operator authority, tools, or local execution.
+- Tier response depth is bounded and scaled by `100 - Nature.cooperation` unless an operator
+  supplies a 0–100 override. Tiers never append canned status text to public replies and never grant
+  XMTP operator authority, tools, or local execution.
 - Public-sender balances affect only that entity's tier, gating, and Engagement. A separately bound
   Tentacle treasury is the primary Wealth input; bound stake affects Influence and propagation;
   accepted reward records affect Growth; holdings lower starvation pressure; an accepted executor

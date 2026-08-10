@@ -728,9 +728,10 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
   - Before Nature activation, treasury observations are validated at startup but deliberately
     excluded from Scales state. Normal startup immediately records the local default transition,
     then admits public work subject to current economics.
-  - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
-    depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
-    optional 0–100 override. `unproven` is the permissive default minimum tier.
+  - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded model
+    depth at full intensity. The default intensity is `100 - Nature.cooperation`, with an optional
+    0–100 override. Tiers do not append repetitive canned status text to public replies;
+    `unproven` is the permissive default minimum tier.
   - Token tier never grants XMTP operator authority, local tools, or shell access.
   - A public-sender balance contributes only to that entity's tier and Engagement. A separately
     bound Tentacle treasury, stake, reward, and spend source drives Wealth, starvation, Influence,

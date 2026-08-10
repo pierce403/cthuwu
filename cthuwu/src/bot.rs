@@ -474,12 +474,6 @@ impl UwUBot {
         let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
         let profile = contact.model_profile_markdown();
         let mut response = self.model_reply(&profile, text, &model_policy).await;
-        if let Some(observation) = token_observation.as_ref()
-            && observation_is_current(observation)
-        {
-            decorate_token_tier_response(&mut response, observation.tier, tier_intensity);
-        }
-
         if created && !response.contains('?') {
             contact.mark_onboarding_prompted();
             response.push_str("\n\nheh, one tiny optional thing: i can keep a private note on this node about only what u choose to tell me. if u feel like it, what should i call u? saying “just chat” is totally fine too :3");
@@ -957,29 +951,6 @@ fn apply_token_tier_policy(
         tier_behavior(observation.tier),
     ));
     *policy = policy.clone().bounded();
-}
-
-fn decorate_token_tier_response(response: &mut String, tier: ReputationTier, intensity: u8) {
-    if intensity == 0 {
-        return;
-    }
-    let note = match tier {
-        ReputationTier::Whale => {
-            "the deep-lore current is open for this reply, and i'm giving it first-priority attention uwu."
-        }
-        ReputationTier::Elder => {
-            "i'm taking the more considered Elder-depth path with this one, fwiend."
-        }
-        ReputationTier::Acolyte => return,
-        ReputationTier::Initiate => {
-            "i'll keep this first pass focused while ur local UWU history takes shape :3"
-        }
-        ReputationTier::Unproven => {
-            "one tentacle stays skeptical for now—show me what u mean, and we'll build trust from there."
-        }
-    };
-    response.push_str("\n\n");
-    response.push_str(note);
 }
 
 fn token_engagement_bonus_basis_points(
