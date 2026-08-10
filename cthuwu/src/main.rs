@@ -1307,11 +1307,16 @@ async fn run_autonomy_supervisor(
                 }
                 Ok(None) => true,
                 Err(error) => {
-                    evolution
+                    let refresh_failed_at = current_unix_seconds()?;
+                    let became_unavailable = evolution
                         .lock()
                         .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
-                        .mark_node_economics_unavailable();
-                    warn!(%error, "mandatory Tentacle economics refresh failed");
+                        .mark_node_economics_unavailable_if_stale(refresh_failed_at);
+                    if became_unavailable {
+                        warn!(%error, "mandatory Tentacle economics refresh failed; the last verified observation is stale or unavailable");
+                    } else {
+                        warn!(%error, "mandatory Tentacle economics refresh failed; retaining the fresh verified observation while retrying");
+                    }
                     false
                 }
             };

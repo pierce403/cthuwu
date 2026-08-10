@@ -277,18 +277,22 @@ active operator record.
 
 UWU is live as a transferable 18-decimal Clanker v4 ERC-20 on Base mainnet (`8453`) at
 `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`, with a supply of 100 billion. No minimum stake is
-required to start a Tentacle, but fresh configured stake is required to spawn. The RPC, contract,
-decimals, and supply all have production defaults:
+required to start a Tentacle, but fresh configured stake is required to spawn. The contract,
+decimals, and supply have production defaults. Configure a dedicated Base mainnet RPC for production;
+[Base documents](https://docs.base.org/base-chain/quickstart/connecting-to-base) the built-in public
+endpoint as rate limited and unsuitable for production systems:
 
 ```bash
 export CTHUWU_RPC_ENDPOINT="${CTHUWU_RPC_ENDPOINT:-https://mainnet.base.org}"
 export CTHUWU_TOKEN_CONTRACT="${CTHUWU_TOKEN_CONTRACT:-0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07}"
-: "${CTHUWU_LIFECYCLE_EXECUTOR:?set an absolute verified executor path}"
-export CTHUWU_RPC_ENDPOINT CTHUWU_TOKEN_CONTRACT CTHUWU_LIFECYCLE_EXECUTOR
+export CTHUWU_RPC_ENDPOINT CTHUWU_TOKEN_CONTRACT
 export CTHUWU_TOKEN_DECIMALS="${CTHUWU_TOKEN_DECIMALS:-18}"
 export CTHUWU_TOKEN_TOTAL_SUPPLY="${CTHUWU_TOKEN_TOTAL_SUPPLY:-100000000000}"
 ./uwu.sh
 ```
+
+`CTHUWU_LIFECYCLE_EXECUTOR` is optional. Without one, external spend, spawn, and absorption intents
+remain pending for a future executor; native local Shutdown remains available.
 
 Token-specific configuration requires no environment variables. Relevant overrides include
 `--rpc-endpoint`, `--token-contract`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
@@ -301,9 +305,10 @@ Base chain ID and issues `eth_call` `balanceOf(address)` against `latest`. That 
 identify its block, so the live observation records local wall-clock time, sets
 `observed_block_number` to `None`, and omits `observedBlockNumber` from JSON. Rust currently does not
 query ERC-20 `decimals()` or `totalSupply()`.
-Each Tentacle caches and ranks its own observations; there is no central holder registry. Unknown
-and stale results block the affected interaction. The sidecar derives the Tentacle treasury address
-from the same persistent XMTP wallet key used by the Agent SDK and sends only that address to Rust.
+Each Tentacle caches and ranks its own observations; there is no central holder registry. A failed
+refresh retries every second and may retain only the last still-fresh verified treasury observation;
+unknown or stale results block the affected interaction. The sidecar derives the Tentacle treasury
+address from the same persistent XMTP wallet key used by the Agent SDK and sends only that address to Rust.
 The derived wallet feeds Tentacle Wealth, starvation, Influence, Growth, survival, and propagation;
 public sender wallets are never substituted for it. There is no separate wallet setting or ownership
 signature.

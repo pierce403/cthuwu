@@ -688,7 +688,9 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
     tie-breaking.
   - Fresh observations are cached for the configured interval. Unknown, stale, malformed, or
     wrong-chain results block the dependent interaction, Scales evaluation, or lifecycle effect.
-    Freshly observed zero remains real evidence and maps a public holder to Unproven.
+    A failed treasury refresh retries every second and retains only a prior verified observation
+    that remains inside its configured freshness TTL. Freshly observed zero remains real evidence
+    and maps a public holder to Unproven.
   - Whale, Elder, Acolyte, Initiate, and Unproven tiers have measurably different bounded response
     depth and tone at full intensity. The default intensity is `100 - Nature.cooperation`, with an
     optional 0–100 override. `unproven` is the permissive default minimum tier.

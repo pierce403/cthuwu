@@ -33,7 +33,7 @@ COPY --chown=node:node skills /workspace/skills
 ENV UWUBOT_DATA_DIR=/data \
     UWUBOT_OPERATOR_ROOT=/workspace \
     UWUBOT_SIDECAR=/opt/cthuwu/agent/dist/index.js \
-    UWUBOT_XMTP_ENV=dev
+    UWUBOT_XMTP_ENV=production
 
 USER node
 VOLUME ["/data", "/workspace"]

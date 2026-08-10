@@ -1630,6 +1630,14 @@ impl EvolutionRuntime {
         self.node_economics_available = false;
     }
 
+    pub fn mark_node_economics_unavailable_if_stale(&mut self, now_unix_seconds: u64) -> bool {
+        if self.node_economics_is_current(now_unix_seconds) {
+            return false;
+        }
+        self.node_economics_available = false;
+        true
+    }
+
     pub fn node_economics_is_current(&self, now_unix_seconds: u64) -> bool {
         if !self.node_economics_available {
             return false;
@@ -4137,6 +4145,47 @@ mod tests {
                 .unwrap()
                 .contains("Nature ")
         );
+    }
+
+    #[test]
+    fn transient_refresh_failure_preserves_only_a_fresh_verified_observation() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = now_unix_seconds().unwrap();
+        let mut runtime = EvolutionRuntime::open(
+            root.path(),
+            workspace.path(),
+            EvolutionStartupOptions {
+                skip_awakening: true,
+                require_node_economics: true,
+                node_economics_ttl_seconds: 120,
+                initial_node_economics: Some((
+                    TokenEconomicSnapshot {
+                        balance_basis_points: 10_000,
+                        stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
+                        reward_basis_points: 0,
+                        trustworthy: true,
+                    },
+                    EconomicObservationProvenance::base(
+                        [1; 20],
+                        EconomicHolderRole::TentacleTreasury,
+                        [2; 20],
+                        now,
+                        Some(1),
+                        [3; 32],
+                    )
+                    .unwrap(),
+                )),
+                ..EvolutionStartupOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!runtime.mark_node_economics_unavailable_if_stale(now + 60));
+        assert!(runtime.node_economics_is_current(now + 60));
+
+        assert!(runtime.mark_node_economics_unavailable_if_stale(now + 121));
+        assert!(!runtime.node_economics_is_current(now + 121));
     }
 
     #[test]
