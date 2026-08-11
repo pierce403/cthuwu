@@ -70,11 +70,6 @@ npm --prefix web ci
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run build
-npm --prefix subgraph ci
-npm --prefix subgraph run codegen
-npm --prefix subgraph run build
-npm --prefix subgraph test
-BASE_RPC_URL=https://mainnet.base.org npm --prefix subgraph run verify:deployment
 ```
 
 Do not claim live XMTP interoperability until the corresponding end-to-end release gate in
@@ -386,7 +381,7 @@ deployment verification do not prove a funded live ERC-8004 registration and rec
   Council-group claim.
 - The canonical Base ERC-8004 adapter, staged registration workflow, and narrow sidecar signer are
   implemented and locally tested, with a read-only deployment verifier. A funded live
-  registration/recovery exercise and production Graph deployment remain external release gates.
+  registration/recovery exercise and production restricted Graph-key configuration remain external release gates.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.

@@ -43,9 +43,9 @@ joined a live Council.
   discovery/adoption, voluntary allegiance, narrow sidecar signing, and operator-only recovery.
   Source tests and read-only canonical deployment verification are complete; a funded live
   registration and restart-recovery exercise remains an external release gate.
-- **Implemented — static source/build:** a direct-Graph public leaderboard, validated localStorage
-  cache, and mobile PWA/offline shell. Publishing the subgraph endpoint still requires external
-  Graph credentials and a network deployment.
+- **Implemented — static source/build:** an Agent0-backed public leaderboard with direct same-block
+  Base UWU reads, validated localStorage cache, and mobile PWA/offline shell. Deployment requires
+  only a restricted public Graph gateway key; there is no custom subgraph publication step.
 - **Experimental boundary:** XMTP Council-group adapter.
 - **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
   provisioning. The anti-entropy state machine is not evidence of network interoperability.
@@ -94,12 +94,13 @@ than depending on animation or color. A dismissible install card uses Chromium's
 installed web-app storage is separate from the browser's local identity storage. Automatic install
 offers cool down for seven days, while a permanent Install App action can reopen the guidance.
 
-The leaderboard fetches every page at one indexed block and rejects partial data, malformed public
+The leaderboard fetches exact current allegiance metadata from Agent0 at one indexed block, verifies
+that block through Base RPC, reads canonical UWU `balanceOf` at that block, and rejects partial data, malformed public
 profiles, or `_meta.hasIndexingErrors`. A validated snapshot is atomically stored at
 `cthuwu:leaderboard:v1`; it remains visible offline and is never replaced by a failed refresh.
 Ranking groups exact-allegiance identities by verified nonzero `agentWallet`, so a wallet receives
-one balance and position even if several agent IDs share it. The subgraph and deployment scripts are
-in `subgraph/`, but a production Graph endpoint is external setup rather than a repository claim.
+one balance and position even if several agent IDs share it. Agent0 is an indexing/search service,
+not a membership authority; the on-chain bytes and contract reads remain authoritative.
 
 ### Rust runtime and XMTP transport
 

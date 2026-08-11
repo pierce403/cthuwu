@@ -19,6 +19,7 @@ jobs:
       # All VITE_* values are compiled into static JavaScript and are public.
       VITE_CTHUWU_GRAPHQL_ENDPOINT: ${{ vars.CTHUWU_GRAPHQL_ENDPOINT }}
       VITE_CTHUWU_GRAPH_API_KEY: ${{ vars.CTHUWU_GRAPH_API_KEY }}
+      VITE_CTHUWU_BASE_RPC_ENDPOINT: ${{ vars.CTHUWU_BASE_RPC_ENDPOINT }}
       VITE_CTHUWU_IPFS_GATEWAY: ${{ vars.CTHUWU_IPFS_GATEWAY }}
       VITE_CTHUWU_ARWEAVE_GATEWAY: ${{ vars.CTHUWU_ARWEAVE_GATEWAY }}
       VITE_CTHUWU_LEADERBOARD_FRESH_MS: ${{ vars.CTHUWU_LEADERBOARD_FRESH_MS }}
@@ -37,7 +38,7 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
-        # Restrict the public Graph key by cthuwu.app origin, exact subgraph, spending limit,
+        # Restrict the public Graph key by cthuwu.app origin, exact Agent0 subgraph, spending limit,
         # monitoring, and rotation. Missing or unresolved config blocks this deployment above.
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

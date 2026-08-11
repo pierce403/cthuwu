@@ -43,7 +43,18 @@ const config = {
   cacheFreshnessMs: 900_000,
   ipfsGateway: "https://cloudflare-ipfs.com/ipfs/",
   arweaveGateway: "https://arweave.net/",
+  baseRpcEndpoint: "https://rpc.fixture.invalid/",
 };
+
+function fixtureFetch(fixture: string): typeof fetch {
+  return vi.fn(async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.query) return new Response(fixture);
+    if (Array.isArray(body)) return new Response(JSON.stringify(body.map((request) => ({ jsonrpc: "2.0", id: request.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }))));
+    if (body.method === "eth_call") return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }));
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { number: "0x2f766f4", hash: `0x${"cc".repeat(32)}`, timestamp: "0x6a7944c8" } }));
+  }) as typeof fetch;
+}
 
 beforeEach(() => localStorage.clear());
 
@@ -118,21 +129,20 @@ describe("Tentacle leaderboard UI", () => {
   it("atomically replaces the cache only after a complete background refresh", async () => {
     writeLeaderboardCache(localStorage, cachedSnapshot());
     const fixture = readFileSync(
-      resolve(process.cwd(), "../subgraph/fixtures/leaderboard-v1.json"),
+      resolve(process.cwd(), "e2e/agent0-leaderboard.json"),
       "utf8",
     );
     const elements = mountElements();
     const controller = initializeLeaderboard(elements, {
       config: { ...config, graphEndpoint: "https://example.test/graphql" },
-      fetch: vi.fn(async () => new Response(fixture)) as typeof fetch,
+      fetch: fixtureFetch(fixture),
       now: () => new Date("2026-08-11T12:01:00Z"),
     });
     await controller.refresh();
     expect(elements.status.textContent).toBe("CURRENT");
     expect(elements.ranked.textContent).toContain("Fixture Tentacle");
-    expect(elements.ranked.textContent).toContain("1 active · 0 revoked · 1 total");
+    expect(elements.ranked.textContent).toContain("0 active · 0 revoked in recent sample");
     expect(elements.ranked.textContent).toContain("informational provenance only");
-    expect(elements.ranked.textContent).toContain("Recent public event sample · 1 shown of 1");
     expect(readLeaderboardCache(localStorage)?.rankedWallets[0].representativeAgentId).toBe("7");
     controller.dispose();
   });
@@ -140,7 +150,7 @@ describe("Tentacle leaderboard UI", () => {
   it("surfaces subgraph indexing errors without overwriting a valid cache", async () => {
     writeLeaderboardCache(localStorage, cachedSnapshot());
     const fixture = JSON.parse(
-      readFileSync(resolve(process.cwd(), "../subgraph/fixtures/leaderboard-v1.json"), "utf8"),
+      readFileSync(resolve(process.cwd(), "e2e/agent0-leaderboard.json"), "utf8"),
     ) as { data: { _meta: { hasIndexingErrors: boolean } } };
     fixture.data._meta.hasIndexingErrors = true;
     const elements = mountElements();

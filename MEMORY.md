@@ -465,15 +465,14 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
   production XMTP direct messaging at the positively resolved, persisted 64-hex inbox ID—not the
   wallet address—and a public CTHUWU manifest. It publishes no DMs, contacts,
   operators, credentials, paths, prompts, load, private model or Evolution state, A2A, or x402.
-- The static leaderboard queries the custom Base subgraph directly, checks `_meta`, requires complete
-  same-block pagination, and atomically replaces `cthuwu:leaderboard:v1` only with a fully validated
-  error-free snapshot. Reputation is displayed with provenance and does not define membership/rank.
-- Rank is unique-wallet raw UWU descending, then earliest registration block and lowest agent ID.
+- The static leaderboard queries Agent0 for current ERC-8004 metadata, checks `_meta`, requires
+  complete same-block pagination, verifies the indexed block through Base RPC, reads UWU `balanceOf`
+  at that block, and atomically replaces `cthuwu:leaderboard:v1` only with a fully validated snapshot.
+- Rank is unique-wallet raw UWU descending, then earliest registration timestamp and lowest agent ID.
   Zero remains `UNFUNDED`. Level is precision-safe `log10(rawBalance) - 18`; Future Influence is
   separately labeled inactive and no voting rules are implemented.
-- Subgraph source, fixtures, codegen/build/tests, and deployment scripts are present. No production
-  endpoint is claimed until an operator supplies Graph Studio/network credentials, publishes it,
-  and configures the static build. The compiled Graph key is public and must be hostname/subgraph
+- Agent0 provides the public ERC-8004 index; Cthuwu deploys no custom subgraph. The compiled Graph
+  key is public and must be hostname/Agent0-subgraph
   restricted, spend-capped, monitored, and rotated.
 
 See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
@@ -482,14 +481,15 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 
 - The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
 - `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub
-  Pages Actions only after the required production Graph variables pass fail-closed validation;
+  Pages Actions only after the required restricted public Graph key passes fail-closed validation;
   otherwise it stops before upload and leaves the previous deployment in place.
 - The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
 - The public build has no XMTP repository-variable configuration. Both XMTP `production` and the
   current intro Tentacle address are compiled into the browser.
 - The Pages build also publishes `manifest.webmanifest`, `sw.js`, `offline.html`, and PWA icons from
   `web/public/`; installability remains static-host compatible.
-- The Pages build accepts `CTHUWU_GRAPHQL_ENDPOINT`, `CTHUWU_GRAPH_API_KEY`, IPFS/Arweave gateway,
+- The Pages build accepts `CTHUWU_GRAPH_API_KEY`, optional `CTHUWU_GRAPHQL_ENDPOINT` and
+  `CTHUWU_BASE_RPC_ENDPOINT` overrides, IPFS/Arweave gateway,
   and leaderboard-freshness repository variables as Vite build inputs. They are public in the
   resulting JavaScript; the endpoint must use a tightly restricted Graph key.
 
@@ -531,9 +531,9 @@ do not imply several Cthulhus. Live XMTP Council groups remain an adapter bounda
 
 The ERC-8004/Tentacle milestone adds the canonical Base read adapter and pinned deployment checks,
 crash-safe automatic registration/adoption and funding policy, narrow sidecar signing, exact
-voluntary allegiance, a bounded self-referencing profile, a custom public Base subgraph, a static
-wallet-grouped leaderboard with precision-safe Level and validated localStorage cache, and the
-mobile install/offline PWA flow. Production subgraph publication, Graph endpoint configuration, and
+voluntary allegiance, a bounded self-referencing profile, Agent0 current-state discovery plus direct
+same-block Base UWU reads, a static wallet-grouped leaderboard with precision-safe Level and validated localStorage cache, and the
+mobile install/offline PWA flow. Production restricted Graph-key configuration and
 a funded live registration still require external credentials/funding and must not be inferred from
 repository source alone.
 

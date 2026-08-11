@@ -156,8 +156,8 @@ function validateSnapshot(value: unknown): LeaderboardSnapshot {
       }
     }
     if (previousGroup && balance === previousBalance) {
-      const previousRegistration = earliestRegistrationBlock(previousGroup.identities);
-      const registration = earliestRegistrationBlock(group.identities);
+      const previousRegistration = earliestRegistrationTimestamp(previousGroup.identities);
+      const registration = earliestRegistrationTimestamp(group.identities);
       if (
         registration < previousRegistration ||
         (registration === previousRegistration &&
@@ -181,11 +181,11 @@ function validateSnapshot(value: unknown): LeaderboardSnapshot {
   return snapshot;
 }
 
-function earliestRegistrationBlock(identities: TentacleIdentity[]): bigint {
+function earliestRegistrationTimestamp(identities: TentacleIdentity[]): bigint {
   return identities.reduce((earliest, identity) => {
-    const block = BigInt(identity.registrationBlock);
+    const block = BigInt(identity.registrationTimestamp);
     return block < earliest ? block : earliest;
-  }, BigInt(identities[0].registrationBlock));
+  }, BigInt(identities[0].registrationTimestamp));
 }
 
 function validateIdentity(
@@ -229,11 +229,9 @@ function validReputationCounters(value: unknown, sample: unknown): boolean {
   try {
     const counters = object(value, "reputation counters");
     if (
-      !unsigned(counters.total) ||
       !unsigned(counters.active) ||
-      !unsigned(counters.revoked) ||
-      BigInt(counters.total) >= 1n << 256n ||
-      BigInt(counters.active) + BigInt(counters.revoked) !== BigInt(counters.total) ||
+      !unsigned(counters.sampledRevoked) ||
+      BigInt(counters.active) >= 1n << 256n ||
       !Array.isArray(sample)
     ) return false;
     const active = sample.filter((signal) => {
@@ -251,9 +249,8 @@ function validReputationCounters(value: unknown, sample: unknown): boolean {
       }
     }).length;
     return (
-      BigInt(sample.length) <= BigInt(counters.total) &&
       BigInt(active) <= BigInt(counters.active) &&
-      BigInt(revoked) <= BigInt(counters.revoked)
+      BigInt(revoked) <= BigInt(counters.sampledRevoked)
     );
   } catch {
     return false;

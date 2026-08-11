@@ -9,6 +9,7 @@ const result = spawnSync(process.execPath, [npmCli, "run", "build"], {
     ...process.env,
     VITE_CTHUWU_GRAPHQL_ENDPOINT: "https://graph.fixture.invalid/graphql",
     VITE_CTHUWU_GRAPH_API_KEY: "",
+    VITE_CTHUWU_BASE_RPC_ENDPOINT: "https://rpc.fixture.invalid/",
     VITE_CTHUWU_IPFS_GATEWAY: "https://ipfs.io/ipfs/",
     VITE_CTHUWU_ARWEAVE_GATEWAY: "https://arweave.net/",
     VITE_CTHUWU_LEADERBOARD_FRESH_MS: "900000",

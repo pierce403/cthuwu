@@ -136,29 +136,6 @@ jobs:
             web/test-results/playwright
           if-no-files-found: ignore
 
-  subgraph:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: subgraph
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: subgraph/package-lock.json
-      - name: Install Matchstick runtime
-        run: sudo apt-get update && sudo apt-get install -y libpq5
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
-      - name: Verify canonical Base deployments without writing
-        run: npm run verify:deployment
-        env:
-          BASE_RPC_URL: https://mainnet.base.org
-
   container:
     runs-on: ubuntu-latest
     timeout-minutes: 30

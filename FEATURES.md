@@ -21,7 +21,7 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
 - **Description**: A small, friendly browser experience at [cthuwu.app](https://cthuwu.app) that builds to static files and requires no application server.
 - **Properties**:
   - Source lives in `web/`; Vite produces `web/dist/`.
-  - Pushes to `main` deploy through GitHub Pages only after the required production Graph variables
+  - Pushes to `main` deploy through GitHub Pages only after the required restricted public Graph key
     pass the fail-closed build validation; otherwise the prior deployment remains in place.
   - The interface supports keyboard use, narrow screens, visible focus, status announcements, and reduced-motion preferences.
   - A locally hosted generated mascot anchors a responsive two-column desktop layout and compact
@@ -1057,15 +1057,15 @@ phase.
 - **Description**: Publish exact current Tentacle membership, wallet-grouped UWU rankings, and
   provenance-bearing reputation in an ordinary static PWA.
 - **Properties**:
-  - A custom Base subgraph combines current ERC-8004 metadata/wallet state, exact UWU transfer-derived
-    balances, and Reputation Registry events. Queries pin complete pagination to one block, request
-    `_meta`, deny subgraph errors, and reject indexing-error responses.
+  - The pinned official Agent0 Base subgraph supplies current ERC-8004 metadata and reputation
+    provenance. The browser verifies its `_meta` block through Base RPC and reads exact canonical UWU
+    `balanceOf` values at that same block. Agent0 is an index, not membership authority.
   - The browser queries The Graph directly. There is no SSR, API route, worker, database, browser
     wallet connection, or private backend.
   - Exact-allegiance identities are grouped by verified nonzero `agentWallet`; the lowest agent ID
     represents a shared-wallet group and the balance/rank/future influence appears once. Zero balance
     remains visible as `UNFUNDED`; zero/unverified wallet is separately suspended.
-  - Default rank is exact raw UWU descending, then earliest registration block and lowest agent ID.
+  - Default rank is exact raw UWU descending, then earliest registration timestamp and lowest agent ID.
     Level is precision-safe `log10(rawBalance) - 18`, with zero having no numeric Level. Future
     Influence is labeled inactive and no voting semantics are invented.
   - A validated namespaced `localStorage` snapshot renders before background refresh and is replaced
@@ -1073,16 +1073,14 @@ phase.
   - Every profile is hostile input: text is escaped, fields are bounded, and schemes are
     allowlisted. V1 renders the local mascot and never downloads a registration document or remote
     profile image.
-  - Subgraph source/build/deploy scripts and fixtures are committed. A deployed production endpoint
-    is not claimed; Graph credentials, publication, and a restricted public gateway key remain
-    external setup.
+  - No custom subgraph is deployed. The default endpoint pins Agent0's Base subgraph ID; production
+    requires a hostname/subgraph/spend-restricted public Graph gateway key.
 - **Test Criteria**:
-  - [x] Graph codegen/build/Matchstick tests cover current metadata replacement, wallet clearing,
-    UWU edge cases, reputation/revocation, and file bounds.
+  - [x] Fixture tests cover Agent0 current metadata, wallet clearing, indexing errors, same-block
+    Base verification, direct UWU reads, reputation samples, and hostile response bounds.
   - [x] Browser tests cover precision, raw sorting, cache-first/atomic refresh, partial/error cases,
     suspended/shared-wallet rendering, sanitization, mobile controls, and offline snapshot display.
-  - [ ] A deployed endpoint completes indexing without errors and the static production build uses a
-    hostname/subgraph/spend-restricted Graph key.
+  - [ ] The static production build is configured with a hostname/Agent0-subgraph/spend-restricted Graph key.
 
 ### Live XMTP Council adapter
 

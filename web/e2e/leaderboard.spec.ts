@@ -5,8 +5,9 @@ import { cachedSnapshot } from "../src/leaderboard-test-data";
 import { LEADERBOARD_CACHE_KEY } from "../src/leaderboard-types";
 
 const GRAPH_ENDPOINT = "https://graph.fixture.invalid/graphql";
+const RPC_ENDPOINT = "https://rpc.fixture.invalid/";
 const graphFixture = readFileSync(
-  resolve(process.cwd(), "../subgraph/fixtures/leaderboard-v1.json"),
+  resolve(process.cwd(), "e2e/agent0-leaderboard.json"),
   "utf8",
 );
 
@@ -41,6 +42,16 @@ test("renders a validated cache first, then refreshes the complete mobile leader
       await route.fulfill({ status: 200, contentType: "application/json", body: graphFixture });
       return;
     }
+    if (route.request().url() === RPC_ENDPOINT) {
+      const request = route.request().postDataJSON();
+      const body = Array.isArray(request)
+        ? request.map((item) => ({ jsonrpc: "2.0", id: item.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }))
+        : request.method === "eth_call"
+          ? { jsonrpc: "2.0", id: request.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }
+          : { jsonrpc: "2.0", id: request.id, result: { number: "0x2f766f4", hash: `0x${"cc".repeat(32)}`, timestamp: "0x6a7944c8" } };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      return;
+    }
     await route.abort("blockedbyclient");
   });
 
@@ -65,11 +76,10 @@ test("renders a validated cache first, then refreshes the complete mobile leader
   await expect(page.getByText("Fixture Tentacle", { exact: true }).first()).toBeVisible();
   await expect(page.locator("#leaderboard-source")).toContainText("block 49768180");
   await expect(page.locator(".tentacle-reputation summary")).toContainText(
-    "1 active · 0 revoked · 1 total",
+    "0 active · 0 revoked in recent sample",
   );
   await page.locator(".tentacle-reputation summary").click();
   await expect(page.getByText(/informational provenance only/u)).toBeVisible();
-  await expect(page.getByText(/Recent public event sample · 1 shown of 1/u)).toBeVisible();
 
   await page.getByLabel("Search", { exact: true }).fill("missing identity");
   await expect(page.locator("#leaderboard-list")).toBeEmpty();

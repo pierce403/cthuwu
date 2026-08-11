@@ -98,10 +98,10 @@ function validContents(snapshot) {
     const balance = BigInt(group.rawBalance);
     const registration = group.identities.reduce(
       (earliest, identity) =>
-        BigInt(identity.registrationBlock) < earliest
-          ? BigInt(identity.registrationBlock)
+        BigInt(identity.registrationTimestamp) < earliest
+          ? BigInt(identity.registrationTimestamp)
           : earliest,
-      BigInt(group.identities[0].registrationBlock),
+      BigInt(group.identities[0].registrationTimestamp),
     );
     if (previousBalance !== undefined && balance > previousBalance) return false;
     if (
@@ -156,18 +156,15 @@ function validIdentity(identity, expectedWallet, expectedBalance, agentIds) {
 function validReputationCounters(counters, sample) {
   if (
     !plainObject(counters) ||
-    !uint256(counters.total) ||
     !uint256(counters.active) ||
-    !uint256(counters.revoked) ||
+    !uint256(counters.sampledRevoked) ||
     !Array.isArray(sample)
   ) return false;
   const active = sample.filter((signal) => plainObject(signal) && signal.revoked === false).length;
   const revoked = sample.filter((signal) => plainObject(signal) && signal.revoked === true).length;
   return (
-    BigInt(counters.active) + BigInt(counters.revoked) === BigInt(counters.total) &&
-    BigInt(sample.length) <= BigInt(counters.total) &&
     BigInt(active) <= BigInt(counters.active) &&
-    BigInt(revoked) <= BigInt(counters.revoked)
+    BigInt(revoked) <= BigInt(counters.sampledRevoked)
   );
 }
 

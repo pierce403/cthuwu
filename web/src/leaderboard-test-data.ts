@@ -28,7 +28,7 @@ export function cachedSnapshot(name = "Cache Tentacle"): LeaderboardSnapshot {
     balanceUpdatedBlock: "103",
     balanceUpdatedTimestamp: "1700000300",
     profile: { name, active: true, sourceUri: "cached" },
-    reputationCounters: { total: "0", active: "0", revoked: "0" },
+    reputationCounters: { active: "0", sampledRevoked: "0" },
     reputation: [],
   };
   return {

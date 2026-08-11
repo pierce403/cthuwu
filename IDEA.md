@@ -102,8 +102,8 @@ Implemented in this repository (live status noted below):
 - a locally tested, crash-safe, Base-mainnet-only ERC-8004 Tentacle registration workflow through
   the isolated XMTP signer; a funded live registration and restart-recovery exercise remains
   outstanding;
-- a static, cached public Tentacle leaderboard wired directly to the Cthuwu subgraph query and test
-  fixtures; production Graph publication and endpoint configuration remain outstanding;
+- a static, cached public Tentacle leaderboard using Agent0 for current ERC-8004 metadata and
+  direct same-block Base calls for UWU; a restricted public Graph gateway key remains deployment setup;
 - an installable mobile PWA shell with explicit identity-backup cautions;
 - validated Council types and local simulations of routing, leases, governance, propagation,
   contribution credit, persistence, and failover.

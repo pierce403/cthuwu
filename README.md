@@ -43,7 +43,7 @@ Tentacle allegiance, the public leaderboard, and PWA/offline behavior are docume
 | In-memory Council transport, `LocalRegistry`, protected persistence, and simulator | **Implemented — local; verified by deterministic workspace tests** |
 | XMTP Council-group adapter | **Experimental boundary**; no live group interoperability claim |
 | ERC-8004 registry read adapter and crash-safe registration | **Implemented — canonical Base mainnet**; pinned registration-v1/contract revision, fail-closed deployment checks, and narrow sidecar signing |
-| Public Tentacle subgraph and static leaderboard | **Implemented — source/build/tests**; production Graph deployment and endpoint still require external credentials and publication |
+| Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; production requires a restricted public Graph gateway key |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
@@ -702,15 +702,16 @@ run Ollama in the same network namespace. On Linux, a host Ollama service can be
 ## Browser deployment
 
 The Pages workflow builds and deploys `web/dist` to [cthuwu.app](https://cthuwu.app) on pushes to
-`main` after the required production Graph variables are configured. It fails before upload and
+`main` after the required restricted public Graph key is configured. It fails before upload and
 preserves the previous deployment when they are absent or unresolved. The browser has no XMTP
 build-time configuration: it always uses XMTP `production`.
 
-The public Tentacle leaderboard is also fully static. The browser queries the build-time
-`VITE_CTHUWU_GRAPHQL_ENDPOINT` directly and keeps only a validated normalized snapshot in
+The public Tentacle leaderboard is also fully static. The browser queries the pinned official
+Agent0 Base ERC-8004 subgraph, filters exact current allegiance metadata, reads UWU `balanceOf`
+directly from Base at the same verified block, and keeps only a validated normalized snapshot in
 `cthuwu:leaderboard:v1`. The Graph gateway key is public once compiled; restrict it to the exact
-hostnames and subgraph, cap and monitor spending, and rotate it. Repository source and deployment
-scripts do not mean that a production subgraph endpoint is already published.
+hostnames and Agent0 subgraph, cap and monitor spending, and rotate it. No custom Cthuwu subgraph
+or leaderboard backend is deployed.
 
 The browser always opens its initial DM with the hard-coded intro Tentacle at
 `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. Future intro discovery may use verified public

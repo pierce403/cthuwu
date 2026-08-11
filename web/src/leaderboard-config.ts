@@ -1,5 +1,8 @@
+import { AGENT0_ENDPOINT_TEMPLATE, DEFAULT_BASE_RPC_ENDPOINT } from "./leaderboard-types";
+
 export interface LeaderboardConfig {
   graphEndpoint?: string;
+  baseRpcEndpoint?: string;
   cacheFreshnessMs: number;
   ipfsGateway: string;
   arweaveGateway: string;
@@ -8,6 +11,7 @@ export interface LeaderboardConfig {
 interface ConfigEnvironment {
   VITE_CTHUWU_GRAPHQL_ENDPOINT?: string;
   VITE_CTHUWU_GRAPH_API_KEY?: string;
+  VITE_CTHUWU_BASE_RPC_ENDPOINT?: string;
   VITE_CTHUWU_IPFS_GATEWAY?: string;
   VITE_CTHUWU_ARWEAVE_GATEWAY?: string;
   VITE_CTHUWU_LEADERBOARD_FRESH_MS?: string;
@@ -20,12 +24,13 @@ const DEFAULT_ARWEAVE_GATEWAY = "https://arweave.net/";
 export function parseLeaderboardConfig(
   environment: ConfigEnvironment = import.meta.env as ConfigEnvironment,
 ): LeaderboardConfig {
-  const endpointTemplate = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim();
+  const explicitEndpoint = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim();
+  const endpointTemplate = explicitEndpoint || AGENT0_ENDPOINT_TEMPLATE;
   const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() ?? "";
-  if (endpointTemplate?.includes("{api-key}") && !apiKey) {
+  if (explicitEndpoint?.includes("{api-key}") && !apiKey) {
     throw new Error("GraphQL endpoint contains an unresolved API-key placeholder");
   }
-  const graphEndpoint = endpointTemplate
+  const graphEndpoint = !apiKey && !explicitEndpoint ? undefined : endpointTemplate
     ? validHttpsUrl(endpointTemplate.replaceAll("{api-key}", apiKey), "GraphQL endpoint")
     : undefined;
   if (graphEndpoint?.includes("{api-key}")) {
@@ -34,6 +39,10 @@ export function parseLeaderboardConfig(
   const freshness = Number(environment.VITE_CTHUWU_LEADERBOARD_FRESH_MS);
   return {
     ...(graphEndpoint ? { graphEndpoint } : {}),
+    baseRpcEndpoint: validHttpsUrl(
+      environment.VITE_CTHUWU_BASE_RPC_ENDPOINT?.trim() || DEFAULT_BASE_RPC_ENDPOINT,
+      "Base RPC endpoint",
+    ),
     cacheFreshnessMs:
       Number.isSafeInteger(freshness) && freshness >= 60_000 && freshness <= 86_400_000
         ? freshness

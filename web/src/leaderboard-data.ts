@@ -30,43 +30,24 @@ const UNSIGNED = /^(0|[1-9][0-9]*)$/u;
 const SIGNED = /^(0|-?[1-9][0-9]*)$/u;
 
 const LEADERBOARD_QUERY = `
-  query CthuwuLeaderboard($first: Int!, $after: BigInt!, $block: Block_height) {
-    tentacles(
+  query CthuwuLeaderboard($first: Int!, $after: ID!, $block: Block_height, $allegiance: Bytes!) {
+    agentMetadatas(
       first: $first
-      orderBy: agentId
+      orderBy: id
       orderDirection: asc
-      where: { agentId_gt: $after }
+      where: { id_gt: $after, key: "cthuwu.allegiance", value: $allegiance }
       block: $block
       subgraphError: deny
     ) {
-      id
-      agentId
-      owner
-      agentURI
-      agentWallet
-      allegiance
-      protocol
-      tentacleId
-      isTentacle
-      isWalletVerified
-      registrationBlock
-      registrationTimestamp
-      profileUpdatedBlock
-      profileUpdatedTimestamp
-      metadataUpdatedBlock
-      metadataUpdatedTimestamp
-      feedbackCount
-      activeFeedbackCount
-      revokedFeedbackCount
-      wallet { address rawBalance updatedBlock updatedTimestamp }
-      profile {
-        id schemaType name description image active xmtpEndpoint cthuwuEndpoint
-        sourceURI contentHash parseValid
-      }
-      feedbacks(first: 10, orderBy: createdTimestamp, orderDirection: desc) {
-        id clientAddress feedbackIndex value valueDecimals tag1 tag2 endpoint
-        feedbackURI feedbackHash isRevoked createdBlock createdTimestamp
-        createdTransaction provenance
+      id key value updatedAt
+      agent {
+        id chainId agentId agentURI owner agentWallet createdAt updatedAt totalFeedback
+        metadata { id key value updatedAt }
+        registrationFile { id cid name description image active endpointsRawJson createdAt }
+        feedback(first: 10, orderBy: createdAt, orderDirection: desc) {
+          id clientAddress feedbackIndex value tag1 tag2 endpoint feedbackURI feedbackHash
+          isRevoked createdAt revokedAt
+        }
       }
     }
     _meta(block: $block) {
@@ -84,7 +65,7 @@ interface GraphResponse {
 
 export class IndexingError extends Error {
   constructor() {
-    super("The Cthuwu subgraph reports an indexing error");
+    super("Agent0 reports an indexing error");
     this.name = "IndexingError";
   }
 }
@@ -92,6 +73,7 @@ export class IndexingError extends Error {
 export interface FetchLeaderboardOptions {
   fetch?: typeof fetch;
   now?: () => Date;
+  baseRpcEndpoint?: string;
 }
 
 export async function fetchCompleteLeaderboard(
@@ -104,7 +86,7 @@ export async function fetchCompleteLeaderboard(
   let pinnedHash: string | undefined;
   let pinnedTimestamp: string | undefined;
   let deployment: string | undefined;
-  let after = "-1";
+  let after = "";
   let totalResponseBytes = 0;
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -115,7 +97,7 @@ export async function fetchCompleteLeaderboard(
     }
     const parsed = parsePage(response.body);
     if (parsed.meta.hasIndexingErrors) throw new IndexingError();
-    if (parsed.firstAgentId && BigInt(parsed.firstAgentId) <= BigInt(after)) {
+    if (parsed.firstCursor && parsed.firstCursor <= after) {
       throw new Error("subgraph pagination returned an overlapping page");
     }
     if (pinnedBlock === undefined) {
@@ -134,8 +116,14 @@ export async function fetchCompleteLeaderboard(
 
     identities.push(...parsed.identities);
     if (parsed.rowCount < PAGE_SIZE) {
-      return buildSnapshot(
+      const balanced = await attachUwuBalances(
+        fetcher,
+        options.baseRpcEndpoint ?? "https://mainnet.base.org/",
         identities,
+        parsed.meta,
+      );
+      return buildSnapshot(
+        balanced,
         {
           blockNumber: pinnedBlock,
           blockHash: pinnedHash,
@@ -145,8 +133,8 @@ export async function fetchCompleteLeaderboard(
         (options.now ?? (() => new Date()))(),
       );
     }
-    const nextAfter = parsed.lastAgentId;
-    if (!nextAfter || BigInt(nextAfter) <= BigInt(after)) {
+    const nextAfter = parsed.lastCursor;
+    if (!nextAfter || nextAfter <= after) {
       throw new Error("subgraph pagination cursor did not advance");
     }
     after = nextAfter;
@@ -176,6 +164,7 @@ async function fetchPage(
           first: PAGE_SIZE,
           after,
           block: pinnedNumber === undefined ? null : { number: pinnedNumber },
+          allegiance: ALLEGIANCE_HEX,
         },
       }),
       cache: "no-store",
@@ -202,8 +191,8 @@ async function fetchPage(
 function parsePage(response: GraphResponse): {
   identities: TentacleIdentity[];
   rowCount: number;
-  firstAgentId?: string;
-  lastAgentId?: string;
+  firstCursor?: string;
+  lastCursor?: string;
   meta: {
     blockNumber: string;
     blockHash?: string;
@@ -224,25 +213,23 @@ function parsePage(response: GraphResponse): {
   const blockTimestamp = optionalUnsigned(block.timestamp);
   const deployment = boundedText(meta.deployment, "deployment", 256);
   const hasIndexingErrors = boolean(meta.hasIndexingErrors, "hasIndexingErrors");
-  if (!Array.isArray(data.tentacles) || data.tentacles.length > PAGE_SIZE) {
+  if (!Array.isArray(data.agentMetadatas) || data.agentMetadatas.length > PAGE_SIZE) {
     throw new Error("subgraph returned an invalid Tentacle page");
   }
-  const rows = data.tentacles as unknown[];
-  const rowAgentIds = rows.map((row) =>
-    unsigned(record(row, "Tentacle cursor").agentId, "cursor agentId", 78),
-  );
-  for (let index = 1; index < rowAgentIds.length; index += 1) {
-    if (BigInt(rowAgentIds[index - 1]) >= BigInt(rowAgentIds[index])) {
-      throw new Error("subgraph page is not strictly ordered by agentId");
+  const rows = data.agentMetadatas as unknown[];
+  const cursors = rows.map((row) => boundedText(record(row, "metadata cursor").id, "cursor", 256));
+  for (let index = 1; index < cursors.length; index += 1) {
+    if (cursors[index - 1] >= cursors[index]) {
+      throw new Error("subgraph page is not strictly ordered by metadata ID");
     }
   }
-  const firstAgentId = rowAgentIds.at(0);
-  const lastAgentId = rowAgentIds.at(-1);
+  const firstCursor = cursors.at(0);
+  const lastCursor = cursors.at(-1);
   return {
     identities: rows.map(parseTentacle).filter((value) => value !== undefined),
     rowCount: rows.length,
-    ...(firstAgentId ? { firstAgentId } : {}),
-    ...(lastAgentId ? { lastAgentId } : {}),
+    ...(firstCursor ? { firstCursor } : {}),
+    ...(lastCursor ? { lastCursor } : {}),
     meta: {
       blockNumber,
       ...(blockHash ? { blockHash } : {}),
@@ -254,77 +241,62 @@ function parsePage(response: GraphResponse): {
 }
 
 function parseTentacle(value: unknown): TentacleIdentity | undefined {
-  const row = record(value, "Tentacle");
+  const outer = record(value, "Tentacle allegiance metadata");
+  if (outer.key !== "cthuwu.allegiance") throw new Error("Agent0 returned a different metadata key");
+  const allegianceHex = bytes(outer.value, "allegiance", 256);
+  if (allegianceHex !== ALLEGIANCE_HEX) return undefined;
+  const row = record(outer.agent, "Agent0 agent");
+  if (unsigned(row.chainId, "chainId") !== String(BASE_CHAIN_ID)) throw new Error("Agent0 returned a non-Base agent");
   const agentId = unsigned(row.agentId, "agentId", 78);
-  if (row.id !== agentId) throw new Error("Tentacle entity ID does not match agentId");
-  const allegianceHex = bytes(row.allegiance, "allegiance", 256);
-  const isTentacle = boolean(row.isTentacle, "isTentacle");
-  const hasExactAllegiance = allegianceHex === ALLEGIANCE_HEX;
-  if (isTentacle !== hasExactAllegiance) {
-    throw new Error("subgraph Tentacle flag disagrees with exact current allegiance bytes");
+  if (row.id !== `${BASE_CHAIN_ID}:${agentId}`) throw new Error("Agent0 agent ID is inconsistent");
+  if (!Array.isArray(row.metadata) || row.metadata.length > 256) throw new Error("Agent0 metadata is invalid");
+  const metadata = new Map<string, { value: string; updatedAt: string }>();
+  for (const item of row.metadata as unknown[]) {
+    const entry = record(item, "Agent0 metadata entry");
+    const key = boundedText(entry.key, "metadata key", 256);
+    if (metadata.has(key)) throw new Error("Agent0 returned duplicate current metadata");
+    metadata.set(key, { value: bytes(entry.value, "metadata value", 8_192), updatedAt: unsigned(entry.updatedAt, "metadata updatedAt") });
   }
-  if (!hasExactAllegiance) return undefined;
-  const agentWallet = address(row.agentWallet, "agentWallet");
-  const verified = boolean(row.isWalletVerified, "isWalletVerified");
-  const wallet = row.wallet === null || row.wallet === undefined ? undefined : record(row.wallet, "wallet");
-  if (verified && agentWallet !== ZERO_ADDRESS && !wallet) {
-    throw new Error("verified agentWallet is missing its UWU wallet state");
-  }
-  const rawBalance = wallet ? unsigned(wallet.rawBalance, "rawBalance", 78) : "0";
-  parseRawBalance(rawBalance);
-  if (wallet && address(wallet.address, "wallet address") !== agentWallet) {
-    throw new Error("subgraph wallet relation does not match agentWallet");
-  }
-  const tentacleId = optionalSafeText(row.tentacleId, 96);
+  if (metadata.get("cthuwu.allegiance")?.value !== ALLEGIANCE_HEX) throw new Error("Agent0 current allegiance is inconsistent");
+  const protocolHex = metadata.get("cthuwu.protocol")?.value ?? "0x";
+  const tentacleId = decodeMetadataText(metadata.get("cthuwu.tentacle-id")?.value, 96);
+  const walletValue = row.agentWallet;
+  const agentWallet = walletValue === null || walletValue === undefined ? ZERO_ADDRESS : address(walletValue, "agentWallet");
   const agentUri = optionalSafeText(row.agentURI, 24 * 1024) ?? "";
-  const parsedFileProfile = parseFileProfile(row.profile, agentId, tentacleId);
+  const parsedFileProfile = parseFileProfile(row.registrationFile, agentUri, agentId, tentacleId);
   const profile =
-    parsedFileProfile ??
-    parseDataRegistration(agentUri, agentId, tentacleId) ??
+    parseDataRegistration(agentUri, agentId, tentacleId) ?? parsedFileProfile ??
     fallbackProfile(agentId, tentacleId);
-  if (!Array.isArray(row.feedbacks) || row.feedbacks.length > 10) {
+  if (!Array.isArray(row.feedback) || row.feedback.length > 10) {
     throw new Error("subgraph returned an invalid recent-feedback sample");
   }
+  const reputation = row.feedback.map(parseFeedback).filter((signal) => signal !== undefined);
   const reputationCounters: ReputationCounters = {
-    total: uint256(row.feedbackCount, "feedbackCount"),
-    active: uint256(row.activeFeedbackCount, "activeFeedbackCount"),
-    revoked: uint256(row.revokedFeedbackCount, "revokedFeedbackCount"),
+    active: uint256(row.totalFeedback, "totalFeedback"),
+    sampledRevoked: String(reputation.filter((signal) => signal.revoked).length),
   };
-  if (
-    BigInt(reputationCounters.active) + BigInt(reputationCounters.revoked) !==
-    BigInt(reputationCounters.total)
-  ) {
-    throw new Error("subgraph reputation counters are inconsistent");
-  }
-  const reputation = row.feedbacks.map(parseFeedback).filter((signal) => signal !== undefined);
   const sampledActive = reputation.filter((signal) => !signal.revoked).length;
-  const sampledRevoked = reputation.length - sampledActive;
-  if (
-    BigInt(reputation.length) > BigInt(reputationCounters.total) ||
-    BigInt(sampledActive) > BigInt(reputationCounters.active) ||
-    BigInt(sampledRevoked) > BigInt(reputationCounters.revoked)
-  ) {
+  if (BigInt(sampledActive) > BigInt(reputationCounters.active)) {
     throw new Error("subgraph reputation sample exceeds its registry counters");
   }
+  const createdAt = unsigned(row.createdAt, "createdAt");
+  const updatedAt = unsigned(row.updatedAt, "updatedAt");
+  const metadataUpdatedAt = [...metadata.values()].reduce((latest, item) => BigInt(item.updatedAt) > BigInt(latest) ? item.updatedAt : latest, createdAt);
   const identity: TentacleIdentity = {
     agentId,
     owner: address(row.owner, "owner"),
     agentUri,
-    agentWallet: verified ? agentWallet : ZERO_ADDRESS,
+    agentWallet,
     allegianceHex,
-    protocolHex: bytes(row.protocol, "protocol", 256),
+    protocolHex,
     ...(tentacleId ? { tentacleId } : {}),
-    registrationBlock: unsigned(row.registrationBlock, "registrationBlock"),
-    registrationTimestamp: unsigned(row.registrationTimestamp, "registrationTimestamp"),
-    profileUpdatedBlock: unsigned(row.profileUpdatedBlock, "profileUpdatedBlock"),
-    profileUpdatedTimestamp: unsigned(row.profileUpdatedTimestamp, "profileUpdatedTimestamp"),
-    metadataUpdatedBlock: unsigned(row.metadataUpdatedBlock, "metadataUpdatedBlock"),
-    metadataUpdatedTimestamp: unsigned(row.metadataUpdatedTimestamp, "metadataUpdatedTimestamp"),
-    rawBalance: verified && agentWallet !== ZERO_ADDRESS ? rawBalance : "0",
-    ...(wallet ? { balanceUpdatedBlock: unsigned(wallet.updatedBlock, "wallet updatedBlock") } : {}),
-    ...(wallet
-      ? { balanceUpdatedTimestamp: unsigned(wallet.updatedTimestamp, "wallet updatedTimestamp") }
-      : {}),
+    registrationBlock: "0",
+    registrationTimestamp: createdAt,
+    profileUpdatedBlock: "0",
+    profileUpdatedTimestamp: updatedAt,
+    metadataUpdatedBlock: "0",
+    metadataUpdatedTimestamp: metadataUpdatedAt,
+    rawBalance: "0",
     profile,
     reputationCounters,
     reputation,
@@ -334,29 +306,26 @@ function parseTentacle(value: unknown): TentacleIdentity | undefined {
 
 function parseFileProfile(
   value: unknown,
+  agentUri: string,
   agentId: string,
   tentacleId?: string,
 ): TentacleProfile | undefined {
   if (value === null || value === undefined) return undefined;
   try {
     const profile = record(value, "profile");
-    if (profile.parseValid !== true || profile.schemaType !== REGISTRATION_TYPE) return undefined;
     const name = optionalSafeText(profile.name, 128) ?? fallbackProfile(agentId, tentacleId).name;
     const description = optionalSafeText(profile.description, 512);
     const image = optionalSafeUrl(profile.image);
-    const xmtpEndpoint = optionalXmtp(profile.xmtpEndpoint);
-    const cthuwuEndpoint = optionalSafePublicEndpoint(profile.cthuwuEndpoint);
-    const sourceUri = optionalSafePublicEndpoint(profile.sourceURI) ?? "content-addressed profile";
-    const contentHash = optionalBytes(profile.contentHash, 64);
+    const { xmtpEndpoint, cthuwuEndpoint } = parseAgent0Endpoints(profile.endpointsRawJson);
+    const sourceUri = agentUri || `agent0:${boundedText(profile.id, "registration file ID", 256)}`;
     return {
       name,
       ...(description ? { description } : {}),
       ...(image ? { image } : {}),
-      active: profile.active === true,
+      active: profile.active !== false,
       ...(xmtpEndpoint ? { xmtpEndpoint } : {}),
       ...(cthuwuEndpoint ? { cthuwuEndpoint } : {}),
       sourceUri,
-      ...(contentHash ? { contentHash } : {}),
     };
   } catch {
     return undefined;
@@ -366,10 +335,7 @@ function parseFileProfile(
 function parseFeedback(value: unknown): ReputationSignal | undefined {
   try {
     const signal = record(value, "feedback");
-    const rawValue = boundedText(signal.value, "feedback value", 48);
-    if (!SIGNED.test(rawValue)) return undefined;
-    const valueDecimals = number(signal.valueDecimals, "feedback valueDecimals");
-    if (!Number.isInteger(valueDecimals) || valueDecimals < 0 || valueDecimals > 18) return undefined;
+    const { rawValue, valueDecimals } = decimalToParts(boundedText(signal.value, "feedback value", 96));
     const tag1 = optionalSafeText(signal.tag1, 128);
     const tag2 = optionalSafeText(signal.tag2, 128);
     const endpoint = optionalSafePublicEndpoint(signal.endpoint);
@@ -381,13 +347,122 @@ function parseFeedback(value: unknown): ReputationSignal | undefined {
       ...(tag1 ? { tag1 } : {}),
       ...(tag2 ? { tag2 } : {}),
       ...(endpoint ? { endpoint } : {}),
-      createdAt: unsigned(signal.createdTimestamp, "feedback createdTimestamp"),
+      createdAt: unsigned(signal.createdAt, "feedback createdAt"),
       revoked: boolean(signal.isRevoked, "feedback isRevoked"),
-      provenance: boundedText(signal.provenance, "feedback provenance", 512),
+      provenance: "ERC-8004 Reputation Registry via Agent0",
     };
   } catch {
     return undefined;
   }
+}
+
+function decodeMetadataText(value: string | undefined, maximum: number): string | undefined {
+  if (!value || value === "0x") return undefined;
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+      Uint8Array.from(value.slice(2).match(/../gu) ?? [], (hex) => Number.parseInt(hex, 16)),
+    );
+    return optionalSafeText(decoded, maximum);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseAgent0Endpoints(value: unknown): { xmtpEndpoint?: string; cthuwuEndpoint?: string } {
+  if (typeof value !== "string" || value.length > 16_384) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length > 32) return {};
+    let xmtpEndpoint: string | undefined;
+    let cthuwuEndpoint: string | undefined;
+    for (const item of parsed) {
+      const endpoint = record(item, "profile endpoint");
+      const name = optionalSafeText(endpoint.name, 64);
+      const url = endpoint.endpoint ?? endpoint.uri;
+      if ((name === "CTHUWU-XMTP" || name === "XMTP") && !xmtpEndpoint) xmtpEndpoint = optionalXmtp(url);
+      if (name === "CTHUWU" && !cthuwuEndpoint) cthuwuEndpoint = optionalSafePublicEndpoint(url);
+    }
+    return { ...(xmtpEndpoint ? { xmtpEndpoint } : {}), ...(cthuwuEndpoint ? { cthuwuEndpoint } : {}) };
+  } catch {
+    return {};
+  }
+}
+
+function decimalToParts(value: string): { rawValue: string; valueDecimals: number } {
+  const match = /^(-?)(0|[1-9][0-9]*)(?:\.([0-9]{1,18}))?$/u.exec(value);
+  if (!match) throw new Error("feedback value is not a bounded decimal");
+  const decimals = match[3]?.length ?? 0;
+  const magnitude = `${match[2]}${match[3] ?? ""}`.replace(/^0+(?=\d)/u, "");
+  return { rawValue: `${match[1]}${magnitude}`, valueDecimals: decimals };
+}
+
+async function attachUwuBalances(
+  fetcher: typeof fetch,
+  endpoint: string,
+  identities: TentacleIdentity[],
+  meta: { blockNumber: string; blockHash?: string; blockTimestamp?: string },
+): Promise<TentacleIdentity[]> {
+  if (!meta.blockHash) throw new Error("Agent0 did not report a source block hash");
+  const blockTag = `0x${BigInt(meta.blockNumber).toString(16)}`;
+  const block = await rpc(fetcher, endpoint, "eth_getBlockByNumber", [blockTag, false], 1);
+  const blockRecord = record(block, "Base block");
+  if (bytes(blockRecord.hash, "Base block hash", 32) !== meta.blockHash ||
+      unsignedHex(blockRecord.number, "Base block number") !== BigInt(meta.blockNumber)) {
+    throw new Error("Base RPC does not match the Agent0 source block");
+  }
+  if (meta.blockTimestamp && unsignedHex(blockRecord.timestamp, "Base block timestamp") !== BigInt(meta.blockTimestamp)) {
+    throw new Error("Base RPC timestamp does not match Agent0");
+  }
+  const wallets = [...new Set(identities.map((identity) => identity.agentWallet).filter((wallet) => wallet !== ZERO_ADDRESS))];
+  const balances = new Map<string, string>();
+  for (let offset = 0; offset < wallets.length; offset += 100) {
+    const batchWallets = wallets.slice(offset, offset + 100);
+    const requests = batchWallets.map((wallet, index) => ({
+      jsonrpc: "2.0", id: index + 1, method: "eth_call",
+      params: [{ to: UWU_CONTRACT, data: `0x70a08231${wallet.slice(2).padStart(64, "0")}` }, blockTag],
+    }));
+    const results = await rpcBatch(fetcher, endpoint, requests);
+    for (let index = 0; index < batchWallets.length; index += 1) {
+      const result = results.get(index + 1);
+      if (typeof result !== "string" || !/^0x[0-9a-fA-F]{64}$/u.test(result)) throw new Error("UWU balanceOf returned invalid uint256 data");
+      const balance = BigInt(result).toString();
+      parseRawBalance(balance);
+      balances.set(batchWallets[index], balance);
+    }
+  }
+  return identities.map((identity) => ({ ...identity, rawBalance: balances.get(identity.agentWallet) ?? "0" }));
+}
+
+async function rpc(fetcher: typeof fetch, endpoint: string, method: string, params: unknown[], id: number): Promise<unknown> {
+  const results = await rpcBatch(fetcher, endpoint, [{ jsonrpc: "2.0", id, method, params }]);
+  return results.get(id);
+}
+
+async function rpcBatch(fetcher: typeof fetch, endpoint: string, requests: unknown[]): Promise<Map<number, unknown>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetcher(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(requests.length === 1 ? requests[0] : requests), cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal });
+    if (!response.ok) throw new Error(`Base RPC request failed with HTTP ${response.status}`);
+    const raw = await response.text();
+    if (new TextEncoder().encode(raw).length > MAX_RESPONSE_BYTES) throw new Error("Base RPC response is too large");
+    const parsed: unknown = JSON.parse(raw);
+    const responses = Array.isArray(parsed) ? parsed : [parsed];
+    const result = new Map<number, unknown>();
+    for (const item of responses) {
+      const row = record(item, "JSON-RPC response");
+      if (!Number.isSafeInteger(row.id) || result.has(row.id as number) || row.error !== undefined) throw new Error("Base RPC returned an invalid response");
+      result.set(row.id as number, row.result);
+    }
+    if (result.size !== requests.length) throw new Error("Base RPC returned an incomplete batch");
+    return result;
+  } finally { clearTimeout(timer); }
+}
+
+function unsignedHex(value: unknown, label: string): bigint {
+  const text = boundedText(value, label, 66);
+  if (!/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/u.test(text)) throw new Error(`${label} is not canonical hex`);
+  return BigInt(text);
 }
 
 function buildSnapshot(
@@ -431,8 +506,8 @@ function buildSnapshot(
     const balance = compareRawBalances(a.rawBalance, b.rawBalance);
     if (balance !== 0) return balance;
     const registration = compareUnsigned(
-      earliestRegistrationBlock(a),
-      earliestRegistrationBlock(b),
+      earliestRegistrationTimestamp(a),
+      earliestRegistrationTimestamp(b),
     );
     return registration !== 0
       ? registration
@@ -462,13 +537,13 @@ function buildSnapshot(
   };
 }
 
-function earliestRegistrationBlock(group: RankedWallet): string {
+function earliestRegistrationTimestamp(group: RankedWallet): string {
   return group.identities.reduce(
     (earliest, identity) =>
-      compareUnsigned(identity.registrationBlock, earliest) < 0
-        ? identity.registrationBlock
+      compareUnsigned(identity.registrationTimestamp, earliest) < 0
+        ? identity.registrationTimestamp
         : earliest,
-    group.identities[0].registrationBlock,
+    group.identities[0].registrationTimestamp,
   );
 }
 

@@ -1,0 +1,33 @@
+{
+  "data": {
+    "agentMetadatas": [{
+      "id": "8453:7:cthuwu.allegiance",
+      "key": "cthuwu.allegiance",
+      "value": "0x7577752d74656e7461636c652d7631",
+      "updatedAt": "1770118004",
+      "agent": {
+        "id": "8453:7",
+        "chainId": "8453",
+        "agentId": "7",
+        "owner": "0x1111111111111111111111111111111111111111",
+        "agentWallet": "0x2222222222222222222222222222222222222222",
+        "agentURI": "",
+        "createdAt": "1770118000",
+        "updatedAt": "1770118002",
+        "totalFeedback": "0",
+        "metadata": [
+          { "id": "a", "key": "cthuwu.allegiance", "value": "0x7577752d74656e7461636c652d7631", "updatedAt": "1770118004" },
+          { "id": "p", "key": "cthuwu.protocol", "value": "0x31", "updatedAt": "1770118004" },
+          { "id": "t", "key": "cthuwu.tentacle-id", "value": "0x74656e7461636c655f66697874757265", "updatedAt": "1770118004" }
+        ],
+        "registrationFile": { "id": "file", "cid": "fixture", "name": "Fixture Tentacle", "description": "A deterministic public fixture", "image": null, "active": true, "endpointsRawJson": "[]", "createdAt": "1770118002" },
+        "feedback": []
+      }
+    }],
+    "_meta": {
+      "block": { "number": "49768180", "hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "timestamp": "1786332360" },
+      "deployment": "QmAgent0Fixture",
+      "hasIndexingErrors": false
+    }
+  }
+}

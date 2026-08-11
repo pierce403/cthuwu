@@ -68,7 +68,7 @@ describe("leaderboard localStorage cache", () => {
         description: "P".repeat(512),
         sourceUri: `https://profiles.example/${"x".repeat(1_800)}`,
       },
-      reputationCounters: { total: "1", active: "1", revoked: "0" },
+      reputationCounters: { active: "1", sampledRevoked: "0" },
       reputation: [
         {
           id: `signal-${index}`,

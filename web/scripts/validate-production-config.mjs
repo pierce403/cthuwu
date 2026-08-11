@@ -2,13 +2,12 @@ import { pathToFileURL } from "node:url";
 
 const PLACEHOLDER = "{api-key}";
 const API_KEY = /^[A-Za-z0-9._~-]{8,256}$/u;
+const AGENT0 = "https://gateway.thegraph.com/api/{api-key}/subgraphs/id/43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUFJojb";
 
 export function validateProductionConfig(environment) {
-  const template = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim() ?? "";
+  const template = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim() || AGENT0;
   const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() ?? "";
-  if (!template || template.includes("REPLACE_ME")) {
-    throw new Error("VITE_CTHUWU_GRAPHQL_ENDPOINT must identify the deployed production subgraph");
-  }
+  if (template.includes("REPLACE_ME")) throw new Error("Graph endpoint contains REPLACE_ME");
   if (
     template.includes(PLACEHOLDER) &&
     (!API_KEY.test(apiKey) || apiKey === "REPLACE_ME")
@@ -22,6 +21,7 @@ export function validateProductionConfig(environment) {
     throw new Error("VITE_CTHUWU_GRAPHQL_ENDPOINT contains an unresolved placeholder");
   }
   validateHttpsUrl(resolved, "VITE_CTHUWU_GRAPHQL_ENDPOINT");
+  validateHttpsUrl(environment.VITE_CTHUWU_BASE_RPC_ENDPOINT?.trim() || "https://mainnet.base.org/", "VITE_CTHUWU_BASE_RPC_ENDPOINT");
   for (const [name, value] of [
     ["VITE_CTHUWU_IPFS_GATEWAY", environment.VITE_CTHUWU_IPFS_GATEWAY],
     ["VITE_CTHUWU_ARWEAVE_GATEWAY", environment.VITE_CTHUWU_ARWEAVE_GATEWAY],

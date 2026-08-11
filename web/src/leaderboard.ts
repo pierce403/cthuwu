@@ -73,6 +73,7 @@ export function initializeLeaderboard(
         const next = await fetchCompleteLeaderboard(config.graphEndpoint!, {
           ...(options.fetch ? { fetch: options.fetch } : {}),
           now,
+          ...(config.baseRpcEndpoint ? { baseRpcEndpoint: config.baseRpcEndpoint } : {}),
         });
         if (disposed) return;
         if (storage) writeLeaderboardCache(storage, next);
@@ -210,7 +211,7 @@ function filterRanked(
       );
     case "oldest":
       return filtered.sort((a, b) =>
-        compareBigInt(earliestRegistrationBlock(a), earliestRegistrationBlock(b)),
+        compareBigInt(earliestRegistrationTimestamp(a), earliestRegistrationTimestamp(b)),
       );
     case "agent":
       return filtered.sort((a, b) => compareBigInt(a.representativeAgentId, b.representativeAgentId));
@@ -220,21 +221,21 @@ function filterRanked(
       return filtered.sort((a, b) => {
         const balance = compareRawBalances(a.rawBalance, b.rawBalance);
         const registration = compareBigInt(
-          earliestRegistrationBlock(a),
-          earliestRegistrationBlock(b),
+          earliestRegistrationTimestamp(a),
+          earliestRegistrationTimestamp(b),
         );
         return balance || registration || compareBigInt(a.representativeAgentId, b.representativeAgentId);
       });
   }
 }
 
-function earliestRegistrationBlock(group: RankedWallet): string {
+function earliestRegistrationTimestamp(group: RankedWallet): string {
   return group.identities.reduce(
     (earliest, identity) =>
-      compareBigInt(identity.registrationBlock, earliest) < 0
-        ? identity.registrationBlock
+      compareBigInt(identity.registrationTimestamp, earliest) < 0
+        ? identity.registrationTimestamp
         : earliest,
-    group.identities[0].registrationBlock,
+    group.identities[0].registrationTimestamp,
   );
 }
 
@@ -377,11 +378,10 @@ function renderReputation(identities: TentacleIdentity[], now: Date): HTMLElemen
   details.className = "tentacle-reputation";
   const counters = identities.reduce(
     (sum, identity) => ({
-      total: sum.total + BigInt(identity.reputationCounters.total),
       active: sum.active + BigInt(identity.reputationCounters.active),
-      revoked: sum.revoked + BigInt(identity.reputationCounters.revoked),
+      sampledRevoked: sum.sampledRevoked + BigInt(identity.reputationCounters.sampledRevoked),
     }),
-    { total: 0n, active: 0n, revoked: 0n },
+    { active: 0n, sampledRevoked: 0n },
   );
   const signals = identities
     .flatMap((identity) => identity.reputation)
@@ -391,12 +391,12 @@ function renderReputation(identities: TentacleIdentity[], now: Date): HTMLElemen
       return a === b ? 0 : a > b ? -1 : 1;
     });
   const summary = document.createElement("summary");
-  summary.textContent = `ERC-8004 reputation · ${counters.active} active · ${counters.revoked} revoked · ${counters.total} total`;
+  summary.textContent = `ERC-8004 reputation · ${counters.active} active · ${counters.sampledRevoked} revoked in recent sample`;
   details.append(summary);
   const provenance = element("p", "reputation-provenance");
   provenance.append(
     externalLink(
-      "Reputation Registry counters",
+      "Reputation Registry activity via Agent0",
       `${BASE_EXPLORER}/address/${REPUTATION_REGISTRY}`,
     ),
     document.createTextNode(
@@ -411,7 +411,7 @@ function renderReputation(identities: TentacleIdentity[], now: Date): HTMLElemen
   details.append(
     text(
       "p",
-      `Recent public event sample · ${Math.min(signals.length, 10)} shown of ${counters.total} registry events`,
+      `Recent public event sample · ${Math.min(signals.length, 10)} shown; Agent0 reports ${counters.active} currently active`,
     ),
   );
   const list = document.createElement("ul");

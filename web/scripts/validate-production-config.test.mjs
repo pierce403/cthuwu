@@ -24,8 +24,13 @@ describe("production static leaderboard configuration", () => {
     ).toBe("https://gateway.example/public_key-1234/subgraphs/public_key-1234/query");
   });
 
+  it("uses the pinned Agent0 Base subgraph when no endpoint override is supplied", () => {
+    expect(validateProductionConfig({ VITE_CTHUWU_GRAPH_API_KEY: "public_key-1234" })).toBe(
+      "https://gateway.thegraph.com/api/public_key-1234/subgraphs/id/43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUFJojb",
+    );
+  });
+
   it.each([
-    [{ ...configured, VITE_CTHUWU_GRAPHQL_ENDPOINT: "" }, "must identify"],
     [{ ...configured, VITE_CTHUWU_GRAPH_API_KEY: "" }, "must resolve"],
     [{ ...configured, VITE_CTHUWU_GRAPH_API_KEY: "REPLACE_ME" }, "must resolve"],
     [
