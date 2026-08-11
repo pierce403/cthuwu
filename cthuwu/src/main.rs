@@ -1927,14 +1927,8 @@ async fn run_management_command(
                 };
                 println!(
                     "{}",
-                    manage_global_group(
-                        node,
-                        sidecar,
-                        &cli.data_dir,
-                        xmtp_environment,
-                        action,
-                    )
-                    .await?
+                    manage_global_group(node, sidecar, &cli.data_dir, xmtp_environment, action,)
+                        .await?
                 );
             }
         },

@@ -201,9 +201,12 @@ pub async fn manage_global_group(
     }
     copy_transport_environment(&mut command);
 
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("administering the XMTP Global group with {}", node.display()))?;
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "administering the XMTP Global group with {}",
+            node.display()
+        )
+    })?;
     #[cfg(unix)]
     let _process_group = ProcessGroupGuard::new(child.id());
     let stdout = child
