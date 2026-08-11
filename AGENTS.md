@@ -47,8 +47,10 @@ honest, and operationally reliable.
 - `cthuwu/`: Rust CLI and long-running XMTP companion.
 - `cthuwu/crates/cthuwu-protocol/`: validated Council wire/domain types with no transport or inference dependencies.
 - `cthuwu/crates/cthuwu-council/`: deterministic local Council domain, adapters, persistence, and simulator.
+- `contracts/`: Foundry workspace for the Base-mainnet Acolyte Branding contract and deployment tooling.
 - `web/`: TypeScript browser client built to static assets.
 - `docs/`: architecture, research, decisions, and operating notes.
+- `docs/acolyte-branding.md`: normative Branding consent, upkeep, sale, claim, deployment, and planned routing design.
 - `docs/protocol/`: normative local Council protocol, privacy, security, and versioning notes.
 - `docs/operator.md`: privileged XMTP operator enrollment, tools, isolation, and deployment warning.
 - `docs/evolution.md`: Nature, awakening, Scales, lineage, Hermes gossip, and current non-goals.
@@ -70,12 +72,19 @@ npm --prefix web ci
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run build
+cd contracts
+forge fmt --check
+forge lint
+forge build --sizes
+forge test -vvv
 ```
 
 Do not claim live XMTP interoperability until the corresponding end-to-end release gate in
 `FEATURES.md` passes against the same XMTP environment. In particular, deterministic in-memory
 Council tests do not prove live XMTP group support, and deterministic registry tests plus read-only
 deployment verification do not prove a funded live ERC-8004 registration and recovery exercise.
+Likewise, Foundry source, mocks, a dry run, or a Base fork do not prove a funded Branding deployment
+or live frontend routing. Keep both explicitly incomplete until their release gates pass.
 
 ## Security rules
 
@@ -182,6 +191,63 @@ deployment verification do not prove a funded live ERC-8004 registration and rec
   transfer receipt once, and never claim payment from intent creation alone.
 - Keep registry types chain/deployment/ABI/revision neutral. Do not put heartbeats, load, sessions,
   leases, user references, contact memory, DMs, or credentials on-chain.
+
+## Acolyte Branding security rules
+
+- A Branding is the canonical service/controller right for one immutable Ethereum address, not
+  ownership of a person. Store no XMTP inbox ID, message, contact note, credential, operator state,
+  model state, or private profile in the token, metadata, events, deployment state, or provenance.
+- Production is immutable and Base-mainnet only: chain `8453`, Identity Registry
+  `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` version `2.0.0`, and UWU
+  `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` with 18 decimals. Reject alternate production
+  values rather than accepting configurable trust roots. Keep the zero-argument constructor's own
+  chain/dependency checks in addition to deploy-script preflight.
+- Bind every owner/controller pair to the exact stored agent ID through current
+  `getAgentWallet`, `isAuthorizedOrOwner`, byte-exact allegiance, and byte-exact protocol reads.
+  Several agents may share a wallet. A registry revert, malformed response, missing code, or unknown
+  version is `RegistryUnavailable`, never ineligibility or permission to claim/reroute. The
+  canonical registry is an upgradeable external trust root: deployment pins its present
+  implementation/code, but do not claim Branding prevents a registry-admin upgrade from changing
+  future eligibility answers.
+- Derive `tokenId` exactly from the nonzero acolyte address; never burn or mutate the subject or
+  referrer. Mint only from EIP-712 acolyte consent bound to minter, exact controller, referrer,
+  positive price, nonce, deadline, chain, and verifying contract. Support EOAs and ERC-1271 through
+  `SignatureChecker`.
+- Disable every ordinary ERC-721 approval/transfer path. Ownership changes only through atomic mint,
+  active compulsory purchase, or positively claimable `claimUnserved`, with exact agent,
+  expected owner/controller tuple, price, deadline, settlement, and first-upkeep checks. Document
+  that the same tuple can recur before a long caller-selected deadline; recommend short deadlines
+  rather than claiming these fields are a unique on-chain epoch nonce.
+- Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and moves directly from
+  controller to acolyte. Paid sales send 10% to the immutable referrer and the remainder to the
+  seller, with buyer upkeep separate. Zero-consideration claims pay neither old owner nor referrer.
+  Do not add mutable rates, an upgrade/admin confiscation path, retained intermediary balances, or a
+  generic marketplace/ERC-8034 bypass. Preserve the signed ANY-address referrer rule: when the
+  contract itself is selected, it is the intentional final 10% recipient and those funds remain
+  stranded because version 1 has no admin/sweep; do not misreport that edge as transient residue.
+- Fix the activation time when a price increase is first queued. Renewals and later repricing must
+  not move it. A renewal extending service past that activation pays upkeep at the price effective
+  for the new interval, without activating it early; after that prepayment, reject any further
+  upward change to the pending price while allowing reductions. Preserve expected-owner/controller,
+  maximum-price, buyer-agent/price, and deadline
+  checks so a seller cannot escape a pending buy through mempool repricing. Reject purchases and
+  claims whose acquiring wallet is the current owner; a distinct wallet's common control cannot be
+  proven on-chain and must not be misrepresented as Sybil resistance.
+- Deployment must refuse non-Base chains and verify registry code/version plus UWU code/decimals
+  before broadcast. After confirmation, the TypeScript finalizer must bind the exact creation
+  transaction to the durable intent and compiled artifact, compare deployed runtime against the
+  compiled template outside its address-dependent immutable regions, and reread the immutables. The
+  standalone Solidity verifier is a separate dependency, constants, interfaces, and non-proxy sanity
+  check; do not misreport its returned runtime hash as an artifact comparison. Never use a raw
+  private-key environment variable or CLI argument; accept only a Foundry encrypted keystore or
+  hardware wallet.
+- Keep funding/deployment state outside git. Estimate exact execution plus Base L1 data fee, apply
+  the existing 125% safety factor and `50000000000000` wei reserve, reuse the authenticated
+  operator notice cooldown/material-change policy, reconcile known broadcasts before resume, and
+  never use automatic faucets, bridges, swaps, or generic signers. The Branding wrapper emits its
+  notice block only to stdout; it reaches XMTP only when an authenticated operator exact-exec
+  invocation transports that output. Recording the local cooldown is not a delivery acknowledgement,
+  and neither `--status-only` nor a terminated invocation is a durable automatic-resume scheduler.
 
 ## Evolution integrity and execution rules
 
@@ -382,6 +448,10 @@ deployment verification do not prove a funded live ERC-8004 registration and rec
 - The canonical Base ERC-8004 adapter, staged registration workflow, and narrow sidecar signer are
   implemented and locally tested, with a read-only deployment verifier. A funded live
   registration/recovery exercise remains an external release gate; the restricted Graph key is public client configuration.
+- The Acolyte Branding Foundry workspace is in progress. Its canonical design binds an immutable
+  acolyte address, exact eligible controller agent ID, direct weekly upkeep, compulsory UWU sale,
+  immutable 10% referrer, and fail-closed claim status. No Base Branding deployment or frontend
+  Branding routing is currently claimed.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.

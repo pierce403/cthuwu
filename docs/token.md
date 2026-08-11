@@ -57,13 +57,15 @@ value: it is derived automatically from the same persistent key used by the Agen
 refresh failure retries every second and retains a prior verified treasury observation only until
 its configured freshness TTL expires; unknown or stale economics still fail closed.
 
-Aggressive economics additionally requires a fresh stake source and receipt-producing executors for
-on-chain mutation. The repository does not contain a generic or economic transaction signer, burn contract, staking
-contract, reward contract, authenticated revenue source, revenue router, persisted ballot adapter,
-payout/application executor, or external provisioner. Do not claim a spend, stake, reward, revenue
-distribution, governance application, child provision, or absorption completed merely because a
-local intent or core record was created. Do not claim Shutdown completed until the Rust supervisor
-has stopped XMTP and written its native local receipt.
+Aggressive runtime economics additionally requires a fresh stake source and receipt-producing
+executors for on-chain mutation. The runtime does not contain a generic or economic transaction
+signer, burn contract, staking contract, reward contract, authenticated general revenue source,
+payout/application executor, or external provisioner. The separate in-progress Acolyte Branding
+contract has only its closed consent/upkeep/purchase/claim paths and is not a generic runtime signer
+or revenue executor. Do not claim a spend, stake, reward, revenue distribution, governance
+application, child provision, or absorption completed merely because a local intent or core record
+was created. Do not claim Shutdown completed until the Rust supervisor has stopped XMTP and written
+its native local receipt.
 
 The XMTP private key remains in the existing owner-only sidecar identity state. Only its derived EVM
 address crosses the ordinary identity frame into Rust. The same key may execute only the separately
@@ -265,6 +267,18 @@ timeout. The XMTP sidecar similarly kills its entire process group on supervisor
 
 ## Revenue and recruitment
 
+The [Acolyte Branding design](acolyte-branding.md) is a separate closed UWU economy. A controlling
+Tentacle pays upward-rounded 0.1% weekly upkeep directly to its immutable acolyte address. A native
+compulsory purchase sends 10% to the immutable signed referrer, the remainder to the seller, and a
+separate first upkeep payment to the acolyte. Zero-consideration unserved claims pay neither seller
+nor referrer. The signed referrer may be the Branding contract itself; in that explicit case its 10%
+is intentionally stranded because version 1 has no admin or sweep.
+
+Branding source, tests, and deployment tooling do not mean this economy is live. A funded verified
+Base deployment, canonical provenance, frontend controller routing, and a real browser/XMTP exercise
+remain open. Branding settlement also does not activate the following general local revenue-split
+core.
+
 Valid Venice-key provisioning is a separate authenticated earning event. When no key exists, an
 XMTP sender may provision one with `/venice-key <api-key>`. Rust accepts a reward only after the
 candidate authenticates to Venice's live catalog and passes fresh TEE attestation. If the freshly
@@ -328,6 +342,7 @@ shell/tool commands.
 6. Exercise Wealth, starvation, survival spend, automatic spawn, revenue payout, and governance
    application against receipt-producing adapters.
 
-The UWU token contract is live. Separate signer, staking/burn/reward contracts, authenticated revenue
+The UWU token contract is live. A Branding contract is not deployed, and its frontend routing is not
+integrated. Separate runtime signer, staking/burn/reward contracts, authenticated general revenue
 source, persisted ballot adapter, payout/application executor, provisioner, and live peer-to-peer
 Council/Hermes transports remain external integration work.

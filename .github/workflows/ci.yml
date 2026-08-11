@@ -105,6 +105,52 @@ jobs:
           done
           npm run test:erc8004-mainnet-fork
 
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: contracts
+    env:
+      FOUNDRY_PROFILE: ci
+      BASE_RPC_URL: https://mainnet.base.org
+      BASE_MAINNET_RPC_URL: https://mainnet.base.org
+      BASE_MAINNET_FORK_BLOCK: "49768180"
+      BASE_MAINNET_FORK_BLOCK_HASH: "0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+      - name: Verify exact Foundry dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(forge --version | sed -n '1p')" =~ ^forge[[:space:]]Version:[[:space:]]1\.7\.1([-+][^[:space:]]+)?$ ]]
+          test "$(git -C lib/openzeppelin-contracts rev-parse HEAD)" = \
+            e4f70216d759d8e6a64144a9e1f7bbeed78e7079
+          test "$(git -C lib/openzeppelin-contracts rev-parse 'HEAD^{tree}')" = \
+            48a8de6b15f3c4f708072626d7646390674a93b8
+          test "$(git -C lib/forge-std rev-parse HEAD)" = \
+            620536fa5277db4e3fd46772d5cbc1ea0696fb43
+          test "$(git -C lib/forge-std rev-parse 'HEAD^{tree}')" = \
+            7a87f9b3d611ddb4475c1e883c79b0d5a4693be4
+          test -z "$(git -C lib/openzeppelin-contracts status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C lib/forge-std status --porcelain=v1 --untracked-files=all)"
+      - run: forge fmt --check
+      - run: forge lint
+      - run: forge build --sizes
+      - run: forge test -vvv
+      - name: Validate deployment tooling syntax
+        run: |
+          bash -n scripts/deploy-base.sh
+          node --experimental-strip-types --check scripts/estimate-deployment-funding.ts
+
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 25

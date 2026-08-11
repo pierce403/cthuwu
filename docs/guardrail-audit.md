@@ -97,8 +97,10 @@ these defaults:
 - 5% to the recruiter;
 - 70% to the earning Tentacle.
 
-Shares are configurable. No authenticated revenue source, deployed contract/signer, or payout
-executor is committed, so the core does not make live payments. A future payout must use event
+Shares are configurable. No authenticated general revenue source, deployed general payout
+contract/signer, or payout executor is committed, so the core does not make live payments. The
+separate in-progress Branding contract has only its closed service-sale/upkeep paths and does not
+activate this split core. A future general payout must use event
 identity, lineage, participant bindings, and consumed transaction receipts; these do not impose a
 quota on authenticated earning events or active lineage growth.
 

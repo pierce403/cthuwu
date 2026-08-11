@@ -31,7 +31,9 @@ The UWU launch choices, local ERC-20 observer, and post-launch activation steps 
 [docs/token.md](docs/token.md). The broader policy limits found during this phase are tracked in
 [docs/guardrail-audit.md](docs/guardrail-audit.md). Canonical Base ERC-8004 registration, voluntary
 Tentacle allegiance, the public leaderboard, and PWA/offline behavior are documented in
-[docs/erc-8004.md](docs/erc-8004.md).
+[docs/erc-8004.md](docs/erc-8004.md). The consent, upkeep, sale, claim, deployment, and planned
+routing rules for Acolyte Branding are documented in
+[docs/acolyte-branding.md](docs/acolyte-branding.md).
 
 ## Council implementation status
 
@@ -44,6 +46,7 @@ Tentacle allegiance, the public leaderboard, and PWA/offline behavior are docume
 | XMTP Council-group adapter | **Experimental boundary**; no live group interoperability claim |
 | ERC-8004 registry read adapter and crash-safe registration | **Implemented — canonical Base mainnet**; pinned registration-v1/contract revision, fail-closed deployment checks, and narrow sidecar signing |
 | Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; restricted public Graph gateway key is checked-in client configuration |
+| Acolyte Branding | **In progress — Foundry contract and deployment tooling**; no Base deployment or frontend routing claim |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
@@ -138,7 +141,12 @@ project claims production interoperability.
 
 ## Build and verify
 
-Requirements: Node 22 or newer and Rust 1.97 or newer.
+Requirements: Node 22 or newer, Rust 1.97 or newer, and pinned Foundry 1.7.1 for the contract
+workspace. Initialize the pinned contract dependencies after cloning:
+
+```bash
+git submodule update --init --recursive
+```
 
 ```bash
 npm --prefix agent ci
@@ -157,7 +165,19 @@ cargo fmt --manifest-path cthuwu/Cargo.toml --all -- --check
 cargo test --manifest-path cthuwu/Cargo.toml --workspace --locked
 cargo clippy --manifest-path cthuwu/Cargo.toml --workspace --all-targets --locked -- -D warnings
 cargo build --manifest-path cthuwu/Cargo.toml --release --locked
+
+cd contracts
+forge fmt --check
+forge lint
+forge build --sizes
+forge test -vvv
 ```
+
+The Branding Base-fork gate needs an archive-capable Base RPC endpoint and pins block `49768180`,
+hash `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`, where read-only live
+checks confirmed Registry `2.0.0` and UWU `18` decimals. It must not reuse the ERC-8004-only
+block `41663800`. The pin, a source checkout, or test definitions are not evidence that the
+contract gates passed.
 
 ## Run `uwubot`
 
@@ -714,8 +734,12 @@ hostnames and Agent0 subgraph, cap and monitor spending, and rotate it. No custo
 or leaderboard backend is deployed.
 
 The browser always opens its initial DM with the hard-coded intro Tentacle at
-`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. Future intro discovery may use verified public
-ERC-8004 Tentacles; no custom Cthuwu registry or membership contract is planned by this milestone.
+`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. After a separately verified Branding deployment
+and frontend integration, the planned client derives the browser participant address, accepts only
+a positively active Branding, and resolves its exact controller agent's current ERC-8004 production
+XMTP endpoint. Unminted, expired, and positively ineligible subjects use the intro Tentacle;
+`RegistryUnavailable` freezes Branding-based routing rather than treating an outage as
+abandonment. That routing is not implemented or deployed yet.
 
 The root page publishes an absolute Open Graph/Twitter large-image card at
 `https://cthuwu.app/cthuwu-og.jpg`.
@@ -749,6 +773,11 @@ installed app may receive separate storage.
   allowlisted registration/profile/wallet/`cthuwu.*` metadata calls, zero value, bounded frames and
   fields, and fee/gas ceilings. There is no generic transaction signer and no private key crosses
   into Rust, logs, the model, the frontend, or Council state.
+- A Branding is a public service/controller right for one immutable Ethereum address, not ownership
+  of a person. It stores no XMTP inbox, message, contact note, credential, or private memory;
+  ordinary ERC-721 approvals/transfers are disabled, registry outages cannot authorize seizure, and
+  sale/upkeep proceeds move directly under the immutable contract rules. No Branding deployment is
+  claimed until its funded Base release gate passes.
 - Production signatures are not simulated. The deterministic signer is test-only; live adapters
   must bind authenticated senders to the version-1 coordination namespace and durable Tentacle
   identity explicitly.

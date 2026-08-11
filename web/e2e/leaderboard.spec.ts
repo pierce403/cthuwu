@@ -104,6 +104,16 @@ test("serves an installable manifest, narrowly scoped worker, and cached offline
       await route.fulfill({ status: 200, contentType: "application/json", body: graphFixture });
       return;
     }
+    if (route.request().url() === RPC_ENDPOINT) {
+      const rpcRequest = route.request().postDataJSON();
+      const body = Array.isArray(rpcRequest)
+        ? rpcRequest.map((item) => ({ jsonrpc: "2.0", id: item.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }))
+        : rpcRequest.method === "eth_call"
+          ? { jsonrpc: "2.0", id: rpcRequest.id, result: `0x${(1000n * 10n ** 18n).toString(16).padStart(64, "0")}` }
+          : { jsonrpc: "2.0", id: rpcRequest.id, result: { number: "0x2f766f4", hash: `0x${"cc".repeat(32)}`, timestamp: "0x6a7944c8" } };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      return;
+    }
     await route.abort("blockedbyclient");
   });
   await page.goto("/", { waitUntil: "domcontentloaded" });

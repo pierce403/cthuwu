@@ -28,3 +28,9 @@ contacts/
 /xmtp/
 /cthuwu-data/
 .uwubot/
+/contracts/out/
+/contracts/cache/
+/contracts/broadcast/
+/contracts/snapshots/
+/contracts/.gas-snapshot
+/contracts/lcov.info

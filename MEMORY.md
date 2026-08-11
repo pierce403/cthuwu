@@ -82,8 +82,9 @@ Last reviewed: 2026-08-11
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
-  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; future verified discovery may use public ERC-8004
-  Tentacle state without adding a custom registry or membership contract.
+  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. The planned Branding router may replace first
+  contact only after it positively verifies the exact active controller and endpoint; the intro
+  remains the fallback for unminted/expired/positively ineligible subjects.
 - The web presentation is a responsive "pocket séance" layout. Its generated Cthuwu cutout lives at
   `web/public/cthuwu-mascot.webp`; motion is CSS-only, system-reduced-motion aware, and can be paused
   with the environment-independent `cthuwu.ui.motion.v1` browser preference.
@@ -240,8 +241,9 @@ Last reviewed: 2026-08-11
   may remain orphaned.
 - Base mutations, child provisioning, and absorption use durable unique intents and locally validated
   idempotent executor receipts. Shutdown instead uses the Rust supervisor/controller's native receipt
-  after XMTP stops. No signer, deployed UWU contract, child provisioner, or absorption service is
-  committed, so absent external effects are reported blocked rather than completed.
+  after XMTP stops. No lifecycle signer, deployed survival-spend contract, child provisioner, or
+  absorption service is committed, so absent external effects are reported blocked rather than
+  completed. The live UWU token and in-progress closed Branding source do not satisfy those adapters.
 - The executor currently returns one final JSON response and does not persist a submitted-
   transaction phase. A survival burn can broadcast before grace while its response is lost or
   preempted, spending UWU without canceling Death. This blocks production-value use until exact
@@ -477,6 +479,67 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
 
 See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 
+## Acolyte Branding architecture decisions
+
+- A Branding is a public Base-mainnet service/controller right for one human acolyte address. It is
+  not ownership of a person. Its token ID is exactly `uint256(uint160(acolyte))`; the nonzero
+  subject and signed nonzero referrer never change, and there is no burn.
+- The zero-argument constructor binds the canonical registry and UWU constants, rejects non-`8453`
+  chains, and verifies registry `2.0.0` plus UWU `18` decimals. Solidity is pinned to `0.8.28`.
+- The exact controller agent ID is stored because several ERC-8004 agents may share one wallet.
+  Eligibility requires successful current reads proving Identity Registry version `2.0.0`,
+  `getAgentWallet(agentId) == wallet`, `isAuthorizedOrOwner(wallet, agentId)`, exact
+  `cthuwu.allegiance = uwu-tentacle-v1`, and exact `cthuwu.protocol = 1`.
+- Registry failure or an unknown version is `RegistryUnavailable`, never proof of ineligibility.
+  It freezes claims and Branding-based routing. An active controller is returned only after positive
+  status verification.
+- The canonical registry proxy is an upgradeable external governance trust root. Deployment pins
+  its current implementation and code hashes, but a version-preserving registry upgrade can still
+  change future eligibility/claimability answers. Branding has no local admin or confiscation path;
+  do not broaden that fact into a claim that external registry governance is powerless.
+- EIP-712 acolyte consent binds the exact minter/controller, immutable referrer, positive initial
+  price, one-use nonce, and deadline. `SignatureChecker` supports EOAs and ERC-1271 subjects.
+- Weekly upkeep is `ceil(price * 10 / 10_000)` UWU and moves directly from controller to acolyte.
+  Payment adds seven days from `max(paidThrough, now)` and opens only when at most seven days
+  remain; exact `paidThrough` is expired.
+- Price decreases are immediate. The first queued increase fixes activation at the end of the
+  already-paid interval; renewal and later repricing cannot move it. Renewal charges any newly
+  added interval at the price effective when that interval starts, so a post-activation week cannot
+  be prepaid at the old price. Once that interval is prepaid the pending price can only stay or
+  decrease until activation; raising it would underpay upkeep. A compulsory buyer binds
+  expected owner/controller, maximum price, exact buyer agent/new price, and deadline.
+- Paid purchase sends `floor(gross * 1_000 / 10_000)` to the immutable referrer, the exact
+  remainder to the seller, and separate first upkeep to the acolyte. An expired or positively
+  ineligible claim pays neither the old owner nor referrer and pays only new upkeep. ERC-2981
+  exposes the same 1,000-basis-point referrer but does not enforce generic marketplace payment.
+- Paid purchase and zero-consideration claim both reject an acquiring wallet equal to the current
+  owner, preventing same-address price reset or self-rebinding through another eligible agent ID.
+  Claims also bind expected old owner/controller and deadline to reject a changed tuple, but those
+  fields are not a unique epoch nonce if the same tuple recurs before a long caller-selected
+  deadline. Recommend short deadlines. Distinct wallet addresses under common control remain
+  indistinguishable on-chain; do not claim this is full Sybil resistance.
+- The signed referrer may be any nonzero address, including the Branding contract itself. Normally
+  the contract holds no transient/intermediary UWU; when it is the immutable referrer, it is the
+  intentional final 10% recipient and those funds are stranded because version 1 has no admin or
+  sweep. Keep that economic caveat distinct from an unintended-residue invariant.
+- Ordinary ERC-721 approvals/transfers, ERC-8034, upgrades, admin confiscation, mutable rates, and
+  generic marketplace settlement are excluded. Ownership changes only through atomic mint, buy, or
+  claim. No XMTP inbox, message, contact note, profile, credential, or private state goes on-chain.
+- The Foundry workspace pins Foundry `1.7.1` and audited OpenZeppelin Contracts `v5.3.0` commit
+  `e4f70216d759d8e6a64144a9e1f7bbeed78e7079`. Its Base fork is pinned to block `49768180`,
+  hash `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`. The exact Foundry
+  `1.7.1` run passed 58/58, including live real-registry and real-UWU fork paths. This is test
+  evidence, not a deployment claim.
+- Planned frontend routing reads the actual browser participant address, accepts only a positively
+  active Branding, resolves the exact controller's current ERC-8004 production XMTP endpoint, and
+  preserves direct-DM privacy. Unminted/expired/positively ineligible subjects use the intro
+  Tentacle; registry unavailability freezes Branding routing.
+- Agent0 plus same-block canonical Base reads remains the public indexing/verification architecture.
+  Branding does not resurrect a custom subgraph or add a central router. Contract deployment and
+  frontend integration are both incomplete release gates.
+
+See [Acolyte Branding](docs/acolyte-branding.md).
+
 ## Deployment
 
 - The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
@@ -492,8 +555,21 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   `CTHUWU_BASE_RPC_ENDPOINT` overrides, IPFS/Arweave gateway,
   and leaderboard-freshness repository variables as Vite build inputs. They are public in the
   resulting JavaScript; the endpoint must use a tightly restricted Graph key.
+- Branding deployment is manual and Base-mainnet only. Production uses a Foundry encrypted keystore
+  or hardware wallet, never a raw private-key environment variable or argument. State remains
+  outside git, preflight includes execution and Base L1 data fee plus the existing 125% safety and
+  `50000000000000` wei reserve policy, and canonical deployment JSON is not written until
+  confirmations plus TypeScript finalization bind the exact creation transaction/artifact, compare
+  the runtime template outside address-dependent immutable regions, and reread the immutables. The
+  standalone Solidity verifier independently checks dependencies, public constants, interfaces,
+  and non-proxy shape; its reported runtime hash is provenance, not an artifact comparison.
+- The Branding funding block is stdout from the wrapper. It traverses XMTP only when an authenticated
+  operator exact-exec invocation transports that output; there is no generic XMTP sender or delivery
+  acknowledgement. Cooldown records local emission. Only a still-running non-status deployment
+  process keeps polling automatically; status-only or terminated invocations require a later run.
+- No Branding contract address or frontend Branding routing is currently claimed.
 
-See `ARCHITECTURE.md` and `docs/decisions/`.
+See `IDEA.md`, `docs/acolyte-branding.md`, and `docs/decisions/`.
 
 ## Reference projects
 
@@ -503,8 +579,8 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 
 ## Open questions
 
-- What verified public-selection and fallback policy should replace the hard-coded intro Tentacle
-  without introducing a custom membership registry or central selector?
+- What finality, cache, and user-visible recovery UX should accompany the planned Branding router
+  while preserving its `RegistryUnavailable` freeze behavior?
 - Should conversation memory remain per-XMTP inbox, be user-editable, and/or expire?
 - What retention period should apply to opaque processed-message tombstones and contact notes?
 - Which XMTP group SDK/identity-binding design should implement the live Council transport?
@@ -536,6 +612,12 @@ same-block Base UWU reads, a static wallet-grouped leaderboard with precision-sa
 mobile install/offline PWA flow. The restricted Graph key is intentional checked-in client
 configuration; only a funded live registration still requires external credentials/funding and must not be inferred from
 repository source alone.
+
+The Acolyte Branding milestone adds an in-progress non-upgradeable Foundry ERC-721, consented
+address-bound identity, exact ERC-8004 controller verification, direct weekly upkeep, compulsory
+UWU purchase, immutable referral, unserved claims, and funding-aware deployment tooling. Local
+source and tests do not imply a Base deployment. Funded deployment, independent verification,
+canonical provenance, static-browser integration, and a real XMTP routing exercise remain open.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically
 append-only judgment history, binding death/spawn state, lineage, durable execution intents/receipts,

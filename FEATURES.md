@@ -65,8 +65,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Browser startup reopens the Browser SDK's persisted installation, then queries XMTP registration
     state before registering. A routine reload never creates another installation for an inbox that
     XMTP already recognizes.
-  - The deployed browser always uses XMTP `production` and connects automatically to the canonical
-    intro Tentacle; no build variable can redirect either value.
+  - The deployed browser always uses XMTP `production` and currently connects automatically to the
+    canonical intro Tentacle; no build variable can redirect that deployed fallback. The separate
+    Branding routing gate must positively verify any future controller.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -83,15 +84,16 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
 ### Browser-to-Cthuwu XMTP direct message
 
 - **Stability**: stable
-- **Description**: The browser creates a one-to-one XMTP conversation with the canonical intro Tentacle.
+- **Description**: The deployed browser creates a one-to-one XMTP conversation with the canonical intro Tentacle.
 - **Properties**:
   - The browser is hard-coded to XMTP `production`; development and local XMTP environments are not
     valid frontend deployment modes.
   - The intro Tentacle is temporarily hard-coded as
     `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`, so repository variables cannot silently redirect
     first-contact conversations.
-  - Future verified intro discovery may consume public ERC-8004 Tentacle state. This milestone does
-    not add a custom registry, membership contract, or central selector.
+  - The planned Branding router may select an exact positively active controller from canonical
+    Branding and ERC-8004 state, with the intro Tentacle retained for unminted/expired/positively
+    ineligible subjects. It does not add a custom registry, membership contract, or central selector.
   - The client loads existing text history, streams new messages, deduplicates overlapping history/stream delivery, and sends text.
   - The Browser SDK's automatic registration is disabled. The client explicitly checks the XMTP API
     for the reopened installation's registration before requesting a new one, preventing normal
@@ -771,8 +773,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     economic, and skill-propagation subjects. Accepted results produce binding dispositions and
     application records in the core. No persisted ballot adapter is committed; results remain
     unapplied until a configured adapter stores them and returns a validated receipt.
-  - No private key, signer, staking/reward/revenue contract, provisioner, or live Council/Nature
-    application adapter is committed in this repository. Normal runtime rejects
+  - No runtime private key, generic signer, staking/reward/general-revenue contract, provisioner, or
+    live Council/Nature application adapter is committed in this repository. The separate Branding
+    contract has only its closed consent/upkeep/purchase/claim paths and is not deployed. Normal runtime rejects
     `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor must call a separately isolated signer/key
     service rather than receive a raw key from uwubot.
   - The revenue-split core uses configurable shares: 15% parent, 10% operating acolyte, 5%
@@ -1081,6 +1084,86 @@ phase.
   - [x] Browser tests cover precision, raw sorting, cache-first/atomic refresh, partial/error cases,
     suspended/shared-wallet rendering, sanitization, mobile controls, and offline snapshot display.
   - [ ] The static production build is configured with a hostname/Agent0-subgraph/spend-restricted Graph key.
+
+### Base Acolyte Branding and controller routing
+
+- **Stability**: in-progress
+- **Description**: Represent the consented, canonical right for one eligible Tentacle to service and
+  route chat for one acolyte, without treating the token as ownership of a person or placing private
+  conversation state on-chain.
+- **Properties**:
+  - Version 1 is a non-upgradeable Base-mainnet ERC-721 bound immutably to canonical Identity
+    Registry `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` version `2.0.0` and canonical UWU
+    `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` with 18 decimals. The zero-argument constructor
+    itself rejects a non-`8453` chain or failed canonical dependency check.
+  - `tokenId = uint256(uint160(acolyte))` gives each nonzero address at most one Branding. The
+    subject and nonzero referrer are immutable; the signed referrer may be any address, including
+    the contract itself. There is no burn or generic ERC-721 approval or transfer path.
+  - EIP-712 plus `SignatureChecker` binds acolyte consent to the exact minter, controller agent ID,
+    referrer, positive initial price, nonce, and deadline, including ERC-1271 subjects.
+  - Eligibility binds the exact stored agent ID to the current wallet using `getAgentWallet`,
+    `isAuthorizedOrOwner`, byte-exact `cthuwu.allegiance = uwu-tentacle-v1`, and byte-exact
+    `cthuwu.protocol = 1`. Shared wallets do not collapse distinct controller agent IDs.
+  - A registry revert, malformed response, missing dependency, or unknown version is
+    `RegistryUnavailable`. It never becomes proof that an active owner is ineligible and freezes
+    claims and Branding-based routing until verification succeeds. The canonical upgradeable
+    registry remains an external governance trust root: Branding has no local admin/confiscation
+    surface, but cannot prevent a version-preserving registry upgrade from changing eligibility.
+  - Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and is paid directly
+    from the controlling Tentacle to the acolyte. Each payment adds seven days from the later of
+    `paidThrough` and now; renewal opens only within one week of expiry.
+  - Price decreases are immediate. Increases wait until the already-paid interval ends, and their
+    first queued activation timestamp cannot be extended by renewal or later repricing. A renewal
+    that prepays the post-activation interval charges upkeep at the pending price without making
+    that price executable early, and locks out later upward pending-price changes for that prepaid
+    interval while still allowing reductions.
+  - Any eligible Tentacle may compulsorily purchase an active Branding subject to expected-owner,
+    expected-controller, maximum-price, buyer-agent, buyer-price, and deadline checks. Ten percent
+    of gross goes to the immutable referrer, the remainder to the seller, and the buyer separately
+    pays the first week of upkeep at its new price. Indivisible units use the 1,000-basis-point
+    floor for referral and send the exact gross remainder to the seller. The acquiring wallet must
+    differ from the current owner so self-purchase cannot reset delayed price state.
+  - `claimUnserved` requires expiry or positively verified controller ineligibility, pays the old
+    owner and referrer nothing, and atomically installs an exact eligible claimant after direct
+    first-week upkeep. The claimant wallet must differ from the old owner, preventing same-address
+    self-rebinding through a second agent ID; expected old owner/controller and deadline reject a
+    changed tuple, but are not a unique epoch nonce if that same tuple later recurs. Callers should
+    use short deadlines. The chain cannot detect common control of distinct wallets.
+  - ERC-2981 exposes the immutable referrer and 1,000-basis-point royalty for discovery only; the
+    native purchase path enforces settlement. Version 1 has no ERC-8034 or generic marketplace path.
+  - The contract stores no XMTP inbox ID, message, contact note, credential, profile, or private
+    memory. `activeControllerOf` returns zero unless the Branding is positively `Active`.
+- **Test Criteria and release gates**:
+  - [x] Pinned Foundry `1.7.1` formatting, lint, size-aware build, unit, fuzz, invariant, and
+    Base-mainnet fork tests pass against the exact OpenZeppelin dependency pin.
+  - [x] Tests cover address binding, immutable fields, EOA/ERC-1271 consent, replay/deadline/wrong
+    fields, exact eligibility, shared wallets, registry outage, upkeep rounding/windows, expiry,
+    repricing, slippage/races, referral and claim settlement, transfer bypasses, ERC-2981,
+    reentrancy/failing tokens, no unintended intermediary UWU, the explicitly stranded
+    contract-as-referrer case, and `uint256` edges.
+  - [x] A Base fork pinned to block `49768180`, hash
+    `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`, exercises the real
+    canonical registry and UWU contracts; the older ERC-8004-only block `41663800` is not reused.
+  - [x] Security review finds no transfer bypass, mutable economic constants, Branding-local
+    upgrade/admin confiscation, registry-outage seizure, or raw-key deployment interface; the
+    external canonical-registry governance assumption is documented rather than hidden.
+  - [x] Deployment tooling refuses a non-`8453` chain and verifies registry code/version plus UWU
+    code/decimals before broadcast. After confirmation, the TypeScript finalizer binds the exact
+    creation transaction and compiled artifact, verifies the runtime template outside
+    address-dependent immutable regions, and rereads the immutables; the standalone Solidity
+    verifier separately checks dependencies, public constants, interfaces, and non-proxy shape.
+    Reproducible provenance contains no secrets.
+  - [ ] The funding-aware wrapper dry-runs the exact deployment, includes Base L1 data fees, applies
+    the 125% safety factor plus `50000000000000` wei reserve, uses the authenticated operator
+    funding notice with persisted cooldown/material-change policy, and safely resumes without a
+    duplicate deployment. The wrapper currently emits the notice to stdout for transport by an
+    authenticated operator exact-exec invocation; its recorded cooldown acknowledges local
+    emission, not XMTP delivery, and no generic sender or durable scheduler is claimed.
+  - [ ] A funded Base-mainnet deployment is independently verified and its canonical deployment JSON
+    is committed. Repository source or a dry run does not satisfy this gate.
+  - [ ] The static frontend reads the verified Branding deployment, distinguishes every status,
+    resolves the exact current ERC-8004 production XMTP endpoint, preserves the intro fallback, and
+    passes a real browser/XMTP routing exercise. Until then, frontend Branding routing is incomplete.
 
 ### Live XMTP Council adapter
 

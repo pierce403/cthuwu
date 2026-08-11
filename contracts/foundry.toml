@@ -1,0 +1,40 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+cache_path = "cache"
+broadcast = "broadcast"
+libs = ["lib"]
+remappings = [
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "forge-std/=lib/forge-std/src/",
+]
+auto_detect_solc = false
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "ipfs"
+cbor_metadata = true
+use_literal_content = true
+build_info = true
+build_info_path = "out/build-info"
+
+[profile.ci.fuzz]
+runs = 1_024
+
+[profile.ci.invariant]
+runs = 256
+depth = 64
+fail_on_revert = true
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = true
+int_types = "long"
+quote_style = "double"
+
+[lint]
+severity = ["high", "med", "low", "info", "gas"]
