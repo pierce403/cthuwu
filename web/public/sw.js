@@ -53,6 +53,11 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (OFFLINE_ASSETS.includes(url.pathname)) {
-    event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+    // These exact same-origin paths are an explicit shell allowlist. Ignore the
+    // host's Vary: Origin response header so a precached module request remains
+    // available when the browser supplies an Origin header while offline.
+    event.respondWith(
+      caches.match(url.pathname, { ignoreVary: true }).then((cached) => cached || fetch(request)),
+    );
   }
 });

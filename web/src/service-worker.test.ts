@@ -10,10 +10,18 @@ function loadWorker(fetcher: typeof fetch = vi.fn() as typeof fetch) {
   const addAll = vi.fn(async () => undefined);
   const removeCache = vi.fn(async () => true);
   const offline = new Response("offline", { status: 200 });
-  const match = vi.fn(async (request: Request | string) =>
-    request === "/offline.html" || (typeof request !== "string" && request.url.endsWith("/offline.html"))
-      ? offline
-      : undefined,
+  const script = new Response("offline shell script", { status: 200 });
+  const match = vi.fn(
+    async (request: Request | string, options?: CacheQueryOptions) => {
+      if (
+        request === "/offline.html" ||
+        (typeof request !== "string" && request.url.endsWith("/offline.html"))
+      ) {
+        return offline;
+      }
+      if (request === "/offline-leaderboard.js" && options?.ignoreVary === true) return script;
+      return undefined;
+    },
   );
   const claim = vi.fn(async () => undefined);
   const skipWaiting = vi.fn();
@@ -36,7 +44,7 @@ function loadWorker(fetcher: typeof fetch = vi.fn() as typeof fetch) {
     URL,
     Response,
   });
-  return { handlers, addAll, removeCache, match, claim, skipWaiting, offline };
+  return { handlers, addAll, removeCache, match, claim, skipWaiting, offline, script };
 }
 
 describe("service worker privacy and offline behavior", () => {
@@ -83,6 +91,26 @@ describe("service worker privacy and offline behavior", () => {
       onFetch({ request, respondWith });
       expect(respondWith).not.toHaveBeenCalled();
     }
+  });
+
+  it("serves an allowlisted module from cache despite the host Vary header", async () => {
+    const fetcher = vi.fn(async () => {
+      throw new TypeError("offline");
+    }) as typeof fetch;
+    const worker = loadWorker(fetcher);
+    let response: Promise<Response> | undefined;
+    worker.handlers.get("fetch")?.({
+      request: {
+        method: "GET",
+        mode: "cors",
+        url: "https://cthuwu.app/offline-leaderboard.js",
+      },
+      respondWith: (promise: Promise<Response>) => (response = promise),
+    });
+
+    await expect(response).resolves.toBe(worker.script);
+    expect(worker.match).toHaveBeenCalledWith("/offline-leaderboard.js", { ignoreVary: true });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("activates a waiting update only after the controlled message", () => {

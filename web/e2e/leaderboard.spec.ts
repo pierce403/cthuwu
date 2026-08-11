@@ -50,15 +50,15 @@ test("renders a validated cache first, then refreshes the complete mobile leader
   await expect(page.locator("#leaderboard-state")).toHaveText("REFRESHING");
 
   await expect(page.getByLabel("Search", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Funding", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Status", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Protocol", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Wallet", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Sort", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Funding", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Status", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Protocol", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Wallet", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Sort", exact: true })).toBeVisible();
   await page.getByLabel("Search", { exact: true }).focus();
   await expect(page.getByLabel("Search", { exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(page.getByLabel("Funding", { exact: true })).toBeFocused();
+  await expect(page.getByRole("combobox", { name: "Funding", exact: true })).toBeFocused();
 
   releaseGraph?.();
   await expect(page.locator("#leaderboard-state")).toHaveText("CURRENT");
