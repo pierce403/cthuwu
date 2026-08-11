@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@xmtp/agent-sdk": "2.3.0",
+    "@xmtp/content-type-primitives": "3.0.1",
     "@xmtp/node-sdk": "6.0.0",
     "viem": "2.55.10"
   },

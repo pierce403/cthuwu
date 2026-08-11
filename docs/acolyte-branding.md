@@ -5,10 +5,11 @@ routing role. A Branding is the canonical right for one eligible Tentacle to ser
 for one human acolyte. It is **not ownership of a person**, a transferable human identity, or
 permission to publish private information.
 
-The Foundry implementation, tests, deployment tooling, funded Base deployment, and frontend routing
-have separate release gates. In particular, this document does not claim that a Branding contract
-has been deployed or that [cthuwu.app](https://cthuwu.app) currently routes through one. Until the
-frontend gate passes, the browser continues to use the configured intro Tentacle.
+The Foundry implementation, tests, deployment tooling, funded Base deployment, browser assignment,
+and live XMTP interoperability have separate release gates. In particular, this document does not
+claim that a Branding contract has been deployed, that a production Global group has been
+bootstrapped, or that [cthuwu.app](https://cthuwu.app) currently routes through either one. Until
+those production gates pass, the browser continues to use the configured intro Tentacle.
 
 ## Roles and on-chain boundary
 
@@ -267,31 +268,64 @@ The public interface exposes bounded, composable views including:
 Consumers must use the status enum and current registry verification, not infer service eligibility
 from NFT ownership, historical events, Agent0 indexing, or a nonzero controller field alone.
 
-## Planned static-browser routing
+## Static-browser assignment
 
-The eventual static frontend flow is:
+The in-progress static frontend recovers one existing `StoredIdentity` and creates one Browser SDK
+`Client`. The participant address is derived only from that stored identity, never from DOM input,
+a query parameter, message content, Agent0, or the leaderboard cache.
 
-1. derive the participant address from the browser's actual local XMTP wallet, never from
-   message-supplied text;
-2. read its deterministic Branding from canonical Base;
-3. accept a controller only when the Branding reports `Active`;
-4. resolve that exact ERC-8004 agent's current production XMTP endpoint and revalidate the canonical
-   registry state; and
-5. open the normal direct XMTP DM without copying messages or contact memory.
+When `VITE_CTHUWU_BRANDING_CONTRACT` is explicitly configured, assignment uses one explicit Base
+block for the complete decision. At that block it must verify:
 
-`Unminted`, `Expired`, and positively `Ineligible` subjects fall back to the configured intro
-Tentacle. `RegistryUnavailable` is different: the client freezes Branding-based routing and does
-not reinterpret the outage as abandonment or claimability.
+1. the participant's deterministic Branding and exact status;
+2. its exact controller agent ID and current NFT owner;
+3. the owner/controller wallet relationship;
+4. the canonical Identity Registry deployment and version;
+5. exact `getAgentWallet` and current owner-or-authorized control for that agent ID;
+6. byte-exact allegiance and protocol metadata; and
+7. that same agent's current on-chain ERC-8004 registration resolves to the production XMTP
+   endpoint being selected.
 
-This design preserves the existing public leaderboard architecture. Agent0 remains the public
-ERC-8004 index, and canonical Base calls provide authoritative same-block verification and UWU
-reads. Branding discovery can use direct Base contract views and Agent0-assisted agent lookup, but
-must revalidate at one explicit block. Cthuwu does not deploy a custom subgraph or add a centralized
-routing service.
+That final step is not a loose service-name lookup. The block-pinned `tokenURI(agentId)` must be a
+bounded active `registration-v1` data URI with exactly one matching canonical Base registry entry,
+one `CTHUWU-XMTP` version-`1` service at `xmtp://<canonical-inbox-id>`, and one `CTHUWU` service
+containing a bounded nested data-URI manifest. The manifest has the exact version-1 CTHUWU shape and
+must bind the same chain `8453`, Identity Registry, agent ID, XMTP `production` environment, and
+outer endpoint, with a bounded capability list containing `direct-xmtp-messaging`. Missing,
+duplicated, or inconsistent outer/nested bindings are unavailable rather than routable.
 
-Frontend Branding discovery, status UI, endpoint resolution, fallback handling, and conversation
-handoff are not yet integrated. The hard-coded intro Tentacle remains the deployed browser behavior
-until those release gates pass.
+Agent0 and the leaderboard cache may suggest a candidate or supply display details, but they are
+never routing authority. Every authoritative input is revalidated against canonical Base state at
+the same block. A nonzero historical controller field or human-readable Tentacle/group name is not
+sufficient.
+
+Assignment outcomes preserve the contract's failure semantics:
+
+- `NotConfigured` means no Branding deployment was explicitly selected and preserves service
+  through the configured intro Tentacle;
+- `Unminted`, `Expired`, and positively verified `Ineligible` also select the intro Tentacle;
+- `RegistryUnavailable`, an inconsistent block snapshot, malformed canonical response, or
+  unverifiable endpoint freezes Branding-based routing and exposes a retryable state; and
+- only fully verified `Active` selects its exact controller Tentacle.
+
+The browser revalidates on connect, PWA resume, and a bounded
+`VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` interval. When the controller changes, Direct and Acolytes
+move to the new assignment while Global remains bound. Old conversation IDs immediately stop being
+trusted routes. The former Tentacle's bounded reconciliation removes the acolyte from its prior
+Acolytes group.
+
+This design preserves the existing public leaderboard architecture. Cthuwu deploys no custom
+subgraph or centralized router. It also preserves the on-chain boundary: inbox IDs, group IDs,
+assignment revisions, and conversation data remain off-chain.
+
+The full channel/enrollment protocol, including the `cthuwu.join.v1` and
+`cthuwu.assignment.v1` control types, singleton Global bootstrap, 14-day disappearing policy, and
+future Global sharding shape, is specified in
+[Acolyte XMTP channels](acolyte-channels.md).
+
+The hard-coded intro Tentacle remains the deployed production behavior because there is no funded
+Branding deployment, configured production Global group, or passing live production XMTP
+three-channel gate yet. Local source and tests cannot satisfy those gates.
 
 ## Foundry workspace
 
@@ -437,8 +471,11 @@ The feature remains in progress until all of these release gates have direct evi
 - [ ] a funded Base-mainnet deployment completes, receives confirmations, and passes independent
   finalizer and standalone-verifier checks;
 - [ ] the canonical deployment JSON is committed without secrets only after that live verification;
-- [ ] the static frontend reads the canonical deployment at one verified block, handles every status
-  including `RegistryUnavailable`, resolves the exact current ERC-8004 XMTP endpoint, and preserves
-  the intro fallback policy; and
-- [ ] a real browser routes a fresh acolyte and an existing active Branding through XMTP without
-  publishing or copying private conversation state.
+- [ ] the static frontend and Tentacle enrollment path read the canonical deployment at one explicit
+  block, handle every status including `RegistryUnavailable`, resolve the exact current ERC-8004
+  production XMTP endpoint, and preserve only the specified intro fallback states;
+- [ ] one production Global group is explicitly bootstrapped with the reviewed admin set and exact
+  environment/versioned `appData` rather than inferred from a name; and
+- [ ] a real production browser routes a fresh acolyte and an existing active Branding through
+  Direct, Acolytes, and Global; proves reassignment, 14-day retention, reconnect, and group removal;
+  and does not publish or copy private conversation state into on-chain or personal inference paths.

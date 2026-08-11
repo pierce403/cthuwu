@@ -60,7 +60,9 @@ Last reviewed: 2026-08-11
 - Authenticated `/provider` and `/model` commands persist only the node-wide provider/model names in
   protected `state/inference.json`; `/venice-key` stores the secret separately in owner-only
   `state/venice.key`. Route changes clear in-process operator dialogue history.
-- Text-only one-to-one DMs are the first vertical slice.
+- Text-only one-to-one DMs are the completed continuity slice. The in-progress browser workspace
+  replaces the single-session UI with fixed Direct, Acolytes, and Global channels while keeping
+  arbitrary inboxes/groups out of scope.
 - `./uwu.sh` now keeps the default console useful without becoming a transcript: Node emits received
   and delivered XMTP-message events, while Rust emits authenticated routing, inference “thinking”
   provider phases/fallback, and tool lifecycle events. These records omit message bodies, identity
@@ -82,9 +84,40 @@ Last reviewed: 2026-08-11
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
-  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. The planned Branding router may replace first
-  contact only after it positively verifies the exact active controller and endpoint; the intro
-  remains the fallback for unminted/expired/positively ineligible subjects.
+  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. `NotConfigured`, unminted, expired, and positively
+  ineligible Branding states preserve that continuity path. After a Branding deployment is
+  explicitly configured, registry/endpoint unavailability freezes assignment and exposes retry;
+  it never becomes another intro fallback.
+- The browser recovers one `StoredIdentity` and creates one Browser SDK `Client` for all three tabs.
+  Direct binds the exact assigned-Tentacle DM; Acolytes binds the exact assigned group; Global is a
+  logical `readConversationIds[]` plus `writeConversationId`. This shape anticipates XMTP's current
+  [official 250-member group cap](https://docs.xmtp.org/chat-apps/core-messaging/create-conversations#create-a-new-group-chat)
+  without changing the tab model when sharding becomes necessary.
+- Browser assignment derives the acolyte address only from `StoredIdentity`. One explicit Base block
+  must bind Branding status/controller, owner/controller wallet, canonical registry, exact
+  allegiance/protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
+  selected production XMTP endpoint. Agent0 and the leaderboard cache can narrow discovery or
+  supply display names, never authorize routing.
+- Assignment is revalidated on connect, PWA resume, and a bounded interval. Controller change hands
+  off Direct/Acolytes and retains Global; old conversation IDs immediately stop being trusted routes.
+- Versioned `cthuwu.join.v1` / `cthuwu.assignment.v1` control uses registered
+  `cthuwu.app/join:1.0` / `cthuwu.app/assignment:1.0` custom content types with no text fallback. It
+  is authenticated from the XMTP envelope and intercepted by the sidecar before Rust, inference,
+  contact memory, or ordinary history. Normal group chatter has no personal-DM inference or memory
+  path in version 1.
+- A Tentacle persists exactly one idempotent Acolytes group and enrolls only its currently assigned
+  acolytes in owner-only `state/xmtp-chat-control.json`. Global is one explicitly configured,
+  separately bootstrapped group whose exact ID, environment, versioned `appData`, admins, and
+  membership must validate; a name is never authority.
+  `uwubot chat global create` and `uwubot chat global inspect` are one-shot admin operations that
+  exit; create can recover one exact self-created crash-window candidate but refuses a drifted
+  replacement, and ordinary service startup never creates Global.
+- Direct, Acolytes, and Global require XMTP disappearing settings `fromNs = 1n` and
+  `inNs = 1_209_600_000_000_000n`. The relevant channel composer remains disabled until policy
+  verification succeeds, and deleted-message events remove expired messages from the rendered UI.
+  This is supporting-client retention, not erasure of independent copies.
+- Three-channel browser persistence is confined to `cthuwu.chat.*`, separate from
+  `cthuwu:leaderboard:v1`, and never places inbox IDs, group IDs, revisions, or conversations on-chain.
 - The web presentation is a responsive "pocket séance" layout. Its generated Cthuwu cutout lives at
   `web/public/cthuwu-mascot.webp`; motion is CSS-only, system-reduced-motion aware, and can be paused
   with the environment-independent `cthuwu.ui.motion.v1` browser preference.
@@ -530,15 +563,25 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   hash `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`. The exact Foundry
   `1.7.1` run passed 58/58, including live real-registry and real-UWU fork paths. This is test
   evidence, not a deployment claim.
-- Planned frontend routing reads the actual browser participant address, accepts only a positively
-  active Branding, resolves the exact controller's current ERC-8004 production XMTP endpoint, and
-  preserves direct-DM privacy. Unminted/expired/positively ineligible subjects use the intro
-  Tentacle; registry unavailability freezes Branding routing.
+- The in-progress frontend assignment path reads the actual browser participant address, accepts
+  only a positively active Branding, resolves the exact controller's current ERC-8004 production
+  XMTP endpoint, and verifies all routing inputs at one explicit block. Unminted/expired/positively
+  ineligible subjects use the intro Tentacle; configured registry or endpoint unavailability freezes
+  Branding routing. Absence of an explicitly configured deployment is `NotConfigured` and preserves
+  intro continuity.
 - Agent0 plus same-block canonical Base reads remains the public indexing/verification architecture.
   Branding does not resurrect a custom subgraph or add a central router. Contract deployment and
-  frontend integration are both incomplete release gates.
+  the live production three-channel XMTP gate are both incomplete release gates.
 
-See [Acolyte Branding](docs/acolyte-branding.md).
+The channel configuration names are `VITE_CTHUWU_BASE_RPC_ENDPOINT`,
+`VITE_CTHUWU_BRANDING_CONTRACT`, `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS`, `CTHUWU_RPC_ENDPOINT`,
+`CTHUWU_BRANDING_CONTRACT`, `CTHUWU_GLOBAL_GROUP_ID`, `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`, and
+`CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS`. Browser refresh defaults to 600000 ms and is bounded to
+60000–3600000; the independent Tentacle membership sweep defaults to 900 seconds and is bounded to
+60–86400. No implicit contract, Global group, or admin set may be inferred when absent.
+
+See [Acolyte Branding](docs/acolyte-branding.md) and
+[Acolyte XMTP channels](docs/acolyte-channels.md).
 
 ## Deployment
 
@@ -567,7 +610,8 @@ See [Acolyte Branding](docs/acolyte-branding.md).
   operator exact-exec invocation transports that output; there is no generic XMTP sender or delivery
   acknowledgement. Cooldown records local emission. Only a still-running non-status deployment
   process keeps polling automatically; status-only or terminated invocations require a later run.
-- No Branding contract address or frontend Branding routing is currently claimed.
+- No Branding contract address, production Global group, live frontend Branding routing, or
+  production three-channel XMTP interoperability is currently claimed.
 
 See `IDEA.md`, `docs/acolyte-branding.md`, and `docs/decisions/`.
 
@@ -579,7 +623,7 @@ See `IDEA.md`, `docs/acolyte-branding.md`, and `docs/decisions/`.
 
 ## Open questions
 
-- What finality, cache, and user-visible recovery UX should accompany the planned Branding router
+- What finality, cache, and user-visible recovery UX should accompany the in-progress Branding router
   while preserving its `RegistryUnavailable` freeze behavior?
 - Should conversation memory remain per-XMTP inbox, be user-editable, and/or expire?
 - What retention period should apply to opaque processed-message tombstones and contact notes?
@@ -615,9 +659,11 @@ repository source alone.
 
 The Acolyte Branding milestone adds an in-progress non-upgradeable Foundry ERC-721, consented
 address-bound identity, exact ERC-8004 controller verification, direct weekly upkeep, compulsory
-UWU purchase, immutable referral, unserved claims, and funding-aware deployment tooling. Local
-source and tests do not imply a Base deployment. Funded deployment, independent verification,
-canonical provenance, static-browser integration, and a real XMTP routing exercise remain open.
+UWU purchase, immutable referral, unserved claims, funding-aware deployment tooling, and the
+three-channel assignment/enrollment boundary. Local source and tests do not imply a Base deployment,
+production Global group, or live cross-Tentacle interoperability. Funded deployment, independent
+verification, canonical provenance, explicit Global bootstrap, and a real production XMTP routing
+exercise remain open.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically
 append-only judgment history, binding death/spawn state, lineage, durable execution intents/receipts,

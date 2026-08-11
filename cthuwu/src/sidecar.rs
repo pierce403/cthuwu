@@ -5,7 +5,7 @@ use crate::{
     principal::PrincipalRole,
     token_eye::Address,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -33,6 +33,11 @@ const TRANSPORT_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "XMTP_DB_DIRECTORY",
     "XMTP_GATEWAY_HOST",
     "UWUBOT_REPLY_TIMEOUT_MS",
+    "CTHUWU_RPC_ENDPOINT",
+    "CTHUWU_BRANDING_CONTRACT",
+    "CTHUWU_GLOBAL_GROUP_ID",
+    "CTHUWU_GLOBAL_ADMIN_INBOX_IDS",
+    "CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +143,140 @@ struct OperatorNoticeResult {
     #[serde(rename = "noticeId")]
     notice_id: String,
     delivered: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlobalGroupAdminFrame {
+    #[serde(rename = "type")]
+    frame_type: String,
+    #[serde(rename = "groupId")]
+    group_id: String,
+    #[serde(rename = "adminInboxIds")]
+    admin_inbox_ids: Vec<String>,
+    created: bool,
+    recovered: bool,
+}
+
+/// Runs the narrowly scoped production Global-group bootstrap/inspection path in the same
+/// persistent XMTP sidecar. The sidecar owns group validation and mutation; Rust admits only its
+/// one bounded, identifier-only result frame.
+pub async fn manage_global_group(
+    node: &Path,
+    sidecar: &Path,
+    data_dir: &Path,
+    xmtp_environment: &str,
+    action: &str,
+) -> Result<String> {
+    if xmtp_environment != "production" {
+        bail!("Global group administration requires XMTP production");
+    }
+    if !matches!(action, "create" | "inspect") {
+        bail!("unsupported Global group administration action");
+    }
+    if !sidecar.is_file() {
+        bail!(
+            "XMTP transport {} is missing; run `npm ci && npm run build` in agent/ or set UWUBOT_SIDECAR",
+            sidecar.display()
+        );
+    }
+
+    let mut command = Command::new(node);
+    command
+        .arg(sidecar)
+        .arg("--global-group-bootstrap")
+        .arg(action)
+        .env_clear()
+        .env("UWUBOT_DATA_DIR", data_dir)
+        .env("UWUBOT_XMTP_ENV", xmtp_environment)
+        .env("XMTP_ENV", xmtp_environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    copy_transport_environment(&mut command);
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("administering the XMTP Global group with {}", node.display()))?;
+    #[cfg(unix)]
+    let _process_group = ProcessGroupGuard::new(child.id());
+    let stdout = child
+        .stdout
+        .take()
+        .context("Global group helper stdout was not piped")?;
+    let mut stdout = BufReader::new(stdout);
+    let (line, trailing, status) = timeout(Duration::from_secs(120), async {
+        let line = read_sidecar_frame(&mut stdout).await?;
+        let trailing = read_sidecar_frame(&mut stdout).await?;
+        let status = child
+            .wait()
+            .await
+            .context("waiting for the Global group helper")?;
+        Ok::<_, anyhow::Error>((line, trailing, status))
+    })
+    .await
+    .context("Global group helper timed out")??;
+    if !status.success() {
+        bail!("Global group helper exited with {status}");
+    }
+    if trailing.is_some() {
+        bail!("Global group helper emitted more than one protocol frame");
+    }
+    let line = line.context("Global group helper exited without a result")?;
+    if line.is_empty() {
+        bail!("Global group helper emitted an oversized result frame");
+    }
+    let frame: GlobalGroupAdminFrame =
+        serde_json::from_str(&line).context("Global group helper emitted malformed JSON")?;
+    ensure!(
+        frame.frame_type == "cthuwu_global_group",
+        "Global group helper emitted an unsupported frame"
+    );
+    let group_id = normalize_inbox_id(&frame.group_id)
+        .context("Global group helper emitted an invalid conversation ID")?;
+    ensure!(
+        group_id.len() == 64,
+        "Global group helper emitted a noncanonical conversation ID"
+    );
+    ensure!(
+        !frame.admin_inbox_ids.is_empty() && frame.admin_inbox_ids.len() <= 32,
+        "Global group helper emitted an invalid admin set"
+    );
+    let mut admins = std::collections::BTreeSet::new();
+    for inbox_id in frame.admin_inbox_ids {
+        let inbox_id = normalize_inbox_id(&inbox_id)
+            .context("Global group helper emitted an invalid admin inbox ID")?;
+        ensure!(
+            inbox_id.len() == 64 && admins.insert(inbox_id),
+            "Global group helper emitted a duplicate or noncanonical admin inbox ID"
+        );
+    }
+    let valid_outcome = if action == "create" {
+        frame.created ^ frame.recovered
+    } else {
+        !frame.created && !frame.recovered
+    };
+    ensure!(
+        valid_outcome,
+        "Global group helper result does not match the requested action"
+    );
+    Ok(format!(
+        "Global group: {group_id}\nStatus: {}\nAuthorized Tentacle admins: {}",
+        if frame.created {
+            "created"
+        } else if frame.recovered {
+            "recovered"
+        } else {
+            "verified"
+        },
+        admins.into_iter().collect::<Vec<_>>().join(", ")
+    ))
 }
 
 /// Loads or creates the same persistent XMTP identity used by the live sidecar and returns its

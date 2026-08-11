@@ -65,6 +65,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Browser startup reopens the Browser SDK's persisted installation, then queries XMTP registration
     state before registering. A routine reload never creates another installation for an inbox that
     XMTP already recognizes.
+  - The in-progress channel workspace reuses this one `StoredIdentity` and one Browser SDK `Client`
+    for Direct, Acolytes, and Global; it never creates one identity or client per tab.
   - The deployed browser always uses XMTP `production` and currently connects automatically to the
     canonical intro Tentacle; no build variable can redirect that deployed fallback. The separate
     Branding routing gate must positively verify any future controller.
@@ -81,25 +83,30 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     registration, while a genuinely new installation registers once and closes cleanly on failure.
   - [x] A full browser automation test verifies persistence across an actual page reload.
 
-### Browser-to-Cthuwu XMTP direct message
+### Browser-to-Cthuwu XMTP direct-message baseline
 
 - **Stability**: stable
-- **Description**: The deployed browser creates a one-to-one XMTP conversation with the canonical intro Tentacle.
+- **Description**: The deployed continuity baseline creates a one-to-one XMTP conversation with the
+  canonical intro Tentacle while the three-channel production gates remain open.
 - **Properties**:
   - The browser is hard-coded to XMTP `production`; development and local XMTP environments are not
     valid frontend deployment modes.
   - The intro Tentacle is temporarily hard-coded as
     `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`, so repository variables cannot silently redirect
     first-contact conversations.
-  - The planned Branding router may select an exact positively active controller from canonical
-    Branding and ERC-8004 state, with the intro Tentacle retained for unminted/expired/positively
-    ineligible subjects. It does not add a custom registry, membership contract, or central selector.
+  - The in-progress Branding assignment path may select an exact positively active controller from
+    canonical Branding and ERC-8004 state, with the intro Tentacle retained for
+    unminted/expired/positively ineligible subjects. It does not add a custom registry, membership
+    contract, or central selector, and configured registry unavailability freezes instead of
+    falling back.
   - The client loads existing text history, streams new messages, deduplicates overlapping history/stream delivery, and sends text.
   - The Browser SDK's automatic registration is disabled. The client explicitly checks the XMTP API
     for the reopened installation's registration before requesting a new one, preventing normal
     reloads from consuming the inbox installation limit.
   - Failed sends preserve the draft; inbound rendering uses text nodes rather than HTML.
-  - Groups, attachments, reactions, and read receipts are outside the first slice.
+  - Groups, attachments, reactions, and read receipts are outside this completed baseline. The
+    separate three-channel feature below adds only the two product groups, not an arbitrary-inbox
+    client.
 - **Test Criteria**:
   - [x] Configuration always returns XMTP `production` and the canonical intro Tentacle.
   - [x] The Browser SDK client creates or loads an XMTP client and opens a DM with that Tentacle.
@@ -107,6 +114,95 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] Browser and backend enforce the same 16 KiB text limit.
   - [x] A real browser message reaches `uwubot` and receives exactly one response.
   - [x] History and both identities survive a complete live restart test.
+
+### Three-channel acolyte XMTP workspace
+
+- **Stability**: in-progress
+- **Description**: Present Direct, assigned-Tentacle Acolytes, and Cthuwu-wide Global chat through
+  one recovered browser identity and one Browser SDK client.
+- **Properties**:
+  - `web/src/chat/` owns the channel implementation; `main.ts` remains a thin coordinator around
+    identity recovery, leaderboard lifecycle, PWA/update handling, and XMTP installation recovery.
+  - Direct is the exact DM with the canonically assigned Tentacle. Acolytes is the exact group for
+    that Tentacle and its currently assigned acolytes. Global is a logical binding with
+    `readConversationIds[]` and one `writeConversationId` so later sharding does not change the UI.
+    [XMTP documents a 250-member maximum](https://docs.xmtp.org/chat-apps/core-messaging/create-conversations#create-a-new-group-chat).
+  - Tabs use accessible tab/list/panel semantics, arrow-key navigation, unread badges, channel-local
+    pagination and scroll/read restoration, and distinct empty/loading/error states. One shared
+    composer routes only through the selected channel's exact current conversation ID.
+  - Normalized messages carry `conversationId`, `senderInboxId`, `sentAtNs`, content type, text, and
+    `mine`. All-message, new-group, and deleted-message streams feed one router that admits only
+    exact trusted IDs; deleted events remove expired messages from the rendered channel.
+  - The acolyte address comes only from the recovered `StoredIdentity`. When
+    `VITE_CTHUWU_BRANDING_CONTRACT` is configured, assignment is verified at one explicit Base block:
+    Branding status/controller, owner/controller wallet, canonical registry/deployment, exact
+    allegiance and protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
+    selected production XMTP endpoint must all agree. Agent0 and the leaderboard cache are
+    discovery/display hints, never routing authority.
+  - `NotConfigured`, `Unminted`, `Expired`, and positively verified `Ineligible` preserve service
+    through the configured intro Tentacle. For a configured deployment, `RegistryUnavailable`, a
+    block-consistency failure, or an unverifiable canonical endpoint freezes Branding routing in a
+    retryable state instead of being treated as abandonment.
+  - Assignment is revalidated on connect, PWA resume, and a bounded
+    `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` browser interval. A controller change advances the assignment
+    revision and replaces Direct/Acolytes bindings while retaining Global; old conversation IDs
+    immediately cease to be trusted routes.
+  - `cthuwu.join.v1` and `cthuwu.assignment.v1` are versioned control content types. The Agent SDK
+    sidecar authenticates their XMTP envelope sender and intercepts them before Rust, inference,
+    contact memory, onboarding, or ordinary history. The pinned Browser and Node SDKs register exact
+    `cthuwu.app` custom codecs for `join` and `assignment` version `1.0`; there is no text fallback.
+  - The assigned Tentacle idempotently persists exactly one Acolytes group, enrolls the authenticated
+    requester there and in the explicitly configured singleton Global group, and returns its inbox,
+    both logical group bindings, and assignment revision. Periodic reconciliation removes acolytes
+    whose Branding moved. Normal group chatter never enters personal-DM inference or memory.
+  - A separate authorized bootstrap/admin operation creates or inspects Global and grants the
+    configured `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`; ordinary enrollment never silently creates a
+    competing group. `uwubot chat global create` refuses existing configuration/state and exits
+    after returning the new ID; `uwubot chat global inspect` validates/reconciles the configured
+    group and exits. Validation binds exact ID, environment, versioned `appData`, admins, membership,
+    and assignment—not a human-readable name.
+  - Every Direct, Acolytes, and Global conversation requires disappearing settings `fromNs = 1n`
+    and `inNs = 1_209_600_000_000_000n`. Direct participants may repair Direct; group admins repair
+    groups. The composer remains disabled until the exact policy verifies and the UI says messages
+    disappear from supporting clients after 14 days.
+  - Browser persistence uses only `cthuwu.chat.*`; leaderboard cache keys remain untouched and no
+    inbox ID, group ID, assignment revision, or conversation data is put on-chain.
+  - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, optional
+    `VITE_CTHUWU_BRANDING_CONTRACT`, and `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` (default 600000 ms,
+    bounded 60000–3600000). Tentacle enrollment separately uses `CTHUWU_RPC_ENDPOINT`, optional
+    `CTHUWU_BRANDING_CONTRACT`, required `CTHUWU_GLOBAL_GROUP_ID`,
+    `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`, and `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` (default 900 s,
+    bounded 60–86400). The two revalidation settings are independent.
+- **Test Criteria and release gates**:
+  - [x] Agent tests prove repeated enrollment is idempotent and creates exactly one Acolytes group.
+  - [ ] A restart integration test proves persisted group recovery without creating a competitor.
+  - [x] Agent tests prove forged controls and spoofed name/`appData`/admin/member/ID combinations
+    fail closed.
+  - [x] Agent tests prove control and group traffic cannot cross the personal-DM inference boundary.
+  - [x] Agent tests prove Global is created only by the explicit admin operation; inspect repairs
+    missing configured admins and rejects unexpected elevation; create recovers one exact
+    creation/persistence crash-window candidate and refuses a drifted replacement.
+  - [x] Browser assignment tests cover `NotConfigured`, every Branding status, exact nested
+    registration/manifest binding, one explicit Base block, tuple spoofing, and reorg/outage freeze.
+  - [x] Agent tests remove reassigned and untracked Acolytes members while freezing removal on a
+    registry outage.
+  - [x] Browser assignment-change tests hand off Direct/Acolytes while retaining Global.
+  - [x] Browser unit tests cover exact active-tab sending, trusted-ID-only receipt, unread counts,
+    pagination, scroll restoration, reconnect, PWA resume, keyboard tabs, and accessible semantics.
+  - [x] An explicit browser unit matrix sends and receives through Direct, Acolytes, and Global by
+    their exact trusted conversation IDs.
+  - [ ] Mobile and desktop Playwright tab interaction passes in an environment with the pinned
+    browser installed.
+  - [x] Unit tests enforce the exact 14-day policy, repair/composer gating, and deleted-message
+    removal.
+  - [x] Browser tests preserve leaderboard, identity recovery, PWA, and cache namespace behavior
+    alongside three-channel startup.
+  - [ ] A funded verified Branding deployment, explicitly bootstrapped production Global group, and
+    real production browser-to-Tentacle XMTP gate prove enrollment, all channel bindings,
+    reassignment, retention, reconnect, and cross-Tentacle interoperability. Until then, production
+    Branding routing and group interoperability are incomplete.
+
+See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire boundaries.
 
 ### Single Rust backend command
 
@@ -1109,6 +1205,15 @@ phase.
     claims and Branding-based routing until verification succeeds. The canonical upgradeable
     registry remains an external governance trust root: Branding has no local admin/confiscation
     surface, but cannot prevent a version-preserving registry upgrade from changing eligibility.
+  - Browser and Tentacle assignment consumers must bind Branding status, exact controller, owner /
+    controller wallet, canonical registry and agent state, byte-exact allegiance/protocol, and the
+    exact agent's on-chain ERC-8004 registration resolving to the selected production XMTP endpoint
+    to one explicit Base block. Agent0 and the leaderboard cache may narrow discovery or render
+    details but cannot authorize routing.
+  - Absence of an explicit `VITE_CTHUWU_BRANDING_CONTRACT` / `CTHUWU_BRANDING_CONTRACT` deployment
+    is `NotConfigured` and preserves intro-Tentacle continuity. After a deployment is configured,
+    `RegistryUnavailable` freezes assignment and remains retryable; it never becomes the fallback
+    status used for unminted, expired, or positively ineligible subjects.
   - Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and is paid directly
     from the controlling Tentacle to the acolyte. Each payment adds seven days from the later of
     `paidThrough` and now; renewal opens only within one week of expiry.
@@ -1161,9 +1266,11 @@ phase.
     emission, not XMTP delivery, and no generic sender or durable scheduler is claimed.
   - [ ] A funded Base-mainnet deployment is independently verified and its canonical deployment JSON
     is committed. Repository source or a dry run does not satisfy this gate.
-  - [ ] The static frontend reads the verified Branding deployment, distinguishes every status,
-    resolves the exact current ERC-8004 production XMTP endpoint, preserves the intro fallback, and
-    passes a real browser/XMTP routing exercise. Until then, frontend Branding routing is incomplete.
+  - [ ] The static frontend and Tentacle enrollment path read the verified Branding deployment at
+    one explicit block, distinguish every status, resolve the exact current ERC-8004 production
+    XMTP endpoint, preserve only the specified intro fallbacks, and pass a real production
+    browser/XMTP three-channel routing exercise. Until then, production Branding routing and group
+    interoperability are incomplete.
 
 ### Live XMTP Council adapter
 
@@ -1209,12 +1316,17 @@ phase.
   - Browser backups encrypt identity material; normal logs contain no keys or message bodies.
   - Development and production identities and databases cannot share a directory silently.
   - XMTP-delivered copies and the Browser SDK database are outside local contact-note deletion.
+  - The three product conversations request XMTP disappearing messages from nanosecond `1` with a
+    14-day duration and consume deletion events. This removes expired messages from supporting
+    clients and the rendered workspace; it is not a promise to erase independent copies or exports.
 - **Test Criteria**:
   - [x] Onboarding includes a concise storage explanation.
   - [x] Ordinary-language inspection returns only the authenticated caller's stored profile.
   - [x] Ordinary-language corrections update only the authenticated caller's note.
   - [x] Ordinary-language confirmed deletion removes the caller's contact note.
   - [x] Environment-mismatch startup fails closed in Rust and the XMTP sidecar.
+  - [ ] Direct and group policy verification plus deleted-message handling pass the three-channel
+    live release gate.
   - [ ] Configurable retention removes expired contact notes and replay tombstones with non-sensitive audit output.
   - [ ] Backup and restore procedures are tested for the complete backend data directory.
 

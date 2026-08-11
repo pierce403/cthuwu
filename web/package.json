@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@xmtp/browser-sdk": "6.5.0",
+    "@xmtp/content-type-primitives": "3.0.0",
     "ethers": "6.17.0"
   },
   "devDependencies": {

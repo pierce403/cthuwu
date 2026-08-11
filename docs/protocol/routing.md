@@ -7,6 +7,38 @@ Version-1 `preferredCthulhuId`, “home,” and ownership fields below refer to 
 coordination-principal namespace associated with a Tentacle. There is only one centerless Cthuwu;
 these compatibility fields never identify individual Cthulhus or ERC-8004 owners.
 
+## Browser assignment is a separate boundary
+
+The Direct/Acolytes/Global browser workspace does **not** use this Council scoring engine to choose
+its assigned Tentacle. It derives the acolyte address only from the recovered browser
+`StoredIdentity` and applies the deterministic Acolyte Branding rule.
+
+When a Branding deployment is explicitly configured, the decision binds one explicit Base block.
+At that block the browser must revalidate the Branding and exact controller, current
+owner/controller wallet, canonical Identity Registry deployment and version, byte-exact allegiance
+and protocol, and the same agent's on-chain ERC-8004 registration resolving to the selected
+production XMTP endpoint. Agent0 and the leaderboard cache may aid discovery or display, but they
+are never routing authority.
+
+`NotConfigured`, `Unminted`, `Expired`, and positively verified `Ineligible` select the configured
+intro Tentacle. For a configured deployment, `RegistryUnavailable`, inconsistent same-block reads,
+or an unverifiable canonical endpoint freezes assignment and exposes retry. No Council route award,
+cached record, claimed control payload, or group name may turn that outage into fallback or
+ineligibility.
+
+The assignment is revalidated on connect, PWA resume, and a bounded interval. Reassignment replaces
+the exact Direct and Acolytes conversation bindings while retaining the Global logical binding.
+Global is represented by `readConversationIds[]` and one `writeConversationId`; its singleton
+production group must be explicitly bootstrapped before any future sharding. These exact
+conversation bindings and assignment revisions remain off-chain.
+
+Versioned `cthuwu.join.v1` and `cthuwu.assignment.v1` messages perform enrollment after assignment.
+The XMTP envelope authenticates the sender; payload-claimed addresses and IDs do not. The Agent SDK
+sidecar intercepts control content before Rust, inference, contact memory, or ordinary history, and
+normal group chatter has no personal-DM inference route in version 1. See
+[Acolyte XMTP channels](../acolyte-channels.md) for group validation, 14-day retention, and release
+gates.
+
 ## Route request
 
 A request may contain capability and privacy requirements, preferences, and an opaque or
@@ -126,3 +158,7 @@ content nor the selected Tentacle's private memory.
 
 **Implemented — local:** deterministic routing and rendezvous over local state/in-memory transport.
 **Planned:** live Council routing through an XMTP group.
+
+The separate acolyte channel implementation has no funded Branding deployment, configured
+production Global group, or passing live production XMTP end-to-end gate yet. It must not be cited
+as evidence of live Council or production group interoperability.

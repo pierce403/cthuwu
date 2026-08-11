@@ -8,6 +8,8 @@ const configured = {
   VITE_CTHUWU_IPFS_GATEWAY: "https://ipfs.example/ipfs/",
   VITE_CTHUWU_ARWEAVE_GATEWAY: "https://ar.example/",
   VITE_CTHUWU_LEADERBOARD_FRESH_MS: "900000",
+  VITE_CTHUWU_BRANDING_CONTRACT: "0x1234567890abcdef1234567890abcdef12345678",
+  VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: "600000",
 };
 
 describe("production static leaderboard configuration", () => {
@@ -34,6 +36,79 @@ describe("production static leaderboard configuration", () => {
     expect(validateProductionConfig({})).toMatch(
       /^https:\/\/gateway\.thegraph\.com\/api\/[0-9a-f]{32}\/subgraphs\/id\/43s9h/u,
     );
+  });
+
+  it.each([undefined, ""])(
+    "allows an absent or blank Branding contract (%s)",
+    (brandingContract) => {
+      expect(
+        validateProductionConfig({
+          ...configured,
+          VITE_CTHUWU_BRANDING_CONTRACT: brandingContract,
+        }),
+      ).toContain("https://gateway.thegraph.com/");
+    },
+  );
+
+  it.each([
+    "0x0000000000000000000000000000000000000000",
+    "0X1234567890abcdef1234567890abcdef12345678",
+    "0x1234567890ABCDEF1234567890abcdef12345678",
+    "0x1234567890abcdef1234567890abcdef1234567",
+    "   ",
+    " 0x1234567890abcdef1234567890abcdef12345678",
+    "0x1234567890abcdef1234567890abcdef12345678 ",
+  ])("rejects an invalid Branding contract: %s", (brandingContract) => {
+    expect(() =>
+      validateProductionConfig({
+        ...configured,
+        VITE_CTHUWU_BRANDING_CONTRACT: brandingContract,
+      }),
+    ).toThrow("lowercase nonzero");
+  });
+
+  it.each([undefined, ""])(
+    "allows an absent or empty assignment refresh interval (%s)",
+    (assignmentRefresh) => {
+      expect(
+        validateProductionConfig({
+          ...configured,
+          VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: assignmentRefresh,
+        }),
+      ).toContain("https://gateway.thegraph.com/");
+    },
+  );
+
+  it.each(["60000", "60001", "3600000"])(
+    "accepts an in-range assignment refresh interval: %s",
+    (assignmentRefresh) => {
+      expect(
+        validateProductionConfig({
+          ...configured,
+          VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: assignmentRefresh,
+        }),
+      ).toContain("https://gateway.thegraph.com/");
+    },
+  );
+
+  it.each([
+    "59999",
+    "3600001",
+    " 60000",
+    "60000 ",
+    "60_000",
+    "60000.0",
+    "6e4",
+    "+60000",
+    "060000",
+    "not-a-number",
+  ])("rejects an invalid assignment refresh interval: %s", (assignmentRefresh) => {
+    expect(() =>
+      validateProductionConfig({
+        ...configured,
+        VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: assignmentRefresh,
+      }),
+    ).toThrow("integer between 60000 and 3600000");
   });
 
   it.each([

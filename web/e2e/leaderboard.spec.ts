@@ -11,6 +11,21 @@ const graphFixture = readFileSync(
   "utf8",
 );
 
+test("exposes keyboard-operable channel tabs without displacing the leaderboard", async ({ page }) => {
+  await page.route(/^https:\/\//u, (route) => route.abort("blockedbyclient"));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(3);
+  await expect(page.getByRole("tab", { name: /^Direct/u })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Acolytes/u })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Global/u })).toBeVisible();
+  await page.getByRole("tab", { name: /^Direct/u }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: /^Acolytes/u })).toBeFocused();
+  await expect(page.locator("#tentacles")).toBeAttached();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
 test("renders a validated cache first, then refreshes the complete mobile leaderboard", async ({
   page,
 }) => {

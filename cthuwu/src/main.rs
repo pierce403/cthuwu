@@ -57,7 +57,8 @@ use model::Model;
 use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
 use sidecar::{
-    OperatorNotice, resolve_operator_inbox, resolve_xmtp_wallet_address, run_xmtp_sidecar,
+    OperatorNotice, manage_global_group, resolve_operator_inbox, resolve_xmtp_wallet_address,
+    run_xmtp_sidecar,
 };
 use std::{
     collections::BTreeSet,
@@ -420,6 +421,26 @@ enum CliCommand {
         #[command(subcommand)]
         command: RegistryCommand,
     },
+    /// Bootstrap or inspect the configured production three-channel XMTP workspace.
+    Chat {
+        #[command(subcommand)]
+        command: ChatCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ChatCommand {
+    /// Create the one Global group explicitly, or inspect/reconcile its configured admin set.
+    Global {
+        #[command(subcommand)]
+        command: GlobalGroupCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GlobalGroupCommand {
+    Create,
+    Inspect,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1898,6 +1919,25 @@ async fn run_management_command(
                 }
             }
         }
+        CliCommand::Chat { command } => match command {
+            ChatCommand::Global { command } => {
+                let action = match command {
+                    GlobalGroupCommand::Create => "create",
+                    GlobalGroupCommand::Inspect => "inspect",
+                };
+                println!(
+                    "{}",
+                    manage_global_group(
+                        node,
+                        sidecar,
+                        &cli.data_dir,
+                        xmtp_environment,
+                        action,
+                    )
+                    .await?
+                );
+            }
+        },
     }
     Ok(())
 }
@@ -2107,6 +2147,29 @@ mod tests {
             parsed.command,
             Some(CliCommand::Operator {
                 command: OperatorCommand::Add { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_global_group_management_as_an_explicit_command() {
+        let create = Cli::try_parse_from(["uwubot", "chat", "global", "create"]).unwrap();
+        assert!(matches!(
+            create.command,
+            Some(CliCommand::Chat {
+                command: ChatCommand::Global {
+                    command: GlobalGroupCommand::Create
+                }
+            })
+        ));
+
+        let inspect = Cli::try_parse_from(["uwubot", "chat", "global", "inspect"]).unwrap();
+        assert!(matches!(
+            inspect.command,
+            Some(CliCommand::Chat {
+                command: ChatCommand::Global {
+                    command: GlobalGroupCommand::Inspect
+                }
             })
         ));
     }

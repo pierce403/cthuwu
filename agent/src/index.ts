@@ -1,5 +1,23 @@
 import type { LogLevel } from "@xmtp/agent-sdk";
 import path from "node:path";
+import {
+  AssignmentCodec,
+  CanonicalAssignmentResolver,
+  ChatControlService,
+  FileChatStateStore,
+  JoinCodec,
+  bootstrapGlobalGroup,
+  classifyInboundMessage,
+  dispatchPersonalText,
+  isExactJoinContentType,
+  isJoinControl,
+  loadVerifiedRegistration,
+  parseChatControlConfig,
+  parseGlobalAdminInboxIds,
+  resolveFreshSenderAddress,
+  type GroupDirectory,
+  type GroupLike,
+} from "./chat-control.js";
 import { runErc8004Stdio } from "./erc8004.js";
 import { loadAgentIdentity } from "./identity.js";
 import { resolveOperatorIdentity } from "./operator-identity.js";
@@ -95,7 +113,7 @@ async function main(): Promise<void> {
     );
     return;
   }
-  const { Agent, createSigner, createUser } = await import("@xmtp/agent-sdk");
+  const { Agent, Group, createSigner, createUser } = await import("@xmtp/agent-sdk");
   // Agent SDK debug mode enables native structured logging on stdout. The
   // sidecar protocol owns that file descriptor, so diagnostics stay off there.
   delete process.env.XMTP_FORCE_DEBUG_LEVEL;
@@ -108,6 +126,148 @@ async function main(): Promise<void> {
       : { gatewayHost: process.env.XMTP_GATEWAY_HOST }),
     appVersion: "cthuwu-agent/0.1.0",
     loggingLevel: "Off" as LogLevel,
+    codecs: [new JoinCodec(), new AssignmentCodec()],
+  });
+
+  const groupDirectory: GroupDirectory = {
+    sync: async () => agent.client.conversations.sync(),
+    listGroups: () =>
+      agent.client.conversations.listGroups() as unknown as GroupLike[],
+    getConversationById: async (id) => {
+      const conversation = await agent.client.conversations.getConversationById(id);
+      return conversation instanceof Group
+        ? (conversation as unknown as GroupLike)
+        : undefined;
+    },
+    createGroup: async (inboxIds, options) =>
+      (await agent.client.conversations.createGroup(
+        inboxIds,
+        options,
+      )) as unknown as GroupLike,
+  };
+
+  const bootstrapIndex = process.argv.indexOf("--global-group-bootstrap");
+  if (bootstrapIndex !== -1) {
+    const action = process.argv[bootstrapIndex + 1];
+    if (action !== "create" && action !== "inspect") {
+      throw new Error("--global-group-bootstrap requires create or inspect");
+    }
+    if (identity.environment !== "production") {
+      throw new Error("Global group administration requires XMTP production");
+    }
+    const selfInboxId = agent.client.inboxId;
+    const registration = await loadVerifiedRegistration(
+      process.env.UWUBOT_DATA_DIR ?? ".",
+      identity.walletAddress,
+      selfInboxId,
+    );
+    const store = new FileChatStateStore(
+      process.env.UWUBOT_DATA_DIR ?? ".",
+      registration.agentId,
+      selfInboxId,
+    );
+    const state = await store.load();
+    const configuredGroupId = process.env.CTHUWU_GLOBAL_GROUP_ID;
+    if (
+      state.globalGroupId !== undefined &&
+      configuredGroupId !== state.globalGroupId
+    ) {
+      throw new Error(
+        "persisted Global binding must match CTHUWU_GLOBAL_GROUP_ID before administration",
+      );
+    }
+    const result = await bootstrapGlobalGroup({
+      action,
+      directory: groupDirectory,
+      selfInboxId,
+      adminInboxIds: parseGlobalAdminInboxIds(
+        process.env.CTHUWU_GLOBAL_ADMIN_INBOX_IDS,
+        selfInboxId,
+      ),
+      ...(configuredGroupId === undefined ? {} : { configuredGroupId }),
+    });
+    state.globalGroupId = result.groupId;
+    await store.save(state);
+    process.stdout.write(`${JSON.stringify({ type: "cthuwu_global_group", ...result })}\n`);
+    await agent.stop();
+    return;
+  }
+
+  let chatControl: ChatControlService | undefined;
+  let chatRevalidateSeconds = 900;
+  if (identity.environment === "production") {
+    try {
+      const selfInboxId = agent.client.inboxId;
+      const localRegistration = await loadVerifiedRegistration(
+        process.env.UWUBOT_DATA_DIR ?? ".",
+        identity.walletAddress,
+        selfInboxId,
+      );
+      const config = parseChatControlConfig(process.env, selfInboxId);
+      chatRevalidateSeconds = config.assignmentRevalidateSeconds;
+      chatControl = new ChatControlService({
+        directory: groupDirectory,
+        store: new FileChatStateStore(
+          process.env.UWUBOT_DATA_DIR ?? ".",
+          localRegistration.agentId,
+          selfInboxId,
+        ),
+        resolver: new CanonicalAssignmentResolver({
+          ...(process.env.CTHUWU_RPC_ENDPOINT === undefined
+            ? {}
+            : { rpcEndpoint: process.env.CTHUWU_RPC_ENDPOINT }),
+          ...(process.env.CTHUWU_BRANDING_CONTRACT === undefined
+            ? {}
+            : { brandingContract: process.env.CTHUWU_BRANDING_CONTRACT }),
+          localRegistration,
+        }),
+        config,
+        selfInboxId,
+        tentacleAgentId: localRegistration.agentId,
+        resolveInboxAddress: async (inboxId) =>
+          resolveFreshSenderAddress(agent.client.preferences, inboxId),
+      });
+      diagnostic("enabled authenticated three-channel XMTP enrollment");
+    } catch (_error: unknown) {
+      diagnostic("three-channel XMTP enrollment is not configured; direct messaging remains available");
+    }
+  }
+
+  const assignmentCodec = new AssignmentCodec();
+  agent.use(async (context, next) => {
+    const contentType = context.message.contentType;
+    const disposition = classifyInboundMessage(context.isDm(), contentType);
+    if (disposition !== "control") {
+      await next();
+      return;
+    }
+    const isJoin = isExactJoinContentType(contentType);
+    // Both control types terminate here. They never enter text events, Rust, inference, contact
+    // memory, or ordinary history, even when malformed, forged, or delivered in a group.
+    if (!isJoin || !context.isDm() || chatControl === undefined) {
+      return;
+    }
+    if (!isJoinControl(context.message.content)) {
+      return;
+    }
+    const senderAddress = await resolveFreshSenderAddress(
+      context.client.preferences,
+      context.message.senderInboxId,
+    );
+    if (senderAddress === undefined) {
+      return;
+    }
+    const assignment = await chatControl.enroll({
+      join: context.message.content,
+      senderInboxId: context.message.senderInboxId,
+      senderAddress,
+      directConversation: context.conversation,
+    });
+    if (assignment !== undefined) {
+      await context.conversation.send(assignmentCodec.encode(assignment), {
+        shouldPush: false,
+      });
+    }
   });
   const bridge = new JsonlBridge({
     input: process.stdin,
@@ -122,61 +282,78 @@ async function main(): Promise<void> {
   });
 
   agent.on("text", (context) => {
-    if (!context.isDm()) {
-      return;
-    }
-    void (async () => {
-      // This identifier is resolved from the SDK-authenticated sender inbox. It is optional because
-      // XMTP inboxes may use identifier types that are not EVM addresses.
-      // Wallet metadata is optional. A resolver/provider failure must not drop an otherwise valid,
-      // transport-authenticated XMTP message.
-      let senderAddress: string | undefined;
-      try {
-        senderAddress = await context.getSenderAddress();
-      } catch (_error: unknown) {
-        senderAddress = undefined;
-      }
-      const metadata = {
-        messageId: context.message.id,
-        senderInboxId: context.message.senderInboxId,
-        ...(senderAddress === undefined ? {} : { senderAddress }),
-        // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
-        // Rust still owns role classification; the sidecar never accepts or emits a role.
-        sentAtNs: context.message.sentAtNs.toString(),
-        conversationId: context.message.conversationId,
-      };
-      const inboundBytes = Buffer.byteLength(context.message.content, "utf8");
-      diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
-      const response =
-        inboundBytes > MAX_INBOUND_TEXT_BYTES
-          ? bridge.rejectOversized(metadata)
-          : bridge.request({ ...metadata, text: context.message.content });
-      const result = await response;
-      if (result.type === "reply") {
-        diagnostic("uwubot finished; delivering XMTP reply");
-        await context.conversation.sendText(result.text);
-        diagnostic("delivered XMTP reply");
-      } else {
-        diagnostic("uwubot ignored the XMTP message");
-      }
-    })().catch((_error: unknown) => {
-      diagnostic("failed to process an inbound XMTP text message");
-    });
+    dispatchPersonalText(
+      context.isDm(),
+      context.message.contentType,
+      context.message.content,
+      (text) => {
+        void (async () => {
+          // This identifier is resolved from the SDK-authenticated sender inbox. It is optional
+          // because XMTP inboxes may use identifier types that are not EVM addresses. A resolver
+          // failure must not drop an otherwise valid, transport-authenticated XMTP message.
+          let senderAddress: string | undefined;
+          try {
+            senderAddress = await context.getSenderAddress();
+          } catch (_error: unknown) {
+            senderAddress = undefined;
+          }
+          const metadata = {
+            messageId: context.message.id,
+            senderInboxId: context.message.senderInboxId,
+            ...(senderAddress === undefined ? {} : { senderAddress }),
+            // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
+            // Rust still owns role classification; the sidecar never accepts or emits a role.
+            sentAtNs: context.message.sentAtNs.toString(),
+            conversationId: context.message.conversationId,
+          };
+          const inboundBytes = Buffer.byteLength(text, "utf8");
+          diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
+          const response =
+            inboundBytes > MAX_INBOUND_TEXT_BYTES
+              ? bridge.rejectOversized(metadata)
+              : bridge.request({ ...metadata, text });
+          const result = await response;
+          if (result.type === "reply") {
+            diagnostic("uwubot finished; delivering XMTP reply");
+            await context.conversation.sendText(result.text);
+            diagnostic("delivered XMTP reply");
+          } else {
+            diagnostic("uwubot ignored the XMTP message");
+          }
+        })().catch((_error: unknown) => {
+          diagnostic("failed to process an inbound XMTP text message");
+        });
+      },
+    );
   });
+  const pruneMovedAssignments = (): void => {
+    void chatControl?.pruneMovedAssignments().catch(() => {
+      diagnostic("Acolytes reassignment sweep failed closed");
+    });
+  };
   agent.on("unhandledError", () => {
     diagnostic("XMTP reported an unhandled error");
   });
   agent.on("start", () => {
     diagnostic(`connected to XMTP ${identity.environment} as ${agent.address ?? "unknown"}`);
+    pruneMovedAssignments();
   });
 
   let stopping = false;
+  let pruneTimer: NodeJS.Timeout | undefined;
+  if (chatControl !== undefined) {
+    pruneTimer = setInterval(pruneMovedAssignments, chatRevalidateSeconds * 1000);
+    pruneTimer.unref();
+  }
   const stop = async (reason: string): Promise<void> => {
     if (stopping) {
       return;
     }
     stopping = true;
     diagnostic(`stopping (${reason})`);
+    if (pruneTimer !== undefined) {
+      clearInterval(pruneTimer);
+    }
     bridge.close();
     await agent.stop();
   };

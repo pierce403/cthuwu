@@ -12,12 +12,14 @@ export default defineConfig({
   outputDir: "test-results/playwright",
   use: {
     baseURL: "http://127.0.0.1:4173",
-    ...devices["Pixel 7"],
     serviceWorkers: "allow",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "mobile-chromium", use: { browserName: "chromium" } }],
+  projects: [
+    { name: "mobile-chromium", use: { ...devices["Pixel 7"], browserName: "chromium" } },
+    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], browserName: "chromium" } },
+  ],
   webServer: {
     command: "npm run preview -- --host 127.0.0.1 --port 4173 --strictPort",
     url: "http://127.0.0.1:4173/",

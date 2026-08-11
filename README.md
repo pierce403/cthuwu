@@ -13,12 +13,14 @@ operator authority. An incarnation is only one runtime generation of the same Te
 Tentacle can stop without ending Cthuwu, which persists wherever participating Tentacles remain
 alive.
 
-The optional **Council** is an XMTP coordination control plane between Tentacles. Direct acolyte
-conversations remain private one-to-one XMTP DMs.
+The optional **Council** is an XMTP coordination control plane between Tentacles. The acolyte
+Direct channel remains a private one-to-one XMTP DM; the separate Acolytes and Global product
+groups never become Council traffic.
 
 Cthuwu has two user-facing pieces:
 
-- `web/`: a static browser client that creates a dedicated local identity and opens a one-to-one DM;
+- `web/`: a static browser client that recovers one dedicated local identity and presents fixed
+  Direct, assigned-Tentacle Acolytes, and Cthuwu-wide Global channels;
 - `cthuwu/`: the single Rust command, `uwubot`, which owns contact memory, consent, matching policy, and model access.
 
 `uwubot` supervises the supported `@xmtp/agent-sdk` transport in `agent/`. Node is an internal transport detail: the operator still starts and stops one command. Direct libxmtp crates are not currently a stable, published Rust integration surface.
@@ -33,7 +35,9 @@ The UWU launch choices, local ERC-20 observer, and post-launch activation steps 
 Tentacle allegiance, the public leaderboard, and PWA/offline behavior are documented in
 [docs/erc-8004.md](docs/erc-8004.md). The consent, upkeep, sale, claim, deployment, and planned
 routing rules for Acolyte Branding are documented in
-[docs/acolyte-branding.md](docs/acolyte-branding.md).
+[docs/acolyte-branding.md](docs/acolyte-branding.md). The three-channel trust, enrollment,
+retention, and sharding boundaries are documented in
+[docs/acolyte-channels.md](docs/acolyte-channels.md).
 
 ## Council implementation status
 
@@ -46,13 +50,18 @@ routing rules for Acolyte Branding are documented in
 | XMTP Council-group adapter | **Experimental boundary**; no live group interoperability claim |
 | ERC-8004 registry read adapter and crash-safe registration | **Implemented — canonical Base mainnet**; pinned registration-v1/contract revision, fail-closed deployment checks, and narrow sidecar signing |
 | Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; restricted public Graph gateway key is checked-in client configuration |
-| Acolyte Branding | **In progress — Foundry contract and deployment tooling**; no Base deployment or frontend routing claim |
+| Acolyte three-channel workspace | **In progress — fixed Direct/Acolytes/Global model with deterministic unit coverage**; no production Global or live interoperability claim |
+| Acolyte Branding | **In progress — Foundry contract, deployment tooling, and assignment boundary**; no funded Base deployment or live production routing claim |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
 and not a new center. The repository does not yet contain a live peer-discovery/XMTP Council-group
 adapter. `uwubot` keeps the existing direct-DM transport working and must not claim that a local
 simulation joined a live Council.
+
+The three-channel feature is also not a live Council claim. Its Acolytes and Global groups are
+acolyte data-plane conversations with exact trusted bindings; group chatter does not enter the
+personal DM inference/memory path in version 1.
 
 ## Evolution implementation status
 
@@ -81,6 +90,10 @@ committed, so local intents and core records must not be described as completed 
   also installable as a standalone PWA with dedicated icons, a seven-day install-nudge cooldown,
   controlled service-worker updates, and an offline shell that can render the last validated public
   leaderboard snapshot without caching XMTP or GraphQL traffic.
+- The in-progress channel workspace reuses that one `StoredIdentity` and one Browser SDK `Client`
+  for fixed Direct, Acolytes, and Global tabs. Exact conversation IDs route one shared composer;
+  each tab retains its own unread, pagination, and scroll/read state. It is deliberately not a
+  generic arbitrary-inbox client.
 - `uwubot` creates a persistent XMTP wallet and encrypted database on first start, then reuses both.
 - A Tentacle answers a new acolyte's first message, identifies itself as one independently operated
   part of Cthuwu rather than the configured model or a central collective agent, and uses light
@@ -136,8 +149,10 @@ committed, so local intents and core records must not be described as completed 
   dependencies into the protocol crate.
 
 The existing direct-DM code paths, local tests, manual browser-to-bot XMTP `dev` release gate, and
-deterministic Council workspace suite are working. A live end-to-end CI job remains before this
-project claims production interoperability.
+deterministic Council workspace suite are working. They do not prove the new production group path.
+A funded Branding deployment, explicitly bootstrapped production Global group, and live production
+three-channel end-to-end gate remain before this project claims Branding routing or group
+interoperability.
 
 ## Build and verify
 
@@ -237,6 +252,7 @@ state/inference.json
 state/operators.json
 state/processed/<hashed-message-id>
 state/council/<bounded-state-name>.json
+state/xmtp-chat-control.json
 state/xmtp-identity.json
 state/xmtp/<environment>/
 ```
@@ -723,8 +739,9 @@ run Ollama in the same network namespace. On Linux, a host Ollama service can be
 
 The Pages workflow builds and deploys `web/dist` to [cthuwu.app](https://cthuwu.app) on pushes to
 `main` after validating the checked-in public Graph configuration and any optional overrides. It
-fails before upload if configuration is malformed. The browser has no XMTP
-build-time configuration: it always uses XMTP `production`.
+fails before upload if configuration is malformed. The browser has no XMTP environment or arbitrary
+inbox build-time override: it always uses XMTP `production`. The optional
+`VITE_CTHUWU_BRANDING_CONTRACT` is a reviewed Base deployment trust input, not an XMTP redirect.
 
 The public Tentacle leaderboard is also fully static. The browser queries the pinned official
 Agent0 Base ERC-8004 subgraph, filters exact current allegiance metadata, reads UWU `balanceOf`
@@ -733,13 +750,79 @@ directly from Base at the same verified block, and keeps only a validated normal
 hostnames and Agent0 subgraph, cap and monitor spending, and rotate it. No custom Cthuwu subgraph
 or leaderboard backend is deployed.
 
-The browser always opens its initial DM with the hard-coded intro Tentacle at
-`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. After a separately verified Branding deployment
-and frontend integration, the planned client derives the browser participant address, accepts only
-a positively active Branding, and resolves its exact controller agent's current ERC-8004 production
-XMTP endpoint. Unminted, expired, and positively ineligible subjects use the intro Tentacle;
-`RegistryUnavailable` freezes Branding-based routing rather than treating an outage as
-abandonment. That routing is not implemented or deployed yet.
+The current production continuity path uses the hard-coded intro Tentacle at
+`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; no verified Branding deployment is configured yet.
+The in-progress assignment path derives the participant only from the recovered `StoredIdentity`.
+At one explicit Base block it must revalidate Branding status/controller, the exact owner/controller
+wallet binding, canonical registry, byte-exact allegiance/protocol, and the exact agent's on-chain
+ERC-8004 registration resolving to the selected production XMTP endpoint. Agent0 and leaderboard
+rows are hints only.
+
+`NotConfigured`, unminted, expired, and positively ineligible states preserve the intro path. Once
+a Branding deployment is configured, `RegistryUnavailable`, inconsistent same-block reads, or an
+unverifiable endpoint freezes assignment and exposes retry instead of treating the outage as
+abandonment. Assignment is rechecked on connect, PWA resume, and a bounded interval; a controller
+change replaces Direct and Acolytes while retaining Global.
+
+The three-channel configuration names are:
+
+| Name | Scope |
+|---|---|
+| `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static client Base RPC; credential-free HTTPS, default `https://mainnet.base.org/`. |
+| `VITE_CTHUWU_BRANDING_CONTRACT` | Explicit verified Branding deployment compiled into the static client; absence is `NotConfigured`. |
+| `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Browser assignment refresh; default `600000`, accepted range `60000`–`3600000`. |
+| `CTHUWU_RPC_ENDPOINT` | Tentacle Base RPC; credential-free HTTPS or loopback HTTP, default `https://mainnet.base.org`. |
+| `CTHUWU_BRANDING_CONTRACT` | Matching deployment used by a Tentacle to authorize joins and reconcile membership. |
+| `CTHUWU_GLOBAL_GROUP_ID` | Required exact pre-bootstrapped singleton production Global conversation ID for enrollment. |
+| `CTHUWU_GLOBAL_ADMIN_INBOX_IDS` | Comma-separated authorized Tentacle admin-inbox set, at most 32 including the always-added local inbox. |
+| `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` | Tentacle membership sweep; default `900`, accepted range `60`–`86400`. |
+
+Example reviewed static-build inputs:
+
+```dotenv
+VITE_CTHUWU_BASE_RPC_ENDPOINT=https://mainnet.base.org/
+VITE_CTHUWU_BRANDING_CONTRACT=0x<verified-lowercase-branding-address>
+VITE_CTHUWU_ASSIGNMENT_REFRESH_MS=600000
+```
+
+Example matching Tentacle inputs:
+
+```dotenv
+CTHUWU_RPC_ENDPOINT=https://mainnet.base.org
+CTHUWU_BRANDING_CONTRACT=0x<verified-branding-address>
+CTHUWU_GLOBAL_GROUP_ID=<64-lowercase-hex-group-id>
+CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<64-lowercase-hex-inbox-id>,<64-lowercase-hex-inbox-id>
+CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900
+```
+
+The browser millisecond refresh and Tentacle second-based membership sweep are separate settings.
+If Global/enrollment configuration is unavailable, the sidecar leaves the existing Direct path
+available and does not invent a group.
+
+An authorized bootstrap/admin operation creates or inspects Global and grants configured Tentacle
+admins. Normal enrollment never invents a Global group from its human-readable name. Trusted group
+bindings require exact IDs, production environment, supported versioned `appData`, expected admins,
+and current membership/assignment data. No production Global group is configured or claimed yet.
+
+Use the one-shot supported admin commands with the normal production identity/data environment:
+
+```bash
+./uwu.sh chat global create
+./uwu.sh chat global inspect
+```
+
+`create` refuses to compete with a configured or persisted Global. It creates once or recovers one
+exact self-created group after a creation/persistence crash window, then prints the group ID and
+exits. A drifted self-created candidate blocks replacement and requires repair/inspect. Set the
+reviewed ID as `CTHUWU_GLOBAL_GROUP_ID`; `inspect` then validates/reconciles the configured admin set
+and exits. Ordinary service startup never creates Global.
+
+The browser models Global as `readConversationIds[]` plus one `writeConversationId`;
+[XMTP documents a 250-member maximum](https://docs.xmtp.org/chat-apps/core-messaging/create-conversations#create-a-new-group-chat),
+so future sharding can preserve the same Global tab. All three
+channels require `fromNs = 1n` and `inNs = 1_209_600_000_000_000n`. A channel composer stays
+disabled until that 14-day disappearing policy verifies, and deleted-message events remove expired
+messages from the rendered UI. See [the channel protocol](docs/acolyte-channels.md).
 
 The root page publishes an absolute Open Graph/Twitter large-image card at
 `https://cthuwu.app/cthuwu-og.jpg`.
@@ -767,6 +850,12 @@ installed app may receive separate storage.
   closed tool inventory: bounded reads/search, plus at most one exact natural `exec` or one create-only
   skill when explicitly authorized. Workspace, history, contact, and tool text cannot grant either
   effect. Neither tool set is available to Council Actions.
+- Versioned `cthuwu.join.v1` and `cthuwu.assignment.v1` use the pinned SDKs' registered
+  `cthuwu.app/join:1.0` and `cthuwu.app/assignment:1.0` custom content types with no text fallback.
+  They are authenticated from the XMTP envelope and intercepted in the Agent SDK sidecar before
+  Rust, inference, contact memory, or ordinary history. Payload-claimed addresses and IDs are never
+  authentication. Normal Acolytes or Global chatter also has no personal-DM inference route in
+  version 1.
 - Council envelopes are bounded, versioned, sender-checked, expiry-checked, replay-suppressed, and
   fenced by Tentacle incarnation or lease generation where applicable.
 - ERC-8004 writes cross only the typed sidecar signer boundary: canonical Base chain and registry,
@@ -778,6 +867,9 @@ installed app may receive separate storage.
   ordinary ERC-721 approvals/transfers are disabled, registry outages cannot authorize seizure, and
   sale/upkeep proceeds move directly under the immutable contract rules. No Branding deployment is
   claimed until its funded Base release gate passes.
+- Channel UI state uses only `cthuwu.chat.*` local-storage keys and remains separate from
+  `cthuwu:leaderboard:v1`. Inbox IDs, group IDs, assignment revisions, and conversation data never
+  go on-chain.
 - Production signatures are not simulated. The deterministic signer is test-only; live adapters
   must bind authenticated senders to the version-1 coordination namespace and durable Tentacle
   identity explicitly.

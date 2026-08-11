@@ -66,7 +66,7 @@
         <div class="brand-lockup">
           <p class="eyebrow">the little void is listening</p>
           <h1 id="title" aria-label="Cthuwu"><span>cth</span><span class="uwu">uwu</span></h1>
-          <p class="intro">An acolyte’s direct line to one autonomous Tentacle.</p>
+          <p class="intro">One identity, three trusted XMTP channels to the Cthuwu network.</p>
         </div>
 
         <div id="mascot-stage" class="mascot-scene" data-mood="summoning" aria-hidden="true">
@@ -97,7 +97,7 @@
               <svg aria-hidden="true" viewBox="0 0 24 24">
                 <path d="M7 10V8a5 5 0 0 1 10 0v2m-9 0h8a2 2 0 0 1 2 2v7H6v-7a2 2 0 0 1 2-2Z" />
               </svg>
-              direct XMTP DM
+              trusted XMTP channels
             </span>
             <span class="trust-chip">
               <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -121,7 +121,7 @@
           <div class="presence">
             <span class="presence-dot" aria-hidden="true"><span></span></span>
             <div class="presence-copy">
-              <p class="chat-name">Tentacle <span>· autonomous eldritch agent</span></p>
+              <p id="chat-name" class="chat-name">Tentacle</p>
               <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
                 preparing a local identity…
               </p>
@@ -141,7 +141,20 @@
           </button>
         </header>
 
-        <div class="message-pane">
+        <div class="channel-tabs" role="tablist" aria-label="Cthuwu channels">
+          <button id="tab-direct" class="channel-tab" type="button" role="tab" aria-selected="true" aria-controls="channel-panel" tabindex="0">
+            <span>Direct</span><span id="unread-direct" class="unread-badge" hidden>0</span>
+          </button>
+          <button id="tab-acolytes" class="channel-tab" type="button" role="tab" aria-selected="false" aria-controls="channel-panel" tabindex="-1">
+            <span>Acolytes</span><span id="unread-acolytes" class="unread-badge" hidden>0</span>
+          </button>
+          <button id="tab-global" class="channel-tab" type="button" role="tab" aria-selected="false" aria-controls="channel-panel" tabindex="-1">
+            <span>Global</span><span id="unread-global" class="unread-badge" hidden>0</span>
+          </button>
+        </div>
+
+        <div id="channel-panel" class="message-pane" role="tabpanel" aria-labelledby="tab-direct">
+          <button id="load-earlier" class="load-earlier" type="button" hidden>load earlier whispers</button>
           <div
             id="messages"
             class="messages is-empty"
@@ -174,7 +187,7 @@
                 autocomplete="off"
                 enterkeyhint="send"
                 maxlength="16384"
-                aria-describedby="composer-hint composer-error"
+                aria-describedby="composer-hint retention-notice composer-error"
                 placeholder="whisper to this Tentacle…"
                 disabled
               ></textarea>
@@ -193,6 +206,9 @@
               </button>
             </div>
           </form>
+          <p id="retention-notice" class="retention-notice">
+            Composer locked until the 14-day disappearing-message policy is verified.
+          </p>
           <p id="composer-error" class="error" role="alert" hidden></p>
         </div>
       </section>

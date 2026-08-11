@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { INTRO_TENTACLE_ADDRESS, XMTP_ENVIRONMENT, parseConfig } from "./config";
+import {
+  DEFAULT_BASE_RPC_ENDPOINT,
+  INTRO_TENTACLE_ADDRESS,
+  XMTP_ENVIRONMENT,
+  parseConfig,
+} from "./config";
 
 describe("configuration", () => {
   it("always selects production XMTP", () => {
@@ -12,6 +17,21 @@ describe("configuration", () => {
     expect(parseConfig()).toEqual({
       environment: "production",
       botAddress: INTRO_TENTACLE_ADDRESS,
+      baseRpcEndpoint: DEFAULT_BASE_RPC_ENDPOINT,
+      assignmentRefreshMs: 600_000,
     });
+  });
+
+  it("accepts only explicit safe Branding routing configuration", () => {
+    expect(parseConfig({
+      VITE_CTHUWU_BASE_RPC_ENDPOINT: "https://rpc.example/",
+      VITE_CTHUWU_BRANDING_CONTRACT: "0x1111111111111111111111111111111111111111",
+      VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: "60000",
+    })).toMatchObject({
+      baseRpcEndpoint: "https://rpc.example/",
+      brandingContract: "0x1111111111111111111111111111111111111111",
+      assignmentRefreshMs: 60_000,
+    });
+    expect(() => parseConfig({ VITE_CTHUWU_BRANDING_CONTRACT: "0x0000000000000000000000000000000000000000" })).toThrow();
   });
 });

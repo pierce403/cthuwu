@@ -98,3 +98,40 @@ time to return a deadline result, authenticates the role, caps public work at 12
 cancels active work before the bridge drops the pending ID. Provider attempts derive their own
 smaller budgets from that authenticated deadline. Group messages and non-text content never cross
 this boundary.
+
+## Three-channel control plane
+
+The sidecar registers `cthuwu.app/join:1.0` and `cthuwu.app/assignment:1.0` custom content codecs.
+They have no text fallback and do not request push delivery. The first Agent middleware consumes
+both types before ordinary events. A join is accepted only in a DM after a network-fresh lookup
+binds the envelope's `senderInboxId` to exactly one current Ethereum identifier; no identity or
+routing claim is accepted from the payload. Group messages, including forged control content, never
+enter the Rust, inference, or contact path.
+
+Owner-only `state/xmtp-chat-control.json` binds the Tentacle to exactly one Acolytes group and the
+configured Global group. Both groups use strict versioned `appData`, admin-only permissions, and
+XMTP disappearing settings of `fromNs = 1` and `inNs = 1209600000000000` (14 days). Normal
+enrollment never creates a Global group.
+
+After the Tentacle has an active, locally verified ERC-8004 identity, create the production Global
+group once:
+
+```sh
+CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<other-tentacle-inbox,...> \
+  uwubot chat global create
+```
+
+Persist the returned ID as `CTHUWU_GLOBAL_GROUP_ID` on every authorized Tentacle. Inspect the exact
+group and reconcile missing configured members/admins with:
+
+```sh
+CTHUWU_GLOBAL_GROUP_ID=<group-id> \
+CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<other-tentacle-inbox,...> \
+  uwubot chat global inspect
+```
+
+Unexpected admins, wrong `appData`, wrong environment, non-admin-only policy, a conflicting
+persisted ID, or a second create request fails closed. `CTHUWU_BRANDING_CONTRACT` remains unset
+until the canonical Base deployment exists. While unset, only the canonically verified intro
+Tentacle accepts fallback enrollment. Once configured, a Base, Branding, registry, profile, or
+endpoint validation failure freezes enrollment and pruning rather than becoming abandonment.
