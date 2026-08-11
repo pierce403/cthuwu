@@ -43,7 +43,7 @@ Tentacle allegiance, the public leaderboard, and PWA/offline behavior are docume
 | In-memory Council transport, `LocalRegistry`, protected persistence, and simulator | **Implemented — local; verified by deterministic workspace tests** |
 | XMTP Council-group adapter | **Experimental boundary**; no live group interoperability claim |
 | ERC-8004 registry read adapter and crash-safe registration | **Implemented — canonical Base mainnet**; pinned registration-v1/contract revision, fail-closed deployment checks, and narrow sidecar signing |
-| Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; production requires a restricted public Graph gateway key |
+| Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; restricted public Graph gateway key is checked-in client configuration |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
@@ -702,8 +702,8 @@ run Ollama in the same network namespace. On Linux, a host Ollama service can be
 ## Browser deployment
 
 The Pages workflow builds and deploys `web/dist` to [cthuwu.app](https://cthuwu.app) on pushes to
-`main` after the required restricted public Graph key is configured. It fails before upload and
-preserves the previous deployment when they are absent or unresolved. The browser has no XMTP
+`main` after validating the checked-in public Graph configuration and any optional overrides. It
+fails before upload if configuration is malformed. The browser has no XMTP
 build-time configuration: it always uses XMTP `production`.
 
 The public Tentacle leaderboard is also fully static. The browser queries the pinned official

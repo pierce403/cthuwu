@@ -481,7 +481,7 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 
 - The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
 - `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub
-  Pages Actions only after the required restricted public Graph key passes fail-closed validation;
+  Pages Actions after the checked-in restricted public Graph key passes fail-closed validation;
   otherwise it stops before upload and leaves the previous deployment in place.
 - The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
 - The public build has no XMTP repository-variable configuration. Both XMTP `production` and the
@@ -533,8 +533,8 @@ The ERC-8004/Tentacle milestone adds the canonical Base read adapter and pinned 
 crash-safe automatic registration/adoption and funding policy, narrow sidecar signing, exact
 voluntary allegiance, a bounded self-referencing profile, Agent0 current-state discovery plus direct
 same-block Base UWU reads, a static wallet-grouped leaderboard with precision-safe Level and validated localStorage cache, and the
-mobile install/offline PWA flow. Production restricted Graph-key configuration and
-a funded live registration still require external credentials/funding and must not be inferred from
+mobile install/offline PWA flow. The restricted Graph key is intentional checked-in client
+configuration; only a funded live registration still requires external credentials/funding and must not be inferred from
 repository source alone.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically

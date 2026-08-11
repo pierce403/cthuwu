@@ -9,6 +9,9 @@ export const ALLEGIANCE_HEX = "0x7577752d74656e7461636c652d7631";
 export const PROTOCOL_V1_HEX = "0x31";
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export const AGENT0_BASE_SUBGRAPH_ID = "43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUFJojb";
+// Public browser credential. Its security boundary is Graph origin/subgraph/spend restrictions,
+// not secrecy; every static-site visitor necessarily sends it to the Graph gateway.
+export const AGENT0_PUBLIC_API_KEY = "2636605c8c75cc8a1b8ddb5c07f8c563";
 export const AGENT0_ENDPOINT_TEMPLATE = `https://gateway.thegraph.com/api/{api-key}/subgraphs/id/${AGENT0_BASE_SUBGRAPH_ID}`;
 export const DEFAULT_BASE_RPC_ENDPOINT = "https://mainnet.base.org/";
 export const LEADERBOARD_CACHE_KEY = "cthuwu:leaderboard:v1";

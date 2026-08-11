@@ -30,8 +30,13 @@ describe("production static leaderboard configuration", () => {
     );
   });
 
+  it("uses the intentionally public checked-in key when no build variables are supplied", () => {
+    expect(validateProductionConfig({})).toMatch(
+      /^https:\/\/gateway\.thegraph\.com\/api\/[0-9a-f]{32}\/subgraphs\/id\/43s9h/u,
+    );
+  });
+
   it.each([
-    [{ ...configured, VITE_CTHUWU_GRAPH_API_KEY: "" }, "must resolve"],
     [{ ...configured, VITE_CTHUWU_GRAPH_API_KEY: "REPLACE_ME" }, "must resolve"],
     [
       { ...configured, VITE_CTHUWU_GRAPHQL_ENDPOINT: "https://gateway.example/{deployment}" },

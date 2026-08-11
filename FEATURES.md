@@ -21,8 +21,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
 - **Description**: A small, friendly browser experience at [cthuwu.app](https://cthuwu.app) that builds to static files and requires no application server.
 - **Properties**:
   - Source lives in `web/`; Vite produces `web/dist/`.
-  - Pushes to `main` deploy through GitHub Pages only after the required restricted public Graph key
-    pass the fail-closed build validation; otherwise the prior deployment remains in place.
+  - Pushes to `main` deploy through GitHub Pages after the checked-in restricted public Graph key
+    passes fail-closed build validation; otherwise the prior deployment remains in place.
   - The interface supports keyboard use, narrow screens, visible focus, status announcements, and reduced-motion preferences.
   - A locally hosted generated mascot anchors a responsive two-column desktop layout and compact
     mobile chat layout; all animation is CSS-based, pauses through a visible persisted control, and
@@ -1074,7 +1074,7 @@ phase.
     allowlisted. V1 renders the local mascot and never downloads a registration document or remote
     profile image.
   - No custom subgraph is deployed. The default endpoint pins Agent0's Base subgraph ID; production
-    requires a hostname/subgraph/spend-restricted public Graph gateway key.
+    includes a hostname/subgraph/spend-restricted public Graph gateway key as intentional client configuration.
 - **Test Criteria**:
   - [x] Fixture tests cover Agent0 current metadata, wallet clearing, indexing errors, same-block
     Base verification, direct UWU reads, reputation samples, and hostile response bounds.

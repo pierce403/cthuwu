@@ -26,11 +26,11 @@ describe("leaderboard configuration", () => {
     expect(() =>
       parseLeaderboardConfig({ VITE_CTHUWU_GRAPHQL_ENDPOINT: "https://user:pass@example.test" }),
     ).toThrow("credential-free");
-    expect(() =>
+    expect(
       parseLeaderboardConfig({
         VITE_CTHUWU_GRAPHQL_ENDPOINT: "https://example.test/{api-key}/graphql",
-      }),
-    ).toThrow("unresolved");
+      }).graphEndpoint,
+    ).toMatch(/^https:\/\/example\.test\/[0-9a-f]{32}\/graphql$/u);
   });
 
   it("uses safe gateway defaults when optional build variables are unset or empty", () => {
@@ -38,7 +38,9 @@ describe("leaderboard configuration", () => {
       VITE_CTHUWU_IPFS_GATEWAY: "",
       VITE_CTHUWU_ARWEAVE_GATEWAY: "",
     });
-    expect(config.graphEndpoint).toBeUndefined();
+    expect(config.graphEndpoint).toMatch(
+      /^https:\/\/gateway\.thegraph\.com\/api\/[0-9a-f]{32}\/subgraphs\/id\/43s9h/u,
+    );
     expect(config.ipfsGateway).toMatch(/^https:/u);
     expect(config.arweaveGateway).toMatch(/^https:/u);
   });

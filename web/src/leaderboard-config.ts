@@ -1,4 +1,8 @@
-import { AGENT0_ENDPOINT_TEMPLATE, DEFAULT_BASE_RPC_ENDPOINT } from "./leaderboard-types";
+import {
+  AGENT0_ENDPOINT_TEMPLATE,
+  AGENT0_PUBLIC_API_KEY,
+  DEFAULT_BASE_RPC_ENDPOINT,
+} from "./leaderboard-types";
 
 export interface LeaderboardConfig {
   graphEndpoint?: string;
@@ -26,13 +30,14 @@ export function parseLeaderboardConfig(
 ): LeaderboardConfig {
   const explicitEndpoint = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim();
   const endpointTemplate = explicitEndpoint || AGENT0_ENDPOINT_TEMPLATE;
-  const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() ?? "";
+  const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() || AGENT0_PUBLIC_API_KEY;
   if (explicitEndpoint?.includes("{api-key}") && !apiKey) {
     throw new Error("GraphQL endpoint contains an unresolved API-key placeholder");
   }
-  const graphEndpoint = !apiKey && !explicitEndpoint ? undefined : endpointTemplate
-    ? validHttpsUrl(endpointTemplate.replaceAll("{api-key}", apiKey), "GraphQL endpoint")
-    : undefined;
+  const graphEndpoint = validHttpsUrl(
+    endpointTemplate.replaceAll("{api-key}", apiKey),
+    "GraphQL endpoint",
+  );
   if (graphEndpoint?.includes("{api-key}")) {
     throw new Error("GraphQL endpoint still contains an unresolved API-key placeholder");
   }

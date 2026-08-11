@@ -3,10 +3,12 @@ import { pathToFileURL } from "node:url";
 const PLACEHOLDER = "{api-key}";
 const API_KEY = /^[A-Za-z0-9._~-]{8,256}$/u;
 const AGENT0 = "https://gateway.thegraph.com/api/{api-key}/subgraphs/id/43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUFJojb";
+// This is intentionally public client configuration, restricted at The Graph gateway.
+const PUBLIC_AGENT0_KEY = "2636605c8c75cc8a1b8ddb5c07f8c563";
 
 export function validateProductionConfig(environment) {
   const template = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim() || AGENT0;
-  const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() ?? "";
+  const apiKey = environment.VITE_CTHUWU_GRAPH_API_KEY?.trim() || PUBLIC_AGENT0_KEY;
   if (template.includes("REPLACE_ME")) throw new Error("Graph endpoint contains REPLACE_ME");
   if (
     template.includes(PLACEHOLDER) &&
