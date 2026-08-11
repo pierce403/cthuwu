@@ -28,7 +28,7 @@ jobs:
       - name: Install operator search dependency
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: cargo fmt --all -- --check
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: bash ../scripts/smoke-uwu.sh
 
@@ -51,9 +51,63 @@ jobs:
       - run: npm run build
       - run: bash ../scripts/test-uwu.sh
 
-  web:
+  erc8004-mainnet-fork:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+      - run: npm ci
+      - name: Exercise canonical Base ERC-8004 registration and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          anvil \
+            --fork-url https://mainnet.base.org \
+            --fork-block-number 41663800 \
+            --chain-id 8453 \
+            --host 127.0.0.1 \
+            --port 8545 \
+            --silent \
+            >"${RUNNER_TEMP}/cthuwu-anvil.log" 2>&1 &
+          anvil_pid=$!
+          cleanup() {
+            kill "${anvil_pid}" 2>/dev/null || true
+            wait "${anvil_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent \
+              --header 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              http://127.0.0.1:8545 >/dev/null; then
+              break
+            fi
+            if ! kill -0 "${anvil_pid}" 2>/dev/null; then
+              sed -n '1,120p' "${RUNNER_TEMP}/cthuwu-anvil.log"
+              exit 1
+            fi
+            if [[ "${attempt}" == 60 ]]; then
+              sed -n '1,120p' "${RUNNER_TEMP}/cthuwu-anvil.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          npm run test:erc8004-mainnet-fork
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: web
@@ -68,6 +122,42 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Install pinned Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E and Lighthouse accessibility gates
+        run: npm run test:browser
+      - name: Upload browser quality reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: web-browser-quality
+          path: |
+            web/test-results/lighthouse
+            web/test-results/playwright
+          if-no-files-found: ignore
+
+  subgraph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: subgraph
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: subgraph/package-lock.json
+      - name: Install Matchstick runtime
+        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Verify canonical Base deployments without writing
+        run: npm run verify:deployment
+        env:
+          BASE_RPC_URL: https://mainnet.base.org
 
   container:
     runs-on: ubuntu-latest

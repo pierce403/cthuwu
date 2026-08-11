@@ -188,6 +188,12 @@ pub(crate) struct ConversationObservation {
 }
 
 impl EvolutionRuntime {
+    /// Stable identity of this independently operated Tentacle. Incarnation restarts reuse it;
+    /// the singular Cthuwu collective has no local identity of its own.
+    pub fn local_tentacle_id(&self) -> &str {
+        &self.local_tentacle_id
+    }
+
     /// Read-only preflight used before an RPC failure is allowed to open mutable Evolution state.
     /// Missing state is not recovery work; malformed, symlinked, or overly broad-permission state
     /// is rejected without creating directories or changing modes.

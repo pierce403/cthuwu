@@ -1,5 +1,7 @@
 import type { LogLevel } from "@xmtp/agent-sdk";
-import { prepareAgentEnvironment } from "./identity.js";
+import path from "node:path";
+import { runErc8004Stdio } from "./erc8004.js";
+import { loadAgentIdentity } from "./identity.js";
 import { resolveOperatorIdentity } from "./operator-identity.js";
 import { JsonlBridge, parseTimeout } from "./protocol.js";
 
@@ -42,6 +44,20 @@ function startupFailure(error: unknown): string {
 
 async function main(): Promise<void> {
   isolateProtocolOutput();
+  if (process.argv.includes("--erc8004")) {
+    if (
+      process.env.XMTP_ENV !== "production" ||
+      process.env.UWUBOT_XMTP_ENV !== "production"
+    ) {
+      throw new Error(
+        "ERC-8004 helper requires the persistent XMTP production identity",
+      );
+    }
+    await runErc8004Stdio(process.stdin, process.stdout, () =>
+      loadAgentIdentity(process.env),
+    );
+    return;
+  }
   const resolveOperatorIndex = process.argv.indexOf("--resolve-operator-inbox");
   if (resolveOperatorIndex !== -1) {
     const operatorIdentity = process.argv[resolveOperatorIndex + 1];
@@ -69,7 +85,7 @@ async function main(): Promise<void> {
     }
     return;
   }
-  const identity = await prepareAgentEnvironment();
+  const identity = await loadAgentIdentity();
   if (process.argv.includes("--print-xmtp-wallet-address")) {
     process.stdout.write(
       `${JSON.stringify({
@@ -79,11 +95,17 @@ async function main(): Promise<void> {
     );
     return;
   }
-  const { Agent } = await import("@xmtp/agent-sdk");
+  const { Agent, createSigner, createUser } = await import("@xmtp/agent-sdk");
   // Agent SDK debug mode enables native structured logging on stdout. The
   // sidecar protocol owns that file descriptor, so diagnostics stay off there.
   delete process.env.XMTP_FORCE_DEBUG_LEVEL;
-  const agent = await Agent.createFromEnv({
+  const agent = await Agent.create(createSigner(createUser(identity.walletKey)), {
+    env: identity.environment,
+    dbEncryptionKey: identity.dbEncryptionKey,
+    dbPath: (inboxId) => path.join(identity.dbDirectory, `xmtp-${inboxId}.db3`),
+    ...(process.env.XMTP_GATEWAY_HOST === undefined
+      ? {}
+      : { gatewayHost: process.env.XMTP_GATEWAY_HOST }),
     appVersion: "cthuwu-agent/0.1.0",
     loggingLevel: "Off" as LogLevel,
   });
@@ -92,6 +114,11 @@ async function main(): Promise<void> {
     output: process.stdout,
     timeoutMs: parseTimeout(process.env.UWUBOT_REPLY_TIMEOUT_MS),
     diagnostic,
+    onOperatorNotice: async ({ inboxId, text }) => {
+      const conversation = await agent.client.conversations.createDm(inboxId);
+      await conversation.sendText(text);
+      diagnostic("delivered an ERC-8004 notice to an authenticated operator inbox");
+    },
   });
 
   agent.on("text", (context) => {

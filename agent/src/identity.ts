@@ -278,7 +278,7 @@ export async function loadOrCreateIdentity(
   };
 }
 
-export async function prepareAgentEnvironment(
+export async function loadAgentIdentity(
   environmentVariables: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedIdentity> {
   const xmtpEnvironment = environmentVariables.XMTP_ENV;
@@ -291,23 +291,20 @@ export async function prepareAgentEnvironment(
     throw new Error("XMTP_ENV and UWUBOT_XMTP_ENV select different networks");
   }
 
-  const identity = await loadOrCreateIdentity({
+  if (
+    environmentVariables.XMTP_WALLET_KEY !== undefined ||
+    environmentVariables.XMTP_DB_ENCRYPTION_KEY !== undefined
+  ) {
+    throw new Error(
+      "persistent XMTP private keys must be loaded from the owner-only identity file, never environment variables",
+    );
+  }
+
+  return loadOrCreateIdentity({
     dataDir: environmentVariables.UWUBOT_DATA_DIR ?? ".",
     environment: parseEnvironment(xmtpEnvironment ?? uwubotEnvironment),
-    ...(environmentVariables.XMTP_WALLET_KEY === undefined
-      ? {}
-      : { walletKey: environmentVariables.XMTP_WALLET_KEY }),
-    ...(environmentVariables.XMTP_DB_ENCRYPTION_KEY === undefined
-      ? {}
-      : { dbEncryptionKey: environmentVariables.XMTP_DB_ENCRYPTION_KEY }),
     ...(environmentVariables.XMTP_DB_DIRECTORY === undefined
       ? {}
       : { dbDirectory: environmentVariables.XMTP_DB_DIRECTORY }),
   });
-
-  environmentVariables.XMTP_ENV = identity.environment;
-  environmentVariables.XMTP_WALLET_KEY = identity.walletKey;
-  environmentVariables.XMTP_DB_ENCRYPTION_KEY = identity.dbEncryptionKey;
-  environmentVariables.XMTP_DB_DIRECTORY = identity.dbDirectory;
-  return identity;
 }

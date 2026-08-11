@@ -4,7 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0714" />
-    <title>Cthuwu is dreaming</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    />
+    <title>Cthuwu portal offline</title>
     <style>
       :root {
         color: #fff9ff;
@@ -63,15 +68,28 @@
         cursor: pointer;
       }
       button:focus-visible { outline: 3px solid #ffe8a3; outline-offset: 3px; }
+      section { margin-top: 1.5rem; padding-top: 1.2rem; border-top: 1px solid #c8a7eb3d; text-align: left; }
+      h2 { margin: 0; font-size: 1rem; }
+      ol { display: grid; gap: .5rem; padding-left: 1.5rem; margin-bottom: 0; }
+      li { color: #cfc1da; }
+      li strong { color: #fff9ff; }
+      li span { float: right; color: #9cf3d6; font-variant-numeric: tabular-nums; }
+      #offline-source { font-size: .7rem; }
     </style>
   </head>
   <body>
     <main>
       <img src="/icons/cthuwu-192.png" width="192" height="192" alt="" />
       <p class="eyebrow">the veil is quiet</p>
-      <h1>Cthuwu is dreaming</h1>
-      <p>XMTP needs a network connection. Your local identity is still tucked safely on this device.</p>
-      <button type="button" onclick="location.reload()">try the portal again</button>
+      <h1>The portal is offline</h1>
+      <p>XMTP and fresh chain data need a connection. Your local identity is still tucked safely on this device.</p>
+      <button id="offline-retry" type="button">try the portal again</button>
+      <section aria-labelledby="offline-tentacles-title">
+        <h2 id="offline-tentacles-title">Last validated Tentacle ranks</h2>
+        <p id="offline-source">Looking for a local snapshot…</p>
+        <ol id="offline-tentacles"></ol>
+      </section>
     </main>
+    <script type="module" src="/offline-leaderboard.js"></script>
   </body>
 </html>

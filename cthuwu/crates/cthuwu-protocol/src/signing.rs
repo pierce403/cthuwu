@@ -47,7 +47,9 @@ impl fmt::Display for SignatureError {
 
 impl std::error::Error for SignatureError {}
 
-/// Production runtimes provide a signer bound to their authenticated durable Cthulhu identity.
+/// Production runtimes provide a signer bound to a legacy v1 Council coordination namespace.
+/// This control-plane signature is not an ERC-8004 transaction signer and carries no Cthuwu-wide
+/// authority; Cthuwu has no central owner or signing key.
 pub trait CouncilSigner {
     fn signer_cthulhu_id(&self) -> &CthulhuId;
 

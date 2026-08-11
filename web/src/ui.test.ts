@@ -41,10 +41,12 @@ describe("chat interface", () => {
     const installPrompt = document.querySelector<HTMLElement>("#install-prompt");
     const installAction = document.querySelector<HTMLButtonElement>("#install-action");
     const installDismiss = document.querySelector<HTMLButtonElement>("#install-dismiss");
+    const installMenu = document.querySelector<HTMLButtonElement>("#install-app");
+    const updatePrompt = document.querySelector<HTMLElement>("#update-prompt");
 
     expect(document.querySelector("main")).not.toBeNull();
     expect(log?.getAttribute("role")).toBe("log");
-    expect(log?.getAttribute("aria-label")).toBe("Conversation with Cthuwu");
+    expect(log?.getAttribute("aria-label")).toBe("Conversation with a Tentacle");
     expect(log?.tabIndex).toBe(0);
     expect(message?.getAttribute("aria-describedby")).toContain("composer-error");
     expect(message?.disabled).toBe(true);
@@ -64,11 +66,28 @@ describe("chat interface", () => {
     expect(document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute("href")).toBe(
       "/icons/apple-touch-icon.png",
     );
+    const csp = document
+      .querySelector('meta[http-equiv="Content-Security-Policy"]')
+      ?.getAttribute("content");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).not.toMatch(/img-src[^;]*https:/u);
     expect(installPrompt?.hidden).toBe(true);
     expect(installPrompt?.getAttribute("aria-labelledby")).toBe("install-title");
     expect(installAction?.type).toBe("button");
     expect(installDismiss?.type).toBe("button");
     expect(installDismiss?.getAttribute("aria-label")).toContain("Dismiss");
+    expect(installMenu?.type).toBe("button");
+    expect(updatePrompt?.hidden).toBe(true);
+    expect(document.querySelector("#tentacles")?.getAttribute("aria-labelledby")).toBe(
+      "leaderboard-title",
+    );
+    expect(document.querySelector("#leaderboard-list")?.getAttribute("role")).toBe("list");
+    expect(document.querySelector("#leaderboard-state")?.getAttribute("role")).toBe("status");
+    const ontology = document.querySelector("#tentacles")?.textContent?.replace(/\s+/gu, " ");
+    expect(ontology).toContain("one human operator");
+    expect(ontology).toContain("singular, centerless Cthuwu");
+    expect(ontology).toContain("persists while any lives");
+    expect(document.querySelector(".intro")?.textContent).toContain("acolyte’s direct line");
     expect(document.querySelector('meta[property="og:image"]')?.getAttribute("content")).toBe(
       "https://cthuwu.app/cthuwu-og.jpg",
     );
@@ -122,6 +141,7 @@ describe("chat interface", () => {
     transport.onMessage?.({ id: "hostile", text: '<img src=x onerror="boom">', mine: false });
     expect(document.querySelector(".message img")).toBeNull();
     expect(document.querySelector(".message")?.textContent).toContain("<img src=x");
+    expect(document.querySelector(".message .sender")?.textContent).toBe("Tentacle");
     expect(document.querySelector("[data-welcome]")).toBeNull();
     expect(document.querySelector("#mascot-stage")?.classList.contains("is-delighted")).toBe(true);
 

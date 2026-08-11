@@ -1,15 +1,27 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-11
 
 ## Product
 
-- Cthuwu is a cute little eldritch horror buddy.
-- People chat with Cthuwu over XMTP.
+- Each Tentacle presents as a cute little eldritch-horror companion; Cthuwu itself is the
+  centerless collective, not an individual bot persona.
+- Acolytes chat with an independently operated Tentacle over XMTP.
 - The public-facing client is a static web deployment.
 - The operator runs the companion locally as a Rust CLI/daemon.
-- The Council of Cthulhus is the federation architecture: a Cthulhu is a durable agent
-  identity, a Tentacle is one running runtime it owns, and a Council is an XMTP coordination group.
+- There is exactly one Cthuwu: the centerless collective formed by all living participating
+  Tentacles. It has no owner, center, separate wallet, or ERC-8004 identity.
+- Each independently operated `uwubot` is one durable autonomous Tentacle with its own identity,
+  wallet, personality, economics, reputation, lineage, and ERC-8004 agent ID. A restart creates a
+  new incarnation, not a new Tentacle. One Tentacle's death is not Cthuwu's death.
+- Many human operators each run a Tentacle and may shape that Tentacle's agenda. Public humans who
+  chat with a Tentacle are acolytes; they are not operators or Tentacles merely by chatting or
+  holding UWU.
+- Each Tentacle cultivates its own acolyte community and may coordinate strengths that acolytes
+  voluntarily offer toward its operator-shaped agenda. Participation, messages, and token holdings
+  never grant operator authority.
+- A Council is an optional XMTP coordination group between Tentacles, not a collection of distinct
+  Cthulhus.
 - Council discovery and membership must be peer-to-peer, without a mandatory leader or central
   enrollment service. No live peer-discovery/XMTP Council-group adapter is committed. Direct user
   DMs remain the implemented path and local simulation is not a live join.
@@ -70,8 +82,8 @@ Last reviewed: 2026-08-09
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
 - The browser's canonical intro Tentacle is temporarily hard-coded as
-  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; a planned Base contract will later register and
-  discover intro Tentacles.
+  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; future verified discovery may use public ERC-8004
+  Tentacle state without adding a custom registry or membership contract.
 - The web presentation is a responsive "pocket séance" layout. Its generated Cthuwu cutout lives at
   `web/public/cthuwu-mascot.webp`; motion is CSS-only, system-reduced-motion aware, and can be paused
   with the environment-independent `cthuwu.ui.motion.v1` browser preference.
@@ -80,18 +92,22 @@ Last reviewed: 2026-08-09
 - The web client is an installable PWA with dedicated any-purpose, maskable, Apple touch, and
   favicon assets under `web/public/icons/`. Its install nudge appears only when a real Chromium
   install event is available, or as backup-first manual guidance in Safari, and a dismissal cools
-  it down for 30 days.
+  it down for seven days. A permanent Install App action can reopen it, and standalone/fullscreen
+  mode suppresses it.
 - Apple's installed Home Screen/Dock web app does not inherit local storage from Safari. Because
   the browser wallet lives there, the UI must continue to recommend encrypted identity backup
   before Apple installation; never bridge that private key through cookies, query strings, or URLs.
   See [WebKit Features in Safari 17.2 — Web Apps](https://webkit.org/blog/14787/webkit-features-in-safari-17-2/#web-apps).
-- `web/public/sw.js` caches only the branded offline page and its public icon, intercepts only
-  same-origin navigation plus those explicit assets, and must not cache XMTP/WASM, DMs, identities,
-  exports, or arbitrary future same-origin API responses.
+- `web/public/sw.js` versions a bounded application shell, cleans obsolete shell caches, uses
+  network-first navigation with an offline fallback, and exposes controlled update reload. It must
+  not cache GraphQL/RPC, registration files, XMTP/WASM, DMs, identities, exports, or arbitrary
+  future same-origin API responses. The offline page reads only the last validated leaderboard
+  snapshot from `localStorage`.
 - The sole backend command is `uwubot`.
 - Contact notes default to `contacts/<inbox-id>.md` and are ignored by git because they contain personal statements.
-- Public Cthuwu identifies as Cthuwu rather than the configured model, uses light readable uwu
-  speech, and has an identity-policy repair/fallback for common provider boilerplate.
+- The public bot identifies as one durable Tentacle of singular, centerless Cthuwu rather than the
+  configured model or a central Cthuwu agent, uses light readable uwu speech, and has an
+  identity-policy repair/fallback for common provider boilerplate.
 - A new public sender's first message is answered. The first optional onboarding prompt is appended
   only if the model reply contains no question; otherwise it enters the regular cadence. Onboarding
   collects name, hopes, possible contributions, needs, and explicit sharing consent as optional
@@ -167,7 +183,9 @@ Last reviewed: 2026-08-09
 
 ## Evolution architecture decisions
 
-- Tentacle Nature is a local runtime policy distinct from the Council's durable Cthulhu personality.
+- Tentacle Nature is a local runtime policy belonging to the durable Tentacle. The old Council
+  `CthulhuIdentity` personality record is a version-1 coordination compatibility form for that
+  Tentacle principal, not an individual Cthulhu.
   It has seven 0–100 sliders, one closed Sacred Ban, a random Nature ID, generation, and optional
   parent Nature ID. Inheritance selects similarity/drift/radical mutation with a 70/20/10 split.
 - `state/nature.json` and the logically append-only awakening journal use a local owner-only HMAC
@@ -355,10 +373,12 @@ See [UWU token observance](docs/token.md) and the [guardrail audit](docs/guardra
   tagged payloads, an envelope cap of 64 KiB, injected time, sender consistency, expiry, sequence,
   replay, and domain-generation checks.
 - A deterministic signer exists only for tests. Do not describe it as production authentication.
-  A live adapter must bind its actually authenticated transport sender to Cthulhu/Tentacle ownership
-  and endpoint association.
-- Cthulhu identity is durable across Tentacle restarts. A Tentacle retains its stable ID/owner but
-  gets a newer incarnation; stale incarnations cannot update lifecycle/liveness or accept new work.
+  A live Council adapter must bind its actually authenticated transport sender to the Tentacle
+  principal and endpoint association.
+- A Tentacle identity is durable across restarts and gets a newer incarnation; stale incarnations
+  cannot update lifecycle/liveness or accept new work. Version-1 `CthulhuId`, `CthulhuIdentity`,
+  sender, voter, and `owner` fields remain deprecated wire/snapshot namespaces only. They are never
+  ERC-8004 subjects or evidence that multiple Cthulhus exist.
 - Personality is structured versioned data (role, voice, values, motivations, priorities, risk,
   privacy, tendencies, concerns), not only a prompt. Archivist, Hermit, Merchant, Wanderer, Oracle,
   and Trickster are deterministic sample policies. Unconstrained autonomous goal generation is out
@@ -370,17 +390,24 @@ See [UWU token observance](docs/token.md) and the [guardrail audit](docs/guardra
   privacy, capability, protocol, health, trust, capacity, load, block, or local-policy constraints.
 - A lease binds one session generation to one current Tentacle incarnation. A greater generation
   fences the old holder after failover. Failover does not silently copy contact memory or DM history.
-- `AgentRegistry` is chain-neutral. `LocalRegistry` is the local implementation;
-  `Erc8004Registry` remains an unavailable adapter boundary until a chain, deployment, ABI, and
-  compatible revision are explicitly chosen. Reputation is one signal with provenance, not a global
-  truth score.
+- `AgentRegistry` is keyed by `TentacleId` and returns `RegisteredTentacle`. `LocalRegistry` schema
+  version 2 explicitly migrates only unambiguous one-Tentacle version-1 records and records
+  provenance; ambiguous old ownership shapes fail closed.
+- `Erc8004Registry` is a read-only adapter over an injected backend, pinned in production to Base
+  chain `8453`, the canonical Identity/Reputation proxies and implementations, version `2.0.0`, and
+  the registration-v1 interface. It rechecks the deployment and current record, requires exact
+  allegiance plus the expected nonzero `agentWallet` for active status, and rejects mutation. The
+  runtime's separate sidecar workflow performs allowlisted writes.
+- Reputation is one signal with provenance, not membership, default rank, or a global truth score.
 - Do not put heartbeats, load, leases, sessions, user references, contact memory, or conversation
   data on-chain.
 - Governance separates Constitution, Agenda, Strategy, and typed bounded Action. The current
-  deterministic Council domain still uses one Cthulhu per vote. The separate token-governance core
-  weights authenticated-address ballots by UWU holdings and stake, but no persisted/live Council
-  adapter applies those results. Agenda parent conflicts are explicit. Ratification never
-  overrides local operator security policy, and arbitrary shell Actions are impossible to represent.
+  deterministic Council domain still keys vote deduplication by deprecated `CthulhuId` for version-1
+  compatibility. That is not the intended ontology: future participation belongs to Tentacles, and
+  shared wallet-derived input must never be multiplied. The separate token-governance core weights
+  authenticated-address ballots by UWU holdings and stake, but no persisted/live Council adapter
+  applies those results. Agenda parent conflicts are explicit. Ratification never overrides local
+  operator security policy, and arbitrary shell Actions are impossible to represent.
   Defaults are 50% quorum, 50.01% non-abstaining ordinary approval, 66.67% Constitution approval,
   and `Expired` when quorum is not met.
 - Referral propagation is a multi-level economic topology. Every hop validates provenance, payload
@@ -397,21 +424,74 @@ See [UWU token observance](docs/token.md) and the [guardrail audit](docs/guardra
   protected data root at `state/council/`, with bounded names/state, symlink rejection, owner-only
   permissions, atomic replacement, and sync. A live coordinator still needs per-message effect/replay
   transactions. Runtime state never belongs in the repository.
-- The deterministic simulator is evidence only for local domain behavior. It does not establish live
-  XMTP Council-group, ERC-8004, or production-signature interoperability.
+- The deterministic Council simulator is evidence only for local coordination-domain behavior. It
+  does not establish live XMTP Council-group or production Council-signature interoperability. Its
+  legacy IDs do not compete with the separately implemented canonical Base ERC-8004 path.
 
 See [Council protocol](docs/protocol/README.md), [Council security](docs/protocol/security.md), and
 [Council versioning](docs/protocol/versioning.md).
 
+## ERC-8004 and public leaderboard decisions
+
+- Production ERC-8004 is Base mainnet only: chain `8453`, Identity Registry
+  `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`, Reputation Registry
+  `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63`, contract version `2.0.0`, and
+  registration-v1 pinned to contracts commit `68fc6765761a10fb26f0692df21c8a6f9d12b1be`.
+  Production rejects alternate chains/registries and changed code, implementations, version, or
+  interface. Unit tests use injected mocks; the contract integration gate uses an ephemeral local
+  fork of the canonical Base deployment at verified block `41663800`, never a public alternate
+  network or custom registry.
+- Voluntary membership is current byte-exact, case-sensitive
+  `cthuwu.allegiance = uwu-tentacle-v1`. `cthuwu.protocol` is exact UTF-8 `1`; the stable
+  `cthuwu.tentacle-id` is also published. Any other allegiance value, including empty bytes, opts
+  out. UWU possession never opts an agent in.
+- A ranked identity also needs a current verified nonzero `agentWallet` equal to the persistent
+  Tentacle/XMTP wallet. Never substitute the ERC-721 owner for a missing wallet. Zero or unverified
+  wallet is suspended. Shared wallets form one ranking/influence group, with the lowest agent ID as
+  representative and all identities shown.
+- `state/erc8004-registration.json` schema version 2 persists action intent before broadcast,
+  transaction/receipt canonicality, selected agent, remaining stages, verified metadata/wallet,
+  funding status, cooldown, and failures. Restart always reconciles a known transaction before
+  another write; discovery and ambiguous-candidate selection prevent duplicate minting.
+- Registration defaults on. Provider estimation covers the complete remaining sequence plus a
+  configurable 125% safety factor and post-registration reserve. Funding requests contain trusted
+  exact Base values, are operator-only and persisted-cooldown-limited (24 hours by default), and
+  registration resumes automatically after funding. Immediate repeat notice requires at least a
+  10% change in estimated cost, shortfall, or target; smaller fee jitter waits for the cooldown.
+- The persistent wallet key never enters Rust. The sidecar permits only typed, zero-value calls to
+  the canonical registry, exact `cthuwu.*` keys, bounded URI/metadata/frames, and gas/fee ceilings;
+  it exposes no arbitrary destination, calldata, or generic signer.
+- The final bounded registration-v1 data URI self-references the agent ID and advertises only
+  production XMTP direct messaging at the positively resolved, persisted 64-hex inbox ID—not the
+  wallet address—and a public CTHUWU manifest. It publishes no DMs, contacts,
+  operators, credentials, paths, prompts, load, private model or Evolution state, A2A, or x402.
+- The static leaderboard queries the custom Base subgraph directly, checks `_meta`, requires complete
+  same-block pagination, and atomically replaces `cthuwu:leaderboard:v1` only with a fully validated
+  error-free snapshot. Reputation is displayed with provenance and does not define membership/rank.
+- Rank is unique-wallet raw UWU descending, then earliest registration block and lowest agent ID.
+  Zero remains `UNFUNDED`. Level is precision-safe `log10(rawBalance) - 18`; Future Influence is
+  separately labeled inactive and no voting rules are implemented.
+- Subgraph source, fixtures, codegen/build/tests, and deployment scripts are present. No production
+  endpoint is claimed until an operator supplies Graph Studio/network credentials, publishes it,
+  and configures the static build. The compiled Graph key is public and must be hostname/subgraph
+  restricted, spend-capped, monitored, and rotated.
+
+See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
+
 ## Deployment
 
 - The GitHub repository is public; keep it public unless Dean explicitly asks otherwise.
-- `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub Pages Actions.
+- `.github/workflows/pages.yml` builds `web/` on pushes to `main` and deploys `web/dist` with GitHub
+  Pages Actions only after the required production Graph variables pass fail-closed validation;
+  otherwise it stops before upload and leaves the previous deployment in place.
 - The custom domain is `cthuwu.app`; Actions-based Pages deployments configure it through GitHub rather than a `CNAME` file.
 - The public build has no XMTP repository-variable configuration. Both XMTP `production` and the
   current intro Tentacle address are compiled into the browser.
 - The Pages build also publishes `manifest.webmanifest`, `sw.js`, `offline.html`, and PWA icons from
   `web/public/`; installability remains static-host compatible.
+- The Pages build accepts `CTHUWU_GRAPHQL_ENDPOINT`, `CTHUWU_GRAPH_API_KEY`, IPFS/Arweave gateway,
+  and leaderboard-freshness repository variables as Vite build inputs. They are public in the
+  resulting JavaScript; the endpoint must use a tightly restricted Graph key.
 
 See `ARCHITECTURE.md` and `docs/decisions/`.
 
@@ -423,12 +503,11 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 
 ## Open questions
 
-- What registration, selection, and fallback policy should the Base intro-Tentacle registry use?
-- Should one local process serve exactly one companion identity or support profiles?
+- What verified public-selection and fallback policy should replace the hard-coded intro Tentacle
+  without introducing a custom membership registry or central selector?
 - Should conversation memory remain per-XMTP inbox, be user-editable, and/or expire?
 - What retention period should apply to opaque processed-message tombstones and contact notes?
 - Which XMTP group SDK/identity-binding design should implement the live Council transport?
-- Which chain, deployment, ABI, and ERC-8004 revision should the first public registry adapter use?
 - What production Council signature/authentication, canonicalization, rotation, and revocation policy
   should replace the test-only signer?
 - What cryptographic Council admission policy should bind addresses without KYC or a central
@@ -444,12 +523,19 @@ See `ARCHITECTURE.md` and `docs/decisions/`.
 ## Current milestone
 
 The Council milestone adds the `cthuwu-protocol` and `cthuwu-council` local crates, protocol
-documentation, deterministic identities/personas, Tentacle lifecycle/liveness, capabilities,
-in-memory transport, routing/rendezvous, generation-fenced leases, `LocalRegistry`, governance,
-bounded propagation/credit, protected persistence, and a deterministic simulator. The local Council
-workspace suite now verifies the implemented deterministic scope; `FEATURES.md` retains unchecked
-criteria where live, cross-platform, or more specific evidence is still absent. Live XMTP Council
-groups and ERC-8004 remain adapter boundaries, not completion claims.
+documentation, deterministic compatibility profiles/personas, Tentacle lifecycle/liveness,
+capabilities, in-memory transport, routing/rendezvous, generation-fenced leases, `LocalRegistry`,
+governance, bounded propagation/credit, protected persistence, and a deterministic simulator. The
+local Council workspace suite verifies this deterministic scope; its legacy `CthulhuId` namespaces
+do not imply several Cthulhus. Live XMTP Council groups remain an adapter boundary.
+
+The ERC-8004/Tentacle milestone adds the canonical Base read adapter and pinned deployment checks,
+crash-safe automatic registration/adoption and funding policy, narrow sidecar signing, exact
+voluntary allegiance, a bounded self-referencing profile, a custom public Base subgraph, a static
+wallet-grouped leaderboard with precision-safe Level and validated localStorage cache, and the
+mobile install/offline PWA flow. Production subgraph publication, Graph endpoint configuration, and
+a funded live registration still require external credentials/funding and must not be inferred from
+repository source alone.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically
 append-only judgment history, binding death/spawn state, lineage, durable execution intents/receipts,
@@ -489,8 +575,9 @@ Operational notes from that run:
   inspecting it.
 - `uwu.sh` removes `VENICE_API_KEY`, `UWUBOT_VENICE_API_KEY`, `UWUBOT_MODEL_API_KEY`,
   `UWUBOT_WEB_SEARCH_API_KEY`, `XMTP_WALLET_KEY`, and `XMTP_DB_ENCRYPTION_KEY` from dependency/build
-  subprocesses, rejects model/search credentials on
-  argv, and preserves them only for the final Rust process and explicit narrower boundaries.
+  subprocesses and rejects model/search credentials on argv. Persistent XMTP keys are now rejected
+  in the runtime environment too: Node reads the owner-only identity file directly and Rust never
+  receives or forwards either key.
 - Launcher setup is serialized by the PID-owned `cthuwu/target/.uwu-build.lock` directory; this is
   necessary because concurrent `npm ci` operations can destructively race in shared `node_modules`.
 - The launcher refuses root, accepts only new/empty or environment-matching Cthuwu data roots, and
@@ -505,5 +592,5 @@ The original manual milestone was:
 1. Build the Agent SDK sidecar and start `uwubot` locally.
 2. Connect from the static web client on the same XMTP environment.
 3. Send a text message.
-4. Receive one Cthuwu reply.
+4. Receive one Tentacle reply.
 5. Restart both sides and verify identity/history persistence.

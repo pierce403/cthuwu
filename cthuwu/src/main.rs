@@ -7,6 +7,7 @@ mod contact;
 mod deadline;
 mod dedupe;
 pub mod economics;
+mod erc8004;
 pub mod evolution;
 pub mod evolution_runtime;
 pub mod hermes;
@@ -24,7 +25,7 @@ pub mod token_gov;
 mod web_search;
 
 use agent_context::AgentContext;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use autonomy::LifecycleExecutor;
 use bot::UwUBot;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -40,7 +41,12 @@ use economics::{
     DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS, EconomicHolderRole, EconomicObservationProvenance,
     TokenEconomicSnapshot,
 };
-use evolution::{LifecycleAction, LifecycleReceipt, LifecycleReceiptStatus};
+use erc8004::{
+    BASE_MAINNET_CHAIN_ID as ERC8004_CHAIN_ID, IDENTITY_REGISTRY, REPUTATION_REGISTRY,
+    RegistrationConfig, SharedRegistrationControl, SidecarErc8004Gateway, TentacleRegistration,
+    active_operator_inboxes,
+};
+use evolution::{LifecycleAction, LifecycleReceipt, LifecycleReceiptStatus, LineageStore};
 use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions, MandatoryRecoveryKind};
 use inference::{
     DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
@@ -50,19 +56,22 @@ use inference::{
 use model::Model;
 use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
-use sidecar::{resolve_operator_inbox, resolve_xmtp_wallet_address, run_xmtp_sidecar};
+use sidecar::{
+    OperatorNotice, resolve_operator_inbox, resolve_xmtp_wallet_address, run_xmtp_sidecar,
+};
 use std::{
     collections::BTreeSet,
     env,
     fs::{self, OpenOptions},
     io::{self, BufRead, Write},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use storage::{ensure_private_directory, sync_directory};
 use token_eye::{Address, ReputationTier, TokenEye};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use web_search::{BraveSafeSearch, BraveWebSearch, WebSearch};
@@ -162,6 +171,102 @@ struct Cli {
         hide_env_values = true
     )]
     rpc_endpoint: String,
+
+    /// Enable canonical Base-mainnet ERC-8004 registration and read-only verification.
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_ENABLED",
+        default_value_t = true,
+        action = ArgAction::Set
+    )]
+    erc8004_enabled: bool,
+
+    /// Automatically pursue registration after safe discovery and sufficient Base ETH.
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_AUTO_REGISTER",
+        default_value_t = true,
+        action = ArgAction::Set
+    )]
+    erc8004_auto_register: bool,
+
+    /// Expected chain. Production accepts canonical Base mainnet only.
+    #[arg(long, env = "CTHUWU_ERC8004_CHAIN_ID", default_value_t = ERC8004_CHAIN_ID)]
+    erc8004_chain_id: u64,
+
+    /// Expected canonical Base ERC-8004 Identity Registry.
+    #[arg(long, env = "CTHUWU_ERC8004_IDENTITY_REGISTRY", default_value = IDENTITY_REGISTRY)]
+    erc8004_identity_registry: String,
+
+    /// Expected canonical Base ERC-8004 Reputation Registry.
+    #[arg(long, env = "CTHUWU_ERC8004_REPUTATION_REGISTRY", default_value = REPUTATION_REGISTRY)]
+    erc8004_reputation_registry: String,
+
+    /// Explicit persisted-identity selection. It is verified and never silently replaces another.
+    #[arg(long, env = "CTHUWU_ERC8004_AGENT_ID")]
+    erc8004_agent_id: Option<String>,
+
+    #[arg(long, env = "CTHUWU_ERC8004_CONFIRMATIONS", default_value_t = 12)]
+    erc8004_confirmations: u64,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_NOTIFICATION_COOLDOWN_SECONDS",
+        default_value_t = 24 * 60 * 60
+    )]
+    erc8004_notification_cooldown_seconds: u64,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_MAINTENANCE_INTERVAL_SECONDS",
+        default_value_t = 15 * 60
+    )]
+    erc8004_maintenance_interval_seconds: u64,
+
+    #[arg(long, env = "CTHUWU_ERC8004_GAS_SAFETY_BPS", default_value_t = 12_500)]
+    erc8004_gas_safety_basis_points: u16,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_POST_REGISTRATION_RESERVE_WEI",
+        default_value = "50000000000000"
+    )]
+    erc8004_post_registration_reserve_wei: String,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION",
+        default_value_t = 2_000_000
+    )]
+    erc8004_max_gas_per_transaction: u64,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_MAX_FEE_PER_GAS_WEI",
+        default_value = "10000000000"
+    )]
+    erc8004_max_fee_per_gas_wei: String,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_PUBLIC_NAME",
+        default_value = "Cthuwu Tentacle"
+    )]
+    erc8004_public_name: String,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_PUBLIC_DESCRIPTION",
+        default_value = "An independently operated Tentacle of the centerless Cthuwu collective, reachable over XMTP."
+    )]
+    erc8004_public_description: String,
+
+    #[arg(
+        long,
+        env = "CTHUWU_ERC8004_PUBLIC_IMAGE",
+        default_value = "https://cthuwu.app/icons/cthuwu-512.png"
+    )]
+    erc8004_public_image: String,
 
     /// Live UWU Clanker v4 ERC-20 address on Base mainnet.
     #[arg(
@@ -310,6 +415,24 @@ enum CliCommand {
         #[command(subcommand)]
         command: OperatorCommand,
     },
+    /// Inspect or control this Tentacle's canonical Base ERC-8004 registration.
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RegistryCommand {
+    Status,
+    Candidates,
+    Adopt { agent_id: String },
+    Register,
+    DeclareAllegiance,
+    RenounceAllegiance,
+    Republish,
+    Pending,
+    Retry,
 }
 
 #[derive(Debug, Subcommand)]
@@ -546,6 +669,7 @@ async fn main() -> Result<()> {
         return run_management_command(
             operators,
             command,
+            &cli,
             &cli.node,
             &cli.sidecar,
             cli.xmtp_env.as_str(),
@@ -661,7 +785,49 @@ async fn main() -> Result<()> {
         cli.propagation_minimum_stake_basis_points,
         lifecycle_executor,
     );
-    let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
+    let tentacle_wallet = blockchain
+        .xmtp_wallet
+        .context("normal runtime has no persistent Tentacle wallet")?;
+    let tentacle_id = evolution
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+        .local_tentacle_id()
+        .to_owned();
+    let registration_config = registration_config_from_cli(&cli)?;
+    let registration_gateway = Arc::new(SidecarErc8004Gateway::new(
+        &cli.node,
+        &cli.sidecar,
+        &cli.data_dir,
+        cli.rpc_endpoint.clone(),
+        registration_config.clone(),
+    )?);
+    let registration = Arc::new(tokio::sync::Mutex::new(TentacleRegistration::open(
+        &cli.data_dir,
+        &tentacle_id,
+        tentacle_wallet,
+        registration_config,
+        registration_gateway,
+    )?));
+    if let Some(selected) = cli.erc8004_agent_id.as_deref() {
+        let mut registration_guard = registration.lock().await;
+        match registration_guard.snapshot().confirmed_agent_id.as_deref() {
+            Some(existing) if existing != selected => bail!(
+                "CTHUWU_ERC8004_AGENT_ID {selected} conflicts with persisted agent ID {existing}"
+            ),
+            None => {
+                registration_guard
+                    .adopt(selected)
+                    .await
+                    .context("adopting the explicitly selected ERC-8004 identity")?;
+            }
+            Some(_) => {}
+        }
+    }
+    let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()));
+    let operators = Arc::new(Mutex::new(OperatorStore::new(
+        &cli.data_dir,
+        cli.xmtp_env.as_str(),
+    )?));
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
@@ -685,12 +851,13 @@ async fn main() -> Result<()> {
         contacts,
         processed,
         model,
-        Arc::new(Mutex::new(operators)),
+        operators.clone(),
         operator_harness,
         evolution.clone(),
     )
     .with_model_control(router.clone())
     .with_venice_key_reward(cli.venice_key_reward_whole)
+    .with_registry_control(registry_control)
     .with_token_observance(token_eye.clone(), blockchain.clone());
 
     info!(
@@ -706,6 +873,12 @@ async fn main() -> Result<()> {
     }
 
     let (lifecycle_shutdown_tx, lifecycle_shutdown_rx) = watch::channel(false);
+    let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
+    let registration_supervisor = tokio::spawn(run_registration_supervisor(
+        registration,
+        operators,
+        operator_notice_tx,
+    ));
     let mut supervisor = tokio::spawn(run_autonomy_supervisor(
         evolution.clone(),
         autonomy_dependencies,
@@ -718,10 +891,12 @@ async fn main() -> Result<()> {
         &cli.data_dir,
         cli.xmtp_env.as_str(),
         lifecycle_shutdown_rx,
+        operator_notice_rx,
     );
     tokio::pin!(transport);
     tokio::select! {
         transport_result = &mut transport => {
+            registration_supervisor.abort();
             if *lifecycle_shutdown_tx.borrow() {
                 let shutdown_intent = supervisor
                     .await
@@ -736,6 +911,7 @@ async fn main() -> Result<()> {
             }
         }
         supervisor_result = &mut supervisor => {
+            registration_supervisor.abort();
             let shutdown_intent = supervisor_result
                 .context("autonomous Evolution supervisor task failed")??;
             transport.await?;
@@ -1082,6 +1258,65 @@ fn blockchain_config_from_cli(cli: &Cli, xmtp_wallet: Option<Address>) -> Result
     })
 }
 
+fn registration_config_from_cli(cli: &Cli) -> Result<RegistrationConfig> {
+    ensure_registration_identity_environment(cli.erc8004_enabled, cli.xmtp_env.as_str())?;
+    ensure_canonical_registry_configuration(
+        cli.erc8004_chain_id,
+        &cli.erc8004_identity_registry,
+        &cli.erc8004_reputation_registry,
+    )?;
+    let config = RegistrationConfig {
+        enabled: cli.erc8004_enabled,
+        auto_register: cli.erc8004_auto_register,
+        confirmations: cli.erc8004_confirmations,
+        notification_cooldown: Duration::from_secs(cli.erc8004_notification_cooldown_seconds),
+        maintenance_interval: Duration::from_secs(cli.erc8004_maintenance_interval_seconds),
+        gas_safety_basis_points: cli.erc8004_gas_safety_basis_points,
+        post_registration_reserve_wei: cli.erc8004_post_registration_reserve_wei.clone(),
+        max_gas_per_transaction: cli.erc8004_max_gas_per_transaction,
+        max_fee_per_gas_wei: cli.erc8004_max_fee_per_gas_wei.clone(),
+        public_name: cli.erc8004_public_name.clone(),
+        public_description: cli.erc8004_public_description.clone(),
+        public_image: cli.erc8004_public_image.clone(),
+    };
+    config.validate()?;
+    Ok(config)
+}
+
+fn ensure_registration_identity_environment(enabled: bool, xmtp_environment: &str) -> Result<()> {
+    if enabled {
+        ensure!(
+            xmtp_environment == "production",
+            "ERC-8004 runtime requires the persistent XMTP production identity; disable ERC-8004 for dev/local XMTP"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_canonical_registry_configuration(
+    chain_id: u64,
+    identity_registry: &str,
+    reputation_registry: &str,
+) -> Result<()> {
+    ensure!(
+        chain_id == ERC8004_CHAIN_ID,
+        "production ERC-8004 requires Base mainnet chain ID {ERC8004_CHAIN_ID}, not {chain_id}"
+    );
+    let configured_identity = Address::from_str(identity_registry)?;
+    let canonical_identity = Address::from_str(IDENTITY_REGISTRY)?;
+    ensure!(
+        configured_identity == canonical_identity,
+        "configured ERC-8004 Identity Registry is not the pinned canonical Base deployment"
+    );
+    let configured_reputation = Address::from_str(reputation_registry)?;
+    let canonical_reputation = Address::from_str(REPUTATION_REGISTRY)?;
+    ensure!(
+        configured_reputation == canonical_reputation,
+        "configured ERC-8004 Reputation Registry is not the pinned canonical Base deployment"
+    );
+    Ok(())
+}
+
 fn token_observation_status(config: &BlockchainConfig) -> &'static str {
     if !config.observe_tokens {
         "disabled"
@@ -1146,6 +1381,80 @@ async fn observe_node_economics(
         config.economic_configuration_identity(propagation_minimum_stake_basis_points),
     )?;
     Ok(Some((snapshot, provenance)))
+}
+
+async fn run_registration_supervisor(
+    registration: Arc<tokio::sync::Mutex<TentacleRegistration>>,
+    operators: Arc<Mutex<OperatorStore>>,
+    notices: mpsc::Sender<OperatorNotice>,
+) {
+    loop {
+        let (notifications, interval) = {
+            let mut registration = registration.lock().await;
+            let interval = registration.maintenance_interval();
+            match registration.maintain(false).await {
+                Ok(notifications) => (notifications, interval),
+                Err(error) => {
+                    warn!(%error, "ERC-8004 maintenance failed; direct XMTP operation remains available in degraded unlisted mode");
+                    (Vec::new(), interval)
+                }
+            }
+        };
+        if notifications.is_empty() {
+            tokio::time::sleep(interval).await;
+            continue;
+        }
+        let operator_inboxes = match current_active_operator_inboxes(&operators) {
+            Ok(inboxes) => inboxes,
+            Err(error) => {
+                warn!(%error, "could not resolve the current ERC-8004 operator notice targets");
+                Vec::new()
+            }
+        };
+        let mut acknowledgements = tokio::task::JoinSet::new();
+        for inbox_id in &operator_inboxes {
+            for notification in &notifications {
+                let Ok((notice, acknowledgement)) = OperatorNotice::with_acknowledgement(
+                    inbox_id.clone(),
+                    notification.text.clone(),
+                ) else {
+                    continue;
+                };
+                if notices.send(notice).await.is_ok() {
+                    acknowledgements.spawn(async move {
+                        matches!(
+                            tokio::time::timeout(Duration::from_secs(30), acknowledgement).await,
+                            Ok(Ok(true))
+                        )
+                    });
+                }
+            }
+        }
+        let mut delivered = false;
+        while let Some(result) = acknowledgements.join_next().await {
+            if matches!(result, Ok(true)) {
+                delivered = true;
+            }
+        }
+        if delivered
+            && let Err(error) = registration
+                .lock()
+                .await
+                .mark_notifications_delivered(&notifications)
+        {
+            // A crash or persistence failure after the XMTP ACK may duplicate a later notice, but
+            // it can never suppress a funding requirement or lose the one-shot success notice.
+            warn!(%error, "could not commit delivered ERC-8004 operator notice state");
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+fn current_active_operator_inboxes(operators: &Arc<Mutex<OperatorStore>>) -> Result<Vec<String>> {
+    let operators = operators
+        .lock()
+        .map_err(|_| anyhow::anyhow!("operator registry lock is poisoned"))?;
+    Ok(active_operator_inboxes(&operators))
 }
 
 async fn run_autonomy_supervisor(
@@ -1483,6 +1792,7 @@ fn build_inference_config(
 async fn run_management_command(
     mut operators: OperatorStore,
     command: CliCommand,
+    cli: &Cli,
     node: &Path,
     sidecar: &Path,
     xmtp_environment: &str,
@@ -1520,6 +1830,74 @@ async fn run_management_command(
                 }
             }
         },
+        CliCommand::Registry { command } => {
+            ensure_registration_identity_environment(true, xmtp_environment)?;
+            let wallet =
+                resolve_xmtp_wallet_address(node, sidecar, &cli.data_dir, xmtp_environment)
+                    .await
+                    .context("deriving the persistent Tentacle wallet for ERC-8004 management")?;
+            let lineage = LineageStore::new(&cli.data_dir)?
+                .load()?
+                .context("the durable Tentacle lineage does not exist yet; start the Tentacle once before managing ERC-8004")?;
+            let tentacle_id = lineage.state().root_id.clone();
+            let config = registration_config_from_cli(cli)?;
+            let gateway = Arc::new(SidecarErc8004Gateway::new(
+                node,
+                sidecar,
+                &cli.data_dir,
+                cli.rpc_endpoint.clone(),
+                config.clone(),
+            )?);
+            let mut registration =
+                TentacleRegistration::open(&cli.data_dir, &tentacle_id, wallet, config, gateway)?;
+            if let Some(selected) = cli.erc8004_agent_id.as_deref() {
+                match registration.snapshot().confirmed_agent_id.as_deref() {
+                    Some(existing) if existing != selected => bail!(
+                        "CTHUWU_ERC8004_AGENT_ID {selected} conflicts with persisted agent ID {existing}"
+                    ),
+                    None => {
+                        println!("{}", registration.adopt(selected).await?);
+                    }
+                    Some(_) => {}
+                }
+            }
+            match command {
+                RegistryCommand::Status => {
+                    let _ = registration.maintain(false).await?;
+                    println!("{}", registration.status_text());
+                }
+                RegistryCommand::Candidates => {
+                    let _ = registration.maintain(false).await?;
+                    println!("{}", registration.candidates_text());
+                }
+                RegistryCommand::Adopt { agent_id } => {
+                    println!("{}", registration.adopt(&agent_id).await?);
+                    println!("{}", registration.status_text());
+                }
+                RegistryCommand::Register => {
+                    let notices = registration.maintain(true).await?;
+                    println!("{}", registration.status_text());
+                    for notice in notices {
+                        println!("\n{}", notice.text);
+                    }
+                }
+                RegistryCommand::DeclareAllegiance => {
+                    println!("{}", registration.set_allegiance(true).await?);
+                }
+                RegistryCommand::RenounceAllegiance => {
+                    println!("{}", registration.set_allegiance(false).await?);
+                }
+                RegistryCommand::Republish => {
+                    println!("{}", registration.republish_profile().await?);
+                }
+                RegistryCommand::Pending => {
+                    println!("{}", registration.inspect_pending().await?);
+                }
+                RegistryCommand::Retry => {
+                    println!("{}", registration.retry().await?);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1587,6 +1965,50 @@ mod tests {
         enforce_environment(root.path(), Network::Dev).unwrap();
         enforce_environment(root.path(), Network::Dev).unwrap();
         assert!(enforce_environment(root.path(), Network::Production).is_err());
+    }
+
+    #[test]
+    fn erc8004_requires_the_persistent_production_identity() {
+        let dev = Cli::try_parse_from(["uwubot", "--xmtp-env", "dev"]).unwrap();
+        assert!(registration_config_from_cli(&dev).is_err());
+
+        let disabled =
+            Cli::try_parse_from(["uwubot", "--xmtp-env", "dev", "--erc8004-enabled", "false"])
+                .unwrap();
+        assert!(registration_config_from_cli(&disabled).is_ok());
+        assert!(ensure_registration_identity_environment(true, "dev").is_err());
+        assert!(ensure_registration_identity_environment(true, "production").is_ok());
+    }
+
+    #[test]
+    fn registration_notices_resolve_the_current_shared_operator_set() {
+        let root = tempfile::tempdir().unwrap();
+        let operators = Arc::new(Mutex::new(
+            OperatorStore::new(root.path(), "production").unwrap(),
+        ));
+        assert!(
+            current_active_operator_inboxes(&operators)
+                .unwrap()
+                .is_empty()
+        );
+
+        let inbox = "ab".repeat(32);
+        operators
+            .lock()
+            .unwrap()
+            .add_at(&inbox, "current operator", "100")
+            .unwrap();
+        assert_eq!(
+            current_active_operator_inboxes(&operators).unwrap(),
+            std::slice::from_ref(&inbox)
+        );
+
+        operators.lock().unwrap().revoke(&inbox).unwrap();
+        assert!(
+            current_active_operator_inboxes(&operators)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

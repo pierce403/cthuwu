@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:erc8004-mainnet-fork": "CTHUWU_RUN_MAINNET_FORK_TEST=1 vitest run src/erc8004.mainnet-fork.test.ts --reporter=verbose",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

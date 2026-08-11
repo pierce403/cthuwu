@@ -1,7 +1,15 @@
-//! Transport- and inference-independent wire and domain types for the Council of Cthulhus.
+//! Transport- and inference-independent coordination types for Cthuwu.
 //!
 //! This crate deliberately contains no network client, model adapter, filesystem access, clock,
 //! or production signing implementation. Callers supply those capabilities at the trust boundary.
+//!
+//! Cthuwu is the singular decentralized collective formed by all live Tentacles; it is not an
+//! agent or owner. A Tentacle is an independently operated, durable agent and an incarnation is
+//! only one runtime generation of it. Public human chat users are acolytes, not Tentacles. A human
+//! operator can shape its Tentacle's agenda without becoming an owner of the collective.
+//! Historical `CthulhuId`-named Council fields remain on the v1 wire solely for compatibility.
+//! They are legacy coordination namespaces, never ERC-8004 identities or evidence that multiple
+//! individual "Cthulhus" exist. One Tentacle stopping does not end the decentralized collective.
 
 mod capability;
 mod envelope;

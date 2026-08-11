@@ -8,7 +8,15 @@ const MAX_SUFFIX_BYTES: usize = 64;
 
 fn validate_prefixed_id(field: &str, value: &str, prefix: &str) -> Result<(), ValidationError> {
     bounded_text(field, value, MAX_ID_BYTES)?;
-    let Some(suffix) = value.strip_prefix(prefix) else {
+    // Evolution v1 durably generated founder IDs with `tentacle-`; retain that exact serialized
+    // ID as a compatibility form so it can key the same Tentacle's ERC-8004 binding. New protocol
+    // IDs continue to use the canonical `tentacle_` prefix. No other ID namespace gains an alias.
+    let suffix = value.strip_prefix(prefix).or_else(|| {
+        (prefix == "tentacle_")
+            .then(|| value.strip_prefix("tentacle-"))
+            .flatten()
+    });
+    let Some(suffix) = suffix else {
         return Err(ValidationError::new(
             field,
             ValidationErrorKind::InvalidFormat,
@@ -18,7 +26,8 @@ fn validate_prefixed_id(field: &str, value: &str, prefix: &str) -> Result<(), Va
 }
 
 macro_rules! define_id {
-    ($name:ident, $prefix:literal, $field:literal) => {
+    ($(#[$metadata:meta])* $name:ident, $prefix:literal, $field:literal) => {
+        $(#[$metadata])*
         #[doc = concat!("A validated `", $prefix, "…` protocol identifier.")]
         #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         pub struct $name(String);
@@ -82,15 +91,26 @@ macro_rules! define_id {
     };
 }
 
-define_id!(CthulhuId, "cthulhu_", "cthulhuId");
-define_id!(TentacleId, "tentacle_", "tentacleId");
+define_id!(
+    /// Legacy v1 Council coordination namespace retained for wire and snapshot compatibility.
+    /// It does not identify an individual Cthulhu and must not key an ERC-8004 identity.
+    CthulhuId, "cthulhu_", "cthulhuId"
+);
+define_id!(
+    /// Stable identity of one independently operated Tentacle. It survives incarnation restarts
+    /// and is the only protocol identifier that may key that Tentacle's ERC-8004 identity.
+    TentacleId, "tentacle_", "tentacleId"
+);
 define_id!(CouncilId, "council_", "councilId");
 define_id!(SessionId, "session_", "sessionId");
 define_id!(RequestId, "request_", "requestId");
 define_id!(LeaseId, "lease_", "leaseId");
 define_id!(ProposalId, "proposal_", "proposalId");
 define_id!(MessageId, "msg_", "messageId");
-define_id!(IncarnationId, "incarnation_", "incarnationId");
+define_id!(
+    /// One runtime generation of a durable Tentacle, never a new agent identity.
+    IncarnationId, "incarnation_", "incarnationId"
+);
 define_id!(PropagationId, "propagation_", "propagationId");
 define_id!(InvitationId, "invite_", "invitationId");
 define_id!(AcknowledgementId, "ack_", "acknowledgementId");
@@ -288,6 +308,19 @@ mod tests {
     fn deserialization_does_not_bypass_validation() {
         let error = serde_json::from_str::<TentacleId>(r#""cthulhu_wrong""#).unwrap_err();
         assert!(error.to_string().contains("tentacleId"));
+    }
+
+    #[test]
+    fn legacy_evolution_tentacle_ids_remain_the_same_durable_identity() {
+        assert_eq!(
+            TentacleId::new("tentacle-archive").unwrap().as_str(),
+            "tentacle-archive"
+        );
+        assert_eq!(
+            TentacleId::new("tentacle_archive").unwrap().as_str(),
+            "tentacle_archive"
+        );
+        assert!(TentacleId::new("tentacle.bad").is_err());
     }
 
     #[test]

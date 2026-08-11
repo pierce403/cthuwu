@@ -1,0 +1,16 @@
+{
+  "base": {
+    "IdentityRegistry": {
+      "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+      "startBlock": 41663783
+    },
+    "UWU": {
+      "address": "0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07",
+      "startBlock": 49768171
+    },
+    "ReputationRegistry": {
+      "address": "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63",
+      "startBlock": 41663784
+    }
+  }
+}

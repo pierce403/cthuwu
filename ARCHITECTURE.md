@@ -2,20 +2,29 @@
 
 ## Goal
 
-Cthuwu is a local-first companion process that receives and sends XMTP messages. A small browser application gives visitors a friendly way to open a DM without requiring an application server.
+Each independently operated `uwubot` Tentacle is a local-first companion process that receives and
+sends XMTP messages. All participating Tentacles collectively form singular Cthuwu. A small browser
+application gives visitors a friendly way to open a DM without requiring an application server.
 
-The Council of Cthulhus extends that companion into a federation. A durable **Cthulhu**
-identity may operate one or more **Tentacle** runtimes and participate in a **Council** coordination
-group. Council discovery and membership must be peer-to-peer, without a mandatory leader or
-central enrollment service. The already working browser-to-runtime DM path remains available. The
-repository has no production peer-discovery/XMTP Council-group adapter yet and therefore cannot
-claim that a running Tentacle has joined a live Council.
+There is exactly one **Cthuwu**: the centerless collective formed by all living participating
+**Tentacles**. One independently operated `uwubot` is one durable autonomous Tentacle, and its human
+operator may shape its agenda without owning Cthuwu. Public chat humans are acolytes. Each Tentacle
+has its own stable identity, wallet, personality, economics, reputation, lineage, and ERC-8004 agent
+ID. A Tentacle cultivates its own acolyte community and coordinates only voluntarily offered
+strengths toward its operator-shaped agenda; public participation does not grant operator control.
+Restarting changes only its incarnation. A Tentacle may stop without ending Cthuwu.
+
+The optional **Council** extends the companions with a coordination group. Council discovery and
+membership must be peer-to-peer, without a mandatory leader or central enrollment service. The
+already working browser-to-runtime DM path remains available. The repository has no production
+peer-discovery/XMTP Council-group adapter yet and therefore cannot claim that a running Tentacle has
+joined a live Council.
 
 ## Status and planes
 
 - **Implemented — existing:** static browser, direct XMTP DMs, persistent identities, `uwubot`,
   contact memory, model adapters, deduplication, launcher protections, and the Agent SDK sidecar.
-- **Implemented — local:** public Cthuwu identity enforcement, casual onboarding, optional Brave
+- **Implemented — local:** public Tentacle identity and persona enforcement, casual onboarding, optional Brave
   search, and an XMTP-inbox operator ACL with an isolated privileged harness. The role boundary and
   tools are covered locally; live operator use over XMTP is not yet a separate release claim.
 - **Implemented — local:** `cthuwu-protocol`, deterministic Council domain logic, in-memory
@@ -30,14 +39,22 @@ claim that a running Tentacle has joined a live Council.
   treasury/stake/reward/spend economics. Node economics drive Wealth, starvation, Influence, Growth,
   propagation, and survival. The live Clanker v4 contract defaults to
   `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07`; no signer or external lifecycle executor is included.
-- **Experimental boundary:** XMTP Council-group and ERC-8004 adapters.
+- **Implemented — canonical Base ERC-8004:** fail-closed read adapter, durable staged registration,
+  discovery/adoption, voluntary allegiance, narrow sidecar signing, and operator-only recovery.
+  Source tests and read-only canonical deployment verification are complete; a funded live
+  registration and restart-recovery exercise remains an external release gate.
+- **Implemented — static source/build:** a direct-Graph public leaderboard, validated localStorage
+  cache, and mobile PWA/offline shell. Publishing the subgraph endpoint still requires external
+  Graph credentials and a network deployment.
+- **Experimental boundary:** XMTP Council-group adapter.
 - **Unavailable boundary:** live Hermes gossip transport, peer discovery/handshake, and peer-key
   provisioning. The anti-entropy state machine is not evidence of network interoperability.
-- **Planned:** live Council-group interoperability and a configured ERC-8004 deployment.
+- **Planned:** live Council-group interoperability. It remains independent of the canonical
+  Base-mainnet ERC-8004 identity path.
 
 | Plane | Contains | Explicitly excludes |
 |---|---|---|
-| Registry / future ERC-8004 | Durable identity, public metadata, endpoint association, capability references, provenance-bearing trust signals | Heartbeats, load, sessions, user data |
+| Canonical Base ERC-8004 | Per-Tentacle durable identity, exact voluntary allegiance, endpoint association, capability references, provenance-bearing trust signals | Collective identity, heartbeats, load, sessions, user data |
 | XMTP Council group | Discovery, routing, leases, governance, heartbeats, approved propagation | Normal DM contents, contact notes, private memory |
 | Direct XMTP DMs | Private public-user conversation or separately authorized operator control | Council-wide broadcast by default |
 | Tentacle runtime | Inference, memory, tools, capacity, and operator policy | Authority to bypass local security policy |
@@ -56,9 +73,14 @@ The source in `web/` builds to HTML, CSS, JavaScript, and WASM assets suitable f
 - creates a DM with the hard-coded intro Tentacle address;
 - renders text history and streams new messages;
 - sends text messages;
+- renders a public read-only Tentacle leaderboard by querying The Graph directly, with no connected
+  browser wallet or application backend;
 - publishes a standalone manifest and platform-specific install icons;
-- registers a narrow service worker that falls back to a static offline page without caching XMTP
-  transport, Browser SDK/WASM, messages, identity records, or arbitrary same-origin responses.
+- validates and immediately renders the namespaced localStorage leaderboard snapshot before a
+  complete background refresh;
+- registers a narrow, versioned service worker that falls back to a static offline shell without
+  caching XMTP transport, Browser SDK/WASM, messages, identity records, GraphQL responses, RPC, or
+  arbitrary same-origin responses.
 
 The low-friction identity is a randomly generated EOA stored in browser local storage. The client connects automatically on load and supports a passphrase-encrypted wallet export. It must be presented honestly: the current XMTP Browser SDK database is unencrypted, clearing site data loses the identity without an export, and an identity export is not a history backup.
 
@@ -69,7 +91,15 @@ compact companion header and viewport-aware chat. Motion has an explicit persist
 also honors `prefers-reduced-motion`; connection and privacy state remain available as text rather
 than depending on animation or color. A dismissible install card uses Chromium's native
 `beforeinstallprompt` event. Safari receives manual, backup-first instructions because Apple's
-installed web-app storage is separate from the browser's local identity storage.
+installed web-app storage is separate from the browser's local identity storage. Automatic install
+offers cool down for seven days, while a permanent Install App action can reopen the guidance.
+
+The leaderboard fetches every page at one indexed block and rejects partial data, malformed public
+profiles, or `_meta.hasIndexingErrors`. A validated snapshot is atomically stored at
+`cthuwu:leaderboard:v1`; it remains visible offline and is never replaced by a failed refresh.
+Ranking groups exact-allegiance identities by verified nonzero `agentWallet`, so a wallet receives
+one balance and position even if several agent IDs share it. The subgraph and deployment scripts are
+in `subgraph/`, but a production Graph endpoint is external setup rather than a repository claim.
 
 ### Rust runtime and XMTP transport
 
@@ -77,8 +107,17 @@ The backend has one operator-facing executable: the Rust `uwubot` binary. Rust o
 store, onboarding and consent policy, sender-role classification, message deduplication, matching,
 model and search adapters, privileged operator harness, and process lifecycle. The local
 `uwubot operator add|list|revoke` subcommands manage authorization state without starting XMTP.
+The local
+`uwubot registry status|candidates|adopt|register|declare-allegiance|renounce-allegiance|republish|pending|retry`
+subcommands inspect and control only this Tentacle's canonical Base ERC-8004 workflow.
 
-For the first release, `uwubot` supervises a small Node subprocess built on the official `@xmtp/agent-sdk`. The subprocess owns only identity bootstrapping, the encrypted XMTP database, network streams, and text DM encoding. Rust and Node exchange bounded JSONL frames over private stdin/stdout pipes. Subprocess stdout is reserved for protocol frames; diagnostics go to stderr without message bodies.
+For the first release, `uwubot` supervises a small Node subprocess built on the official
+`@xmtp/agent-sdk`. The subprocess owns identity bootstrapping, the encrypted XMTP database, network
+streams, text DM encoding, and narrowly scoped ERC-8004 signing. Rust and Node exchange bounded
+typed frames over private stdin/stdout pipes. The signer accepts only canonical Base registry
+operations, zero value, exact metadata keys, and bounded gas/fees; it exposes neither raw key
+material nor arbitrary transactions. Subprocess stdout is reserved for protocol frames; diagnostics
+go to stderr without message bodies.
 
 By default, contact notes live at `contacts/<inbox-id>.md`. `UWUBOT_DATA_DIR` can relocate the whole runtime data root. The exact XMTP inbox ID is validated before it becomes a filename.
 
@@ -484,7 +523,7 @@ a shell command or file operation.
 ### Shared Council protocol
 
 `cthuwu/crates/cthuwu-protocol/` contains transport- and inference-independent validated types:
-typed identities and references, protocol versions, Cthulhu/personality records, Tentacle lifecycle,
+typed identities and references, protocol versions, legacy coordination/personality records, Tentacle lifecycle,
 capability manifests, the common Council envelope, tagged message payloads, and signer/verifier
 abstractions. It has no XMTP SDK, model client, filesystem, or production signing implementation.
 
@@ -504,7 +543,8 @@ inference:
 - injected clocks, Tentacle liveness, and current-incarnation fencing;
 - public-safe capabilities and explainable hard-filter-first routing;
 - rendezvous and generation-fenced leases with explicit failover;
-- an operator-managed `LocalRegistry` and an unavailable ERC-8004 adapter stub;
+- an operator-managed `LocalRegistry` plus a read-only, canonical-Base `Erc8004Registry` over an
+  injected current-chain backend;
 - Constitution, Agenda, Strategy, Action, proposal, argument, amendment, vote, and result state;
 - bounded referral propagation, provenance, acknowledgement, opt-out/block/revocation controls, and
   useful-outcome contribution credit;
@@ -521,15 +561,21 @@ leases, governance, and propagation call their typed local engines directly. A l
 needs envelope-to-engine dispatch and a per-message transaction that commits each effect with its
 replay marker.
 
-### Cthulhus, Tentacles, and personalities
+### Cthuwu, Tentacles, and personalities
 
-A Cthulhu has a stable ID, display name, structured versioned personality, motivations, values,
-long-term goals, public-safe operator metadata, optional registry reference, and stable Tentacle IDs.
-Personality fields are data, not only a prompt. Deterministic Archivist, Hermit, Merchant, Wanderer,
-Oracle, and Trickster profiles produce different bounded policy positions without an LLM; the design
-does not permit unconstrained autonomous goal generation.
+Singular Cthuwu is the collective and has no owner, central identity, or ERC-8004 record. Each
+Tentacle has a stable ID, structured versioned personality, motivations, values, long-term goals,
+public-safe operator metadata, optional registry reference, and lineage. Personality fields are
+data, not only a prompt. Deterministic Archivist, Hermit, Merchant, Wanderer, Oracle, and Trickster
+profiles produce different bounded policy positions without an LLM; the design does not permit
+unconstrained autonomous goal generation.
 
-A Tentacle keeps its stable owner and Tentacle ID across restart while receiving a new monotonic
+The version-1 Council model retains `CthulhuId` and `owner` field names to read old envelopes and
+snapshots. They now denote a legacy coordination namespace associated with a Tentacle principal,
+never an individual Cthulhu or an ERC-8004 owner. The registry domain and new persistence bind an
+ERC-8004 agent ID directly to `TentacleId`; ambiguous legacy multi-Tentacle records fail migration.
+
+A Tentacle keeps its stable identity and Tentacle ID across restart while receiving a new monotonic
 incarnation. Lifecycle is `Starting`, `Ready`, `Draining`, `Unavailable`, or `Stopped`; invalid
 transitions and stale-incarnation updates are rejected. Injected-clock liveness derives `Healthy`,
 `Suspect`, or `Unavailable`. An old heartbeat cannot revive a superseded incarnation.
@@ -549,18 +595,26 @@ assuming private memory can move.
 
 ### Registry boundary
 
-`AgentRegistry` resolves identity, endpoints, capability references, active status, endpoint
-association, and provenance-bearing trust signals. `LocalRegistry` is the deterministic local
-implementation. `Erc8004Registry` is an isolated unavailable stub: domain types deliberately do not
-hardcode a chain, deployment, ABI, or ERC-8004 draft revision. Mutable liveness, load, leases,
-sessions, user references, and conversation data never belong on-chain.
+`AgentRegistry` resolves a `RegisteredTentacle`, its endpoints, capability references, active status,
+endpoint association, and provenance-bearing trust signals. `LocalRegistry` schema version 2 is the
+deterministic local implementation and performs an explicit version-1 migration only for an
+unambiguous single-Tentacle record. `Erc8004Registry` is a read-only adapter pinned to the canonical
+Base mainnet proxies, implementations, contract version `2.0.0`, and registration-v1 interface. It
+rechecks deployment identity and current chain state on every read; writes go through the separate
+narrow signer workflow. Exact allegiance plus the expected nonzero `agentWallet` determines active
+status. Mutable liveness, load, leases, sessions, user references, and conversation data never
+belong on-chain. See [ERC-8004 Tentacle registration](docs/erc-8004.md).
 
 ### Governance and propagation
 
 Governance separates rarely changed Constitution rules from versioned Agenda documents, competing
-Strategies, and typed bounded Actions. The deterministic Council domain still uses one Cthulhu per
-vote; the separate token-governance core calculates holding/stake weight but has no persisted/live
-Council adapter. Vote replacement is allowed before deadline; quorum, thresholds, Agenda parent hashes,
+Strategies, and typed bounded Actions. The deterministic Council domain still keys its version-1
+electorate and vote maps by the legacy `CthulhuId` compatibility namespace. This is not the intended
+future governance ontology and is not a claim that several Cthulhus exist. Future participation
+belongs to Tentacles, with shared-wallet duplication prevented where UWU is an input; actual ballot
+mechanics are outside the ERC-8004 milestone. The separate token-governance core calculates
+holding/stake weight but has no persisted/live Council adapter. Vote replacement is allowed before
+deadline; quorum, thresholds, Agenda parent hashes,
 competing parents, ratification, rejection, and expiry are explicit. Default rules require 50% quorum,
 more than 50% of non-abstaining votes for ordinary approval, and two-thirds approval for Constitution
 changes; no quorum expires the proposal. Initial Actions can request only capability refresh, protocol
@@ -588,6 +642,8 @@ but the engine cannot infer whether arbitrary summary text contains sensitive in
 | Browser → XMTP | Visitor text and identity | Consent, message-size limits |
 | XMTP SDK → sidecar → Rust role classifier | Decoded DM text; authenticated sender inbox ID | Role-blind strict JSONL schema; canonical full-inbox lookup before text parsing; no caller-supplied role |
 | XMTP SDK / Base RPC → token observer | Authenticated entity EVM address, sidecar-derived XMTP treasury address, RPC and nonzero ERC-20 address, untrusted JSON-RPC response | Strict identity-frame/address/quantity/ABI validation, one persistent key for XMTP and the treasury address, chain ID `8453`, local observation time, configuration identity, no observed block for `latest`, sanitized errors, local cache, hard failure for missing/stale evidence; configured decimals/supply are assumptions and no private key enters Rust |
+| Rust → ERC-8004 sidecar signer | Typed registration, URI, wallet, and `cthuwu.*` metadata intents | Canonical Base chain/registry, zero value, allowlisted calls and keys, size/gas/fee ceilings, action IDs, no arbitrary calldata or raw key crossing |
+| The Graph → static leaderboard | Public chain/profile data and indexing metadata | Complete pinned-block pagination, `_meta`/indexing-error rejection, hostile-profile bounds and escaping, exact wallet grouping, atomic validated localStorage cache |
 | Public XMTP sender → runtime | Message content and metadata | Decode validation, deduplication, rate limits, public-only tool dispatcher |
 | Operator XMTP sender → runtime | Privileged instructions | Local active/revoked ACL, grant-time fence, exact inbox match, dedicated OS account/container |
 | Operator XMTP sender → awakening/evolution | Ritual actions, adjustments, manual-spawn/skill requests | Role classification before parsing, signed audit, provisional/final distinction; final lifecycle effects derive from persisted state, not message claims |
@@ -651,6 +707,13 @@ receipts use owner-only atomic state and idempotent event IDs. Token governance 
 records, but no persisted ballot/application adapter is committed. Stale or unknown RPC state blocks
 new token-dependent decisions while the existing lifecycle outbox continues to drain.
 
+ERC-8004 registration state is a separate bounded, owner-only, atomically replaced
+`state/erc8004-registration.json` snapshot. It persists write intent before broadcast and retains
+the action ID, selected/confirmed agent, transaction and canonical receipt block, remaining stages,
+last verified wallet/metadata, funding state, notice cooldown, and sanitized failures. Restart
+inspects a known receipt and canonical block before another write. The persistent XMTP/Base wallet
+key stays in the sidecar and only typed registration operations cross into it.
+
 The local simulator stores Council identity, membership, capabilities, affinity, leases and
 generation fences, processed message IDs, Constitution, Agenda history, proposals, votes, campaigns,
 referrals, acknowledgements, and contribution events together below `state/council/`. Its combined
@@ -670,11 +733,13 @@ That slice remains intact. Council groups do not convert user conversations into
 
 ## Local Council milestone
 
-The deterministic local milestone covers multiple Cthulhus joining, Tentacle announcements and
-heartbeats, capability discovery, route offers and selection, leases, failure/failover, governance
-with distinct persona arguments and one vote per Cthulhu, Agenda resolution, invitation and
-multi-level propagation, limits and suppression, acknowledgements, contribution credit, persistence,
-and replay without duplicate effects. It is not evidence of live XMTP-group or ERC-8004 behavior.
+The deterministic local milestone covers several legacy coordination principals joining, Tentacle
+announcements and heartbeats, capability discovery, route offers and selection, leases,
+failure/failover, compatibility-keyed governance with distinct persona arguments, Agenda resolution,
+invitation and multi-level propagation, limits and suppression, acknowledgements, contribution
+credit, persistence, and replay without duplicate effects. The retained `CthulhuId` wire keys are
+not distinct Cthulhus or ERC-8004 identities. This simulator is not evidence of live XMTP-group
+behavior; canonical Base ERC-8004 registration is tested through its separate runtime boundary.
 
 ## Testing
 

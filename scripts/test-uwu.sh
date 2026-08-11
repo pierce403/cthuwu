@@ -112,6 +112,14 @@ export XMTP_DB_DIRECTORY="$test_root/unsafe-database"
 test_rejected "ambient XMTP database override" uwu_validate_ambient_configuration
 unset XMTP_DB_DIRECTORY
 
+export XMTP_WALLET_KEY="wallet-key-must-be-file-backed"
+test_rejected "ambient XMTP wallet key" uwu_validate_ambient_configuration
+unset XMTP_WALLET_KEY
+
+export XMTP_DB_ENCRYPTION_KEY="database-key-must-be-file-backed"
+test_rejected "ambient XMTP database key" uwu_validate_ambient_configuration
+unset XMTP_DB_ENCRYPTION_KEY
+
 export XDG_DATA_HOME="$test_root/xdg data"
 UWU_XMTP_ENV=local
 test_equal "$XDG_DATA_HOME/cthuwu/local" \

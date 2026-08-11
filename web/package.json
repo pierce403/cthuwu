@@ -5,8 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "build:browser-tests": "node scripts/build-browser-tests.mjs",
+    "validate:production-config": "node scripts/validate-production-config.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "npm run build:browser-tests && playwright test",
+    "test:lighthouse": "npm run build:browser-tests && node scripts/run-lighthouse.mjs",
+    "test:browser": "npm run build:browser-tests && playwright test && node scripts/run-lighthouse.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
@@ -15,8 +20,10 @@
     "ethers": "6.17.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "24.13.3",
     "jsdom": "26.1.0",
+    "lighthouse": "13.4.1",
     "typescript": "5.9.3",
     "vite": "7.3.6",
     "vitest": "3.2.7"

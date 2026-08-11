@@ -445,7 +445,8 @@ mod tests {
         let context = AgentContext::new(data.path(), workspace.path()).unwrap();
         let rendered = context.render(OPERATOR_A).unwrap();
 
-        assert!(rendered.contains("Cthuwu is a tiny eldritch companion"));
+        assert!(rendered.contains("one durable individual Tentacle"));
+        assert!(rendered.contains("centerless Cthuwu"));
         assert!(rendered.contains("Keep the void tidy"));
         assert!(rendered.contains("The bell rang once"));
         assert!(rendered.contains("void-tending: Tend the local void"));
@@ -466,7 +467,7 @@ mod tests {
         let first = AgentContext::new(data.path(), workspace.path()).unwrap();
         fs::write(
             data.path().join("state/agent/SOUL.md"),
-            "# Custom soul\nI remain Cthuwu.",
+            "# Custom soul\nI remain one Tentacle.",
         )
         .unwrap();
         let second = AgentContext::new(data.path(), workspace.path()).unwrap();
@@ -477,7 +478,7 @@ mod tests {
             !second
                 .render(OPERATOR_A)
                 .unwrap()
-                .contains("Cthuwu is a tiny eldritch companion")
+                .contains("one durable individual Tentacle")
         );
     }
 
@@ -556,6 +557,6 @@ mod tests {
         fs::write(workspace.path().join("AGENTS.md"), [0xff, 0xfe]).unwrap();
         let rendered = context.render(OPERATOR_A).unwrap();
         assert!(rendered.contains("ignored because it was invalid"));
-        assert!(rendered.contains("Cthuwu is a tiny eldritch companion"));
+        assert!(rendered.contains("one durable individual Tentacle"));
     }
 }

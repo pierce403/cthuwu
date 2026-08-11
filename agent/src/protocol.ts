@@ -18,6 +18,13 @@ export type SidecarResponse =
   | { type: "reply"; id: string; text: string }
   | { type: "ignore"; id: string };
 
+export type OperatorNotice = {
+  type: "operator_notice";
+  noticeId: string;
+  inboxId: string;
+  text: string;
+};
+
 export type BridgeOptions = {
   input: Readable;
   output: Writable;
@@ -28,6 +35,7 @@ export type BridgeOptions = {
   maxLineBytes?: number;
   maxPending?: number;
   now?: () => number;
+  onOperatorNotice?: (notice: OperatorNotice) => Promise<void> | void;
 };
 
 type Pending = {
@@ -68,6 +76,7 @@ export class JsonlBridge {
   readonly #maxLineBytes: number;
   readonly #maxPending: number;
   readonly #now: () => number;
+  readonly #onOperatorNotice: (notice: OperatorNotice) => Promise<void> | void;
   readonly #reader: Interface;
   readonly #pending = new Map<string, Pending>();
   #closed = false;
@@ -82,6 +91,7 @@ export class JsonlBridge {
     this.#maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.#maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
     this.#now = options.now ?? Date.now;
+    this.#onOperatorNotice = options.onOperatorNotice ?? (() => undefined);
     if (!Number.isInteger(this.#maxPending) || this.#maxPending < 1) {
       throw new Error("maxPending must be a positive integer");
     }
@@ -207,6 +217,44 @@ export class JsonlBridge {
       return;
     }
     if (!isRecord(value) || typeof value.id !== "string" || value.id.length > 128) {
+      if (
+        isRecord(value) &&
+        value.type === "operator_notice" &&
+        typeof value.noticeId === "string" &&
+        /^[a-zA-Z0-9:_-]{1,128}$/u.test(value.noticeId) &&
+        typeof value.inboxId === "string" &&
+        /^[0-9a-f]{64}$/u.test(value.inboxId) &&
+        typeof value.text === "string" &&
+        value.text.length > 0 &&
+        Buffer.byteLength(value.text, "utf8") <= this.#maxReplyBytes &&
+        Object.keys(value).length === 4
+      ) {
+        const notice: OperatorNotice = {
+          type: "operator_notice",
+          noticeId: value.noticeId,
+          inboxId: value.inboxId,
+          text: value.text,
+        };
+        void (async () => {
+          let delivered = true;
+          try {
+            await this.#onOperatorNotice(notice);
+          } catch {
+            delivered = false;
+            this.#diagnostic("failed to deliver an operator-only notice");
+          }
+          try {
+            await this.#writeLine({
+              type: "operator_notice_result",
+              noticeId: notice.noticeId,
+              delivered,
+            });
+          } catch {
+            this.#diagnostic("failed to acknowledge an operator-only notice");
+          }
+        })();
+        return;
+      }
       this.#diagnostic("ignored an invalid response from uwubot");
       return;
     }
@@ -255,7 +303,7 @@ export class JsonlBridge {
     this.#diagnostic(diagnostic);
   }
 
-  async #writeLine(value: InboundText): Promise<void> {
+  async #writeLine(value: unknown): Promise<void> {
     const line = `${JSON.stringify(value)}\n`;
     if (Buffer.byteLength(line, "utf8") > this.#maxLineBytes) {
       throw new Error("sidecar request exceeds the bounded JSONL frame size");

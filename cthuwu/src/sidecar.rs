@@ -8,6 +8,7 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     env,
     path::Path,
     process::Stdio,
@@ -17,7 +18,7 @@ use std::{
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::{Mutex, Semaphore, watch},
+    sync::{Mutex, Semaphore, mpsc, oneshot, watch},
     task::JoinSet,
     time::timeout,
 };
@@ -28,6 +29,11 @@ use tracing::{error, info};
 const MAX_SIDECAR_FRAME_BYTES: usize = 256 * 1024;
 const MAX_REQUEST_DEADLINE_MS: u64 = 300_000;
 const RESPONSE_RESERVE_MS: u64 = 1_000;
+const TRANSPORT_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    "XMTP_DB_DIRECTORY",
+    "XMTP_GATEWAY_HOST",
+    "UWUBOT_REPLY_TIMEOUT_MS",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,8 +81,63 @@ enum OperatorIdentityFrame {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SidecarResponse {
-    Reply { id: String, text: String },
-    Ignore { id: String },
+    Reply {
+        id: String,
+        text: String,
+    },
+    Ignore {
+        id: String,
+    },
+    OperatorNotice {
+        #[serde(rename = "noticeId")]
+        notice_id: String,
+        #[serde(rename = "inboxId")]
+        inbox_id: String,
+        text: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct OperatorNotice {
+    notice_id: String,
+    pub inbox_id: String,
+    pub text: String,
+    acknowledgement: oneshot::Sender<bool>,
+}
+
+impl OperatorNotice {
+    pub fn with_acknowledgement(
+        inbox_id: String,
+        text: String,
+    ) -> Result<(Self, oneshot::Receiver<bool>)> {
+        let mut entropy = [0_u8; 16];
+        getrandom::fill(&mut entropy).context("generating an operator notice ID")?;
+        let mut encoded = String::with_capacity(entropy.len() * 2);
+        for byte in entropy {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "{byte:02x}");
+        }
+        let (acknowledgement, receiver) = oneshot::channel();
+        Ok((
+            Self {
+                notice_id: format!("erc8004-notice:{encoded}"),
+                inbox_id,
+                text,
+                acknowledgement,
+            },
+            receiver,
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperatorNoticeResult {
+    #[serde(rename = "type")]
+    frame_type: String,
+    #[serde(rename = "noticeId")]
+    notice_id: String,
+    delivered: bool,
 }
 
 /// Loads or creates the same persistent XMTP identity used by the live sidecar and returns its
@@ -256,6 +317,7 @@ pub async fn run_xmtp_sidecar(
     data_dir: &Path,
     xmtp_environment: &str,
     mut lifecycle_shutdown: watch::Receiver<bool>,
+    mut operator_notices: mpsc::Receiver<OperatorNotice>,
 ) -> Result<()> {
     if !sidecar.is_file() {
         bail!(
@@ -307,6 +369,7 @@ pub async fn run_xmtp_sidecar(
     let public_lane = Arc::new(Semaphore::new(1));
     let operator_lane = Arc::new(Semaphore::new(1));
     let mut tasks = JoinSet::new();
+    let mut pending_operator_notices: HashMap<String, oneshot::Sender<bool>> = HashMap::new();
     info!(sidecar = %sidecar.display(), "XMTP transport started");
 
     loop {
@@ -336,6 +399,46 @@ pub async fn run_xmtp_sidecar(
                 drop(stdin);
                 return stop_transport(&mut child).await;
             }
+            notice = operator_notices.recv() => {
+                let Some(notice) = notice else {
+                    continue;
+                };
+                let OperatorNotice {
+                    notice_id,
+                    inbox_id,
+                    text,
+                    acknowledgement,
+                } = notice;
+                let inbox_id = match normalize_inbox_id(&inbox_id) {
+                    Ok(inbox_id) => inbox_id,
+                    Err(_) => {
+                        let _ = acknowledgement.send(false);
+                        error!("ignored an ERC-8004 notice with an invalid operator inbox");
+                        continue;
+                    }
+                };
+                if inbox_id.len() != 64 || text.is_empty() || text.len() > 16 * 1024 {
+                    let _ = acknowledgement.send(false);
+                    error!("ignored an invalid bounded ERC-8004 operator notice");
+                    continue;
+                }
+                if pending_operator_notices.contains_key(&notice_id) {
+                    let _ = acknowledgement.send(false);
+                    error!("ignored a duplicate ERC-8004 operator notice ID");
+                    continue;
+                }
+                pending_operator_notices.insert(notice_id.clone(), acknowledgement);
+                send_response(
+                    &stdin,
+                    SidecarResponse::OperatorNotice {
+                        notice_id,
+                        inbox_id,
+                        text,
+                    },
+                )
+                .await?;
+                continue;
+            }
         };
 
         let Some(line) = line else {
@@ -356,6 +459,24 @@ pub async fn run_xmtp_sidecar(
 
         if line.is_empty() {
             error!("ignored an oversized XMTP transport frame");
+            continue;
+        }
+        if let Ok(result) = serde_json::from_str::<OperatorNoticeResult>(&line) {
+            if result.frame_type != "operator_notice_result"
+                || result.notice_id.is_empty()
+                || result.notice_id.len() > 128
+                || !result.notice_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-')
+                })
+            {
+                error!("ignored an invalid ERC-8004 operator notice acknowledgement");
+                continue;
+            }
+            if let Some(acknowledgement) = pending_operator_notices.remove(&result.notice_id) {
+                let _ = acknowledgement.send(result.delivered);
+            } else {
+                error!("ignored an unknown ERC-8004 operator notice acknowledgement");
+            }
             continue;
         }
         let request: InboundText = match serde_json::from_str(&line) {
@@ -492,6 +613,7 @@ pub async fn run_xmtp_sidecar(
             let response_kind = match &response {
                 SidecarResponse::Reply { .. } => "reply",
                 SidecarResponse::Ignore { .. } => "ignore",
+                SidecarResponse::OperatorNotice { .. } => "operator_notice",
             };
             info!(
                 lane = inference_lane.as_str(),
@@ -728,15 +850,10 @@ async fn shutdown_signal() -> Result<()> {
 
 fn copy_transport_environment(command: &mut Command) {
     // Model credentials and other application secrets intentionally do not cross the transport
-    // boundary. These are the only inherited values the Node/XMTP process may need.
+    // boundary. The persistent wallet and database keys are read by Node from the owner-only
+    // identity file and are never inherited from or copied through Rust's environment.
     copy_network_environment(command);
-    for name in [
-        "XMTP_WALLET_KEY",
-        "XMTP_DB_ENCRYPTION_KEY",
-        "XMTP_DB_DIRECTORY",
-        "XMTP_GATEWAY_HOST",
-        "UWUBOT_REPLY_TIMEOUT_MS",
-    ] {
+    for name in TRANSPORT_ENVIRONMENT_ALLOWLIST {
         if let Some(value) = env::var_os(name) {
             command.env(name, value);
         }
@@ -910,6 +1027,33 @@ printf '%s\n' '{"type":"operator_identity","address":"0x420000000000000000000000
             serde_json::to_string(&response).unwrap(),
             r#"{"type":"reply","id":"request-1","text":"hewwo"}"#
         );
+    }
+
+    #[tokio::test]
+    async fn operator_notice_uses_a_typed_delivery_acknowledgement() {
+        let (notice, acknowledgement) = OperatorNotice::with_acknowledgement(
+            "ab".repeat(32),
+            "registration complete".to_owned(),
+        )
+        .unwrap();
+        let notice_id = notice.notice_id.clone();
+        let response = SidecarResponse::OperatorNotice {
+            notice_id: notice.notice_id,
+            inbox_id: notice.inbox_id,
+            text: notice.text,
+        };
+        let encoded = serde_json::to_value(response).unwrap();
+        assert_eq!(encoded["type"], "operator_notice");
+        assert_eq!(encoded["noticeId"], notice_id);
+        let result: OperatorNoticeResult = serde_json::from_value(serde_json::json!({
+            "type": "operator_notice_result",
+            "noticeId": notice_id,
+            "delivered": true,
+        }))
+        .unwrap();
+        assert!(result.delivered);
+        notice.acknowledgement.send(result.delivered).unwrap();
+        assert!(acknowledgement.await.unwrap());
     }
 
     #[test]
@@ -1111,4 +1255,9 @@ printf '%s\n' '{"type":"operator_identity","address":"0x420000000000000000000000
         request.deadline_unix_ms = now + MAX_REQUEST_DEADLINE_MS + 10_000;
         assert!(validate_request(&request).is_err());
     }
+}
+#[test]
+fn transport_environment_never_allows_persistent_private_keys() {
+    assert!(!TRANSPORT_ENVIRONMENT_ALLOWLIST.contains(&"XMTP_WALLET_KEY"));
+    assert!(!TRANSPORT_ENVIRONMENT_ALLOWLIST.contains(&"XMTP_DB_ENCRYPTION_KEY"));
 }

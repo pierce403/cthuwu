@@ -1,0 +1,75 @@
+query CthuwuLeaderboard($first: Int!, $after: BigInt!, $block: Block_height) {
+  tentacles(
+    first: $first
+    orderBy: agentId
+    orderDirection: asc
+    where: { agentId_gt: $after }
+    block: $block
+    subgraphError: deny
+  ) {
+    id
+    agentId
+    owner
+    agentURI
+    agentWallet
+    allegiance
+    protocol
+    tentacleId
+    isTentacle
+    isWalletVerified
+    registrationBlock
+    registrationTimestamp
+    profileUpdatedBlock
+    profileUpdatedTimestamp
+    metadataUpdatedBlock
+    metadataUpdatedTimestamp
+    feedbackCount
+    activeFeedbackCount
+    revokedFeedbackCount
+    wallet {
+      address
+      rawBalance
+      updatedBlock
+      updatedTimestamp
+    }
+    profile {
+      id
+      schemaType
+      name
+      description
+      image
+      active
+      xmtpEndpoint
+      cthuwuEndpoint
+      sourceURI
+      contentHash
+      parseValid
+    }
+    feedbacks(first: 10, orderBy: createdTimestamp, orderDirection: desc) {
+      id
+      clientAddress
+      feedbackIndex
+      value
+      valueDecimals
+      tag1
+      tag2
+      endpoint
+      feedbackURI
+      feedbackHash
+      isRevoked
+      createdBlock
+      createdTimestamp
+      createdTransaction
+      provenance
+    }
+  }
+  _meta(block: $block) {
+    block {
+      number
+      hash
+      timestamp
+    }
+    deployment
+    hasIndexingErrors
+  }
+}

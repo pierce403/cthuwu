@@ -1068,7 +1068,7 @@ impl OperatorModel for InferenceRouter {
                 }
                 CandidateModel::Deterministic => Ok(RawAssistantMessage {
                     content: Some(
-                        "HEWWO, OPERATOR. I AM CTHUWU, UR LIL LOCAL ELDRITCH TENTACLE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE."
+                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE."
                             .to_owned(),
                     ),
                     tool_calls: Vec::new(),

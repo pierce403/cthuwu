@@ -232,6 +232,7 @@ dependencies = [
  "async-trait",
  "clap",
  "cthuwu-council",
+ "cthuwu-protocol",
  "getrandom 0.4.3",
  "libc",
  "reqwest",

@@ -134,6 +134,6 @@ function createSigner(wallet: Wallet): Signer {
 async function resolveCompanionAddress(address: string): Promise<string> {
   if (!address.endsWith(".eth")) return address.toLowerCase();
   const resolved = await new JsonRpcProvider("https://cloudflare-eth.com").resolveName(address);
-  if (!resolved) throw new Error("Cthuwu's ENS name did not resolve");
+  if (!resolved) throw new Error("The Tentacle's ENS name did not resolve");
   return resolved.toLowerCase();
 }

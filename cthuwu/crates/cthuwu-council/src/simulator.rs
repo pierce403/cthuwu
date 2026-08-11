@@ -19,7 +19,7 @@ use crate::propagation::{
     ReputationSignal, SafeOutcomeCredit,
 };
 use crate::registry::{
-    AgentRegistry, LocalRegistry, RegisteredCthulhu, RegistryEndpoint, RegistryError, TrustSignal,
+    AgentRegistry, LocalRegistry, RegisteredTentacle, RegistryEndpoint, RegistryError, TrustSignal,
 };
 use crate::rendezvous::{LocalRendezvous, RendezvousError, RendezvousRequest, RendezvousService};
 use crate::routing::{
@@ -49,7 +49,8 @@ use thiserror::Error;
 
 const BASE_TIME: u64 = 1_700_000_000;
 const SNAPSHOT_NAME: &str = "local-simulator";
-const SNAPSHOT_VERSION: u32 = 1;
+const SNAPSHOT_VERSION: u32 = 2;
+const LEGACY_SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +95,8 @@ pub struct GovernanceSimulationReport {
     pub tally: Tally,
     pub persona_arguments: Vec<PersonaArgumentReport>,
     pub vote_replacement_demonstrated: bool,
+    /// Legacy serialized field name. The simulated principals correspond to Tentacles; this is
+    /// not evidence of multiple Cthulhus and does not define future token governance.
     pub one_cthulhu_one_vote: bool,
 }
 
@@ -193,8 +196,12 @@ struct PersonaFixture {
 /// below its protected `state/council/` subtree by [`CouncilStateStore`].
 pub fn run_deterministic_simulation(data_dir: &Path) -> Result<SimulationReport, SimulationError> {
     let store = CouncilStateStore::new(data_dir)?;
-    if let Some(state) = store.load::<SimulatorState>(SNAPSHOT_NAME)? {
+    if let Some(mut state) = store.load::<SimulatorState>(SNAPSHOT_NAME)? {
+        let migrated = migrate_simulator_state(&mut state)?;
         validate_reloaded_state(&state)?;
+        if migrated {
+            store.save(SNAPSHOT_NAME, &state)?;
+        }
         return Ok(state.report);
     }
 
@@ -208,8 +215,8 @@ pub fn run_deterministic_simulation(data_dir: &Path) -> Result<SimulationReport,
 
     let mut registry = LocalRegistry::default();
     for (index, fixture) in fixtures.iter().enumerate() {
-        registry.register_or_update(RegisteredCthulhu {
-            id: fixture.identity.id.clone(),
+        registry.register_or_update(RegisteredTentacle {
+            id: fixture.tentacle.id.clone(),
             display_name: fixture.identity.display_name.clone(),
             registry_ref: fixture.identity.registry.clone(),
             endpoints: vec![RegistryEndpoint {
@@ -369,7 +376,7 @@ pub fn run_deterministic_simulation(data_dir: &Path) -> Result<SimulationReport,
             .get(&fixture.tentacle.id)
             .ok_or(SimulationError::Invariant("announced Tentacle disappeared"))?;
         let associated = registry.verify_endpoint_association(
-            &tracked.owner,
+            &tracked.id,
             &tracked.id,
             &tracked.xmtp_endpoint.inbox_id,
         )?;
@@ -1269,7 +1276,7 @@ fn simulation_stages(
     propagation: &PropagationSimulationReport,
 ) -> Vec<SimulationStage> {
     let values = [
-        ("Cthulhus join", format!("{} stable identities joined the local Council", joined.len())),
+        ("Tentacles join", format!("{} independently operated Tentacles joined the local Council", joined.len())),
         ("Tentacles announce", "each member advertised one stable Tentacle and incarnation".to_owned()),
         ("Heartbeats", "authenticated heartbeats established healthy liveness".to_owned()),
         ("Capability discovery", "public-safe model, tool, memory, privacy, capacity, and trust claims were indexed".to_owned()),
@@ -1280,7 +1287,7 @@ fn simulation_stages(
         ("Failover", format!("{} received generation {}; the old generation was fenced", routing.failed_over_tentacle, routing.lease_generations[1])),
         ("Governance proposal", "a versioned Agenda proposal was evaluated under the ratified Constitution".to_owned()),
         ("Persona arguments", format!("{} deterministic personas produced different policy positions", governance.persona_arguments.len())),
-        ("Voting", format!("one vote per Cthulhu yielded {} support, {} oppose, and {} abstain", governance.tally.support, governance.tally.oppose, governance.tally.abstain)),
+        ("Voting", format!("the legacy v1 Tentacle principals yielded {} support, {} oppose, and {} abstain", governance.tally.support, governance.tally.oppose, governance.tally.abstain)),
         ("Agenda outcome", format!("the Agenda concluded as {:?}", governance.outcome)),
         ("Council invitation", format!("{} accepted an invitation while {} rejected it", propagation.accepted_invitee, propagation.rejected_invitee)),
         ("Multi-level propagation", format!("the verified invitation tree reached {} levels", propagation.paths.last().map_or(0, Vec::len))),
@@ -1299,6 +1306,27 @@ fn simulation_stages(
             result,
         })
         .collect()
+}
+
+/// Upgrade the only historical persisted simulator shape that can be interpreted without
+/// guessing. Its unversioned LocalRegistry records are migrated explicitly from legacy
+/// coordination namespaces to their sole recorded Tentacle endpoint by LocalRegistry's v1
+/// decoder. Multiple-endpoint legacy records fail there rather than minting or selecting an
+/// identity silently.
+fn migrate_simulator_state(state: &mut SimulatorState) -> Result<bool, SimulationError> {
+    match state.schema_version {
+        SNAPSHOT_VERSION => Ok(false),
+        LEGACY_SNAPSHOT_VERSION if state.registry.migration().is_some() => {
+            state.schema_version = SNAPSHOT_VERSION;
+            Ok(true)
+        }
+        LEGACY_SNAPSHOT_VERSION => Err(SimulationError::Invariant(
+            "legacy simulator snapshot lacks explicit registry migration provenance",
+        )),
+        _ => Err(SimulationError::Invariant(
+            "persisted simulator metadata is incompatible",
+        )),
+    }
 }
 
 fn validate_reloaded_state(state: &SimulatorState) -> Result<(), SimulationError> {
@@ -1336,7 +1364,7 @@ fn validate_reloaded_state(state: &SimulatorState) -> Result<(), SimulationError
         identity.validate()?;
         if identities.insert(identity.id.clone(), identity).is_some() {
             return Err(SimulationError::Invariant(
-                "persisted Cthulhu identity is duplicated",
+                "persisted legacy Council profile is duplicated",
             ));
         }
     }
@@ -1356,29 +1384,34 @@ fn validate_reloaded_state(state: &SimulatorState) -> Result<(), SimulationError
             let tentacle = tentacles
                 .get(tentacle_id)
                 .ok_or(SimulationError::Invariant(
-                    "Cthulhu identity references a missing Tentacle",
+                    "legacy Council profile references a missing Tentacle",
                 ))?;
             if tentacle.owner != identity.id {
                 return Err(SimulationError::Invariant(
-                    "Cthulhu identity and Tentacle owner disagree",
+                    "legacy Council profile and Tentacle principal association disagree",
                 ));
             }
         }
-        let registered = state.registry.resolve(&identity.id)?;
-        if registered.display_name != identity.display_name {
-            return Err(SimulationError::Invariant(
-                "registry display metadata disagrees with durable identity",
-            ));
-        }
     }
-    if state.registry.records().count() != identities.len() {
+    if state.registry.records().count() != tentacles.len() {
         return Err(SimulationError::Invariant(
-            "registry and durable identity sets disagree",
+            "registry and durable Tentacle sets disagree",
         ));
     }
     for tentacle in tentacles.values() {
+        let registered = state.registry.resolve(&tentacle.id)?;
+        let legacy_profile = identities
+            .get(&tentacle.owner)
+            .ok_or(SimulationError::Invariant(
+                "Tentacle references a missing legacy Council profile",
+            ))?;
+        if registered.display_name != legacy_profile.display_name {
+            return Err(SimulationError::Invariant(
+                "registry display metadata disagrees with durable Tentacle profile",
+            ));
+        }
         if !state.registry.verify_endpoint_association(
-            &tentacle.owner,
+            &tentacle.id,
             &tentacle.id,
             &tentacle.xmtp_endpoint.inbox_id,
         )? {
@@ -1405,9 +1438,16 @@ fn validate_reloaded_state(state: &SimulatorState) -> Result<(), SimulationError
         ));
     }
     for member in &member_set {
-        if !state.registry.is_active(member)? {
+        let identity = identities.get(member).ok_or(SimulationError::Invariant(
+            "persisted Council member lacks its legacy coordination profile",
+        ))?;
+        let mut any_active = false;
+        for tentacle_id in &identity.tentacles {
+            any_active |= state.registry.is_active(tentacle_id)?;
+        }
+        if !any_active {
             return Err(SimulationError::Invariant(
-                "persisted Council member is not active in LocalRegistry",
+                "persisted Council member has no active Tentacle in LocalRegistry",
             ));
         }
     }
@@ -1638,6 +1678,48 @@ mod tests {
                 .join("state/council/local-simulator.json")
                 .is_file()
         );
+    }
+
+    #[test]
+    fn legacy_registry_snapshot_migrates_once_and_is_rewritten_as_v2() {
+        let data = tempfile::tempdir().unwrap();
+        let expected = run_deterministic_simulation(data.path()).unwrap();
+        let state_path = data.path().join("state/council/local-simulator.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+
+        let identities = value["identities"].as_array().unwrap().clone();
+        let current = value["registry"]["tentacles"].as_object().unwrap().clone();
+        let mut legacy_agents = serde_json::Map::new();
+        for (tentacle_id, mut record) in current {
+            let legacy_id = identities
+                .iter()
+                .find(|identity| {
+                    identity["tentacles"].as_array().is_some_and(|tentacles| {
+                        tentacles
+                            .iter()
+                            .any(|value| value.as_str() == Some(tentacle_id.as_str()))
+                    })
+                })
+                .and_then(|identity| identity["id"].as_str())
+                .unwrap();
+            record["id"] = serde_json::Value::String(legacy_id.to_owned());
+            legacy_agents.insert(legacy_id.to_owned(), record);
+        }
+        value["schemaVersion"] = serde_json::Value::from(LEGACY_SNAPSHOT_VERSION);
+        value["registry"] = serde_json::json!({"agents": legacy_agents});
+        std::fs::write(&state_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        assert_eq!(run_deterministic_simulation(data.path()).unwrap(), expected);
+        let migrated: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(migrated["schemaVersion"], SNAPSHOT_VERSION);
+        assert_eq!(migrated["registry"]["schemaVersion"], 2);
+        assert_eq!(
+            migrated["registry"]["migration"]["sourceSchemaVersion"],
+            LEGACY_SNAPSHOT_VERSION
+        );
+        assert!(migrated["registry"].get("agents").is_none());
     }
 
     #[test]

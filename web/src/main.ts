@@ -7,7 +7,8 @@ import {
   type StoredIdentity,
 } from "./identity";
 import { decryptIdentityBackup, encryptIdentityBackup } from "./identity-backup";
-import { initializePwaInstallPrompt } from "./pwa";
+import { initializePwaInstallPrompt, type PwaInstallController } from "./pwa";
+import { initializeLeaderboard, type LeaderboardController } from "./leaderboard";
 import type { ChatMessage, ChatSession } from "./transport";
 import { createXmtpSession } from "./xmtp-transport";
 import "./style.css";
@@ -53,6 +54,10 @@ const installTitleElement = requireElement<HTMLElement>("install-title");
 const installCopyElement = requireElement<HTMLElement>("install-copy");
 const installActionElement = requireElement<HTMLButtonElement>("install-action");
 const installDismissElement = requireElement<HTMLButtonElement>("install-dismiss");
+const installMenuElement = requireElement<HTMLButtonElement>("install-app");
+const updatePromptElement = requireElement<HTMLElement>("update-prompt");
+const updateActionElement = requireElement<HTMLButtonElement>("update-action");
+const updateDismissElement = requireElement<HTMLButtonElement>("update-dismiss");
 
 let identity: StoredIdentity | undefined;
 let session: ChatSession | undefined;
@@ -64,6 +69,8 @@ let connectedStatus = "XMTP connection ready";
 let sending = false;
 let delightTimer: ReturnType<typeof setTimeout> | undefined;
 const seenMessageIds = new Set<string>();
+let leaderboardController: LeaderboardController | undefined;
+let pwaController: PwaInstallController | undefined;
 
 bootstrap();
 
@@ -74,27 +81,66 @@ function bootstrap(): void {
   initializeMotionControl();
   setUiState("preparing", "preparing a local identity…");
   try {
-    // Identity creation happens before bot configuration or network access.
+    // Preserve the backup-critical boundary: identity creation precedes configuration or I/O.
     identity = loadOrCreateIdentity(environment);
     addressElement.textContent = identity.address;
   } catch (error) {
     fatalIdentity(error);
+    initializePublicFeatures();
     return;
   }
-  initializePwaInstallPrompt(
+  initializePublicFeatures();
+  void connect(false);
+}
+
+function initializePublicFeatures(): void {
+  try {
+    leaderboardController = initializeLeaderboard({
+      root: requireElement<HTMLElement>("tentacles"),
+      status: requireElement<HTMLElement>("leaderboard-state"),
+      source: requireElement<HTMLElement>("leaderboard-source"),
+      summary: requireElement<HTMLElement>("leaderboard-summary"),
+      refresh: requireElement<HTMLButtonElement>("leaderboard-refresh"),
+      search: requireElement<HTMLInputElement>("leaderboard-search"),
+      funding: requireElement<HTMLSelectElement>("leaderboard-funding"),
+      verification: requireElement<HTMLSelectElement>("leaderboard-verification"),
+      protocol: requireElement<HTMLSelectElement>("leaderboard-protocol"),
+      shared: requireElement<HTMLSelectElement>("leaderboard-shared"),
+      sort: requireElement<HTMLSelectElement>("leaderboard-sort"),
+      ranked: requireElement<HTMLElement>("leaderboard-list"),
+      suspendedSection: requireElement<HTMLElement>("leaderboard-suspended-section"),
+      suspended: requireElement<HTMLElement>("leaderboard-suspended"),
+      empty: requireElement<HTMLElement>("leaderboard-empty"),
+    });
+  } catch (error) {
+    console.error("The public leaderboard configuration is invalid", error);
+    requireElement<HTMLElement>("leaderboard-state").textContent = "UNAVAILABLE";
+    requireElement<HTMLElement>("leaderboard-source").textContent =
+      "Leaderboard configuration unavailable";
+  }
+  pwaController = initializePwaInstallPrompt(
     {
       card: installPromptElement,
       title: installTitleElement,
       copy: installCopyElement,
       action: installActionElement,
       dismiss: installDismissElement,
+      menuAction: installMenuElement,
     },
     {
       enabled: import.meta.env.PROD,
       onBackupRequested: () => dialogElement.showModal(),
+      onMenuRequested: () => {
+        if (dialogElement.open) dialogElement.close();
+        return settingsElement;
+      },
+      updateElements: {
+        card: updatePromptElement,
+        action: updateActionElement,
+        dismiss: updateDismissElement,
+      },
     },
   );
-  void connect(false);
 }
 
 async function connect(userInitiated: boolean): Promise<void> {
@@ -158,7 +204,7 @@ function renderMessage(message: ChatMessage, announce = true): void {
   bubble.className = `message ${message.mine ? "mine" : "theirs"}`;
   const sender = document.createElement("span");
   sender.className = "sender";
-  sender.textContent = message.mine ? "You" : "Cthuwu";
+  sender.textContent = message.mine ? "You · acolyte" : "Tentacle";
   bubble.append(sender, document.createTextNode(message.text));
   if (!announce) bubble.setAttribute("aria-live", "off");
   messagesElement.append(bubble);
@@ -330,7 +376,11 @@ async function closeSession(): Promise<void> {
   if (activeSession) await activeSession.close().catch(() => undefined);
 }
 
-window.addEventListener("pagehide", () => void closeSession());
+window.addEventListener("pagehide", () => {
+  leaderboardController?.dispose();
+  pwaController?.dispose();
+  void closeSession();
+});
 
 function fatalIdentity(error: unknown): void {
   console.error(error);

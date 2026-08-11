@@ -37,8 +37,8 @@ uwu_die() {
   exit 1
 }
 
-# Toolchain and build helpers must not inherit identity material or model credentials.
-# The final Rust process still receives them, and Rust applies its own sidecar allowlist.
+# Toolchain and build helpers must not inherit identity material or model credentials. Persistent
+# XMTP keys are file-backed and are removed from the final Rust process too.
 uwu_without_runtime_secrets() {
   env \
     -u UWUBOT_MODEL_API_KEY \
@@ -124,6 +124,10 @@ uwu_reject_unsafe_arguments() {
 uwu_validate_ambient_configuration() {
   [[ "${XMTP_DB_DIRECTORY+x}" != x ]] || \
     uwu_die "uwu.sh owns XMTP database placement; unset XMTP_DB_DIRECTORY and use UWUBOT_DATA_DIR"
+  [[ "${XMTP_WALLET_KEY+x}" != x ]] || \
+    uwu_die "XMTP_WALLET_KEY is forbidden; the owner-only persistent identity file owns this key"
+  [[ "${XMTP_DB_ENCRYPTION_KEY+x}" != x ]] || \
+    uwu_die "XMTP_DB_ENCRYPTION_KEY is forbidden; the owner-only persistent identity file owns this key"
 }
 
 uwu_parse_arguments() {
@@ -631,7 +635,8 @@ uwu_main() {
   uwu_log "starting uwubot on XMTP $UWU_XMTP_ENV"
   uwu_log "persistent state: $UWU_DATA_DIR"
   uwu_log "console activity shows XMTP delivery, thinking, and tool phases; message bodies and secrets stay private"
-  exec "$UWU_BINARY" "${UWU_BOT_ARGS[@]}"
+  exec env -u XMTP_WALLET_KEY -u XMTP_DB_ENCRYPTION_KEY \
+    "$UWU_BINARY" "${UWU_BOT_ARGS[@]}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

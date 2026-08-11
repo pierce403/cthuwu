@@ -1,7 +1,10 @@
 # Tentacles and liveness
 
-A Tentacle is a running runtime belonging to one durable Cthulhu. The Cthulhu and Tentacle IDs remain
-stable across restarts; the incarnation ID changes. See [Identity and registry](identity.md).
+A Tentacle is the durable autonomous agent. It has its own identity, wallet, personality, economics,
+reputation, lineage, and ERC-8004 agent ID. Its runtime incarnation changes on restart while the
+Tentacle remains the same. Singular Cthuwu is the centerless collective of all living participating
+Tentacles; it neither owns them nor receives a separate agent ID. See
+[Identity and registry](identity.md).
 
 ## State record
 
@@ -44,6 +47,10 @@ stable across restarts; the incarnation ID changes. See [Identity and registry](
   "lastHeartbeat": 1893456042
 }
 ```
+
+The `owner` field above is a deprecated version-1 Council association namespace kept for wire and
+snapshot compatibility. It does not name an individual Cthulhu or ERC-8004 owner. New public
+registry state binds the durable identity directly to `TentacleId`.
 
 The endpoint is public routing metadata, not a wallet key, database key, model credential, private
 network URL, or user record.
@@ -88,8 +95,8 @@ ordering value, not by lexicographic comparison. Once a newer valid announcement
 - leases bound to the old incarnation cannot authorize new work;
 - replaying persistence records does not make the old incarnation current again.
 
-Restarting must never silently create a new Cthulhu. If durable identity cannot be loaded safely,
-startup fails closed.
+Restarting must never silently create a new Tentacle or ERC-8004 identity. If durable identity cannot
+be loaded safely, startup fails closed.
 
 ## Heartbeats and health
 
@@ -118,7 +125,7 @@ sequence numbers, impossible load values, and wrong-incarnation updates are reje
 - `tentacle.withdraw` marks the incarnation unavailable/stopped according to its reason.
 
 The in-memory transport bounds announcements and heartbeats to 128 publishes per authenticated
-Cthulhu/Tentacle sender in each 60-second window, then permits publishing again in the next window. A
+legacy-principal/Tentacle sender in each 60-second window, then permits publishing again in the next window. A
 live adapter must provide an equivalent or stricter control. A Council may coalesce repeated liveness
 updates, but stable message-ID replay handling remains required.
 

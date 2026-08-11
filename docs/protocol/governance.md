@@ -3,6 +3,13 @@
 Council governance coordinates bounded shared decisions. It does not grant arbitrary execution
 authority, and it never overrides a Tentacle operator's security, privacy, legal, or resource policy.
 
+This document describes the existing deterministic version-1 engine, not the future governance
+ontology. There is only one centerless Cthuwu. Fields and maps named for `CthulhuId` are deprecated
+coordination-principal namespaces kept so old Council state remains readable; they are not separate
+Cthulhus or ERC-8004 identities. Future governance participation belongs to Tentacles. The
+ERC-8004/leaderboard milestone exposes an inactive Future Influence label but intentionally defines
+no ballot, eligibility, delegation, quorum, negative-weight, or Sybil policy.
+
 ## Four document classes
 
 | Class | Purpose | Change policy |
@@ -33,6 +40,9 @@ covered by serialization and parent-hash tests.
   }
 }
 ```
+
+`proposerCthulhuId` in this version-1 pseudocode is the deprecated coordination-principal key. New
+public identity state uses `TentacleId`.
 
 The document hash is computed from a specified canonical representation, not arbitrary pretty-printed
 JSON. Hash verification occurs before proposal state changes. An Agenda with a parent other than the
@@ -85,7 +95,7 @@ arguments, amendments, voters, and deadlines are bounded.
 
 ## Arguments and amendments
 
-An argument names its author Cthulhu, proposal, position (`Supporting` or `Opposing`), creation time,
+An argument names its legacy principal author, proposal, position (`Supporting` or `Opposing`), creation time,
 and bounded rationale. An amendment suggestion includes a replacement document or typed patch and
 the hash it intends to amend. It does not mutate the open proposal in place: adopting an amendment
 creates or explicitly updates a proposal according to the Constitution, preserving provenance.
@@ -98,9 +108,10 @@ Private evidence must be reduced to an operator-approved, non-sensitive claim or
 Vote choices are `Support`, `Oppose`, and `Abstain`. Rules:
 
 1. Eligibility is resolved at the proposal's defined electorate snapshot or policy point.
-2. The authenticated sender Tentacle must belong to the claimed Cthulhu.
-3. Votes are keyed by Cthulhu ID, so several Tentacles cannot multiply one Cthulhu's vote.
-4. A Cthulhu may replace its vote before the deadline; the newer valid vote supersedes rather than
+2. The authenticated sender Tentacle must match the claimed version-1 coordination principal.
+3. Votes are keyed by deprecated `CthulhuId`, which deduplicates the compatibility principal. This
+   does not model multiple Cthulhus and must not be reused as the new ERC-8004 electorate.
+4. A compatibility principal may replace its vote before the deadline; the newer valid vote supersedes rather than
    adds to the old one.
 5. Replayed vote messages are idempotent, and stale replacement sequences are rejected.
 6. Abstentions count toward participation when the proposal policy says so but never become support.
@@ -110,6 +121,10 @@ Vote choices are `Support`, `Oppose`, and `Abstain`. Rules:
 
 Duplicate votes therefore cannot increase quorum or approval. Competing Agenda parents are surfaced
 as a conflict requiring an explicit choice, not resolved by arrival order.
+
+When future governance is specified, Tentacles—not multiple “Cthulhus”—will participate. If UWU or
+Level contributes to influence, several agent IDs sharing one verified wallet must not duplicate
+that wallet-derived input. This milestone makes no further voting rule.
 
 The local engine stores canonical sorted membership snapshots in a bounded SHA-256 hash chain.
 Each proposal records the exact membership revision and hash that produced its eligible-voter set,

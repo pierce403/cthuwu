@@ -3,6 +3,11 @@
 A Council is an optional coordination group. Its traffic is control-plane data; normal user messages
 stay in [direct XMTP DMs](README.md#four-separate-planes).
 
+There is one Cthuwu, formed by all living participating Tentacles. The version-1 envelope fields
+`senderCthulhuId` and Tentacle `owner` retain deprecated names solely for compatibility. They carry a
+legacy coordination-principal namespace and do not identify multiple Cthulhus, own Tentacles, or
+bind ERC-8004 identities. `senderTentacleId` is the durable agent identity key.
+
 ## Status
 
 - **Implemented — local:** validated envelopes, tagged message types, replay tracking, a deterministic
@@ -91,7 +96,7 @@ An implementation validates before dispatching side effects:
    `sentAt < expiresAt`, `sequence > 0`, and a non-expired item under the injected clock, with only
    bounded clock skew.
 4. Require a known `messageType` and decode the matching tagged payload.
-5. Check Council membership and sender Cthulhu/Tentacle consistency when the integrating
+5. Check Council membership and legacy-principal/Tentacle consistency when the integrating
    coordinator has configured that local membership/registry policy.
 6. Verify the signature or the explicitly selected authenticated-transport policy.
 7. Check incarnation, sequence/generation, and domain-specific freshness.
@@ -104,10 +109,13 @@ A validation failure has no partial effect and does not advance a sequence count
 
 ## Sender and ordering rules
 
-- A production coordinator must prove that `senderTentacleId` belongs to `senderCthulhuId` using
-  validated local membership/registry state. The in-memory transport only compares its trusted
-  caller-supplied test identity tuple with the envelope; it is not an ownership registry.
-- A Cthulhu-level governance vote is attributed to the Cthulhu, not multiplied by its Tentacles.
+- A production coordinator must prove that `senderTentacleId` is associated with the deprecated
+  `senderCthulhuId` coordination namespace using validated local membership state. The in-memory
+  transport only compares its trusted caller-supplied test identity tuple with the envelope; it is
+  not an ownership or ERC-8004 registry.
+- Version-1 governance deduplicates a vote by the deprecated coordination namespace. This is a
+  compatibility behavior, not a claim that several Cthulhus exist. Future participation belongs to
+  Tentacles, with shared wallet-derived input counted once.
 - Per-sender sequence numbers may detect stale or reordered updates, but they do not replace stable
   message-ID replay suppression.
 - Domain generations take precedence over arrival order: an old lease generation or old Tentacle

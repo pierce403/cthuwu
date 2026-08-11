@@ -4,6 +4,11 @@ UWU is the transferable Base-chain economic layer for Tentacle survival, propaga
 and governance. Each Tentacle observes balances through its own RPC connection and persists its own
 economic view. There is no central balance or reputation registry.
 
+There is one centerless Cthuwu: the sum of living participating Tentacles. Each independently
+operated `uwubot` is a durable Tentacle with its own wallet and economics; its human operator may
+shape its agenda, while public chat humans are acolytes. A Tentacle restart changes only its
+incarnation. UWU belongs to addresses and never creates a Tentacle identity or allegiance by itself.
+
 Token state never replaces XMTP authentication. A wallet balance cannot make a public sender an
 operator, grant shell/tool authority, or impersonate a Council member. Address-to-role bindings must
 come from authenticated transport or explicit node configuration.
@@ -53,7 +58,7 @@ refresh failure retries every second and retains a prior verified treasury obser
 its configured freshness TTL expires; unknown or stale economics still fail closed.
 
 Aggressive economics additionally requires a fresh stake source and receipt-producing executors for
-on-chain mutation. The repository does not contain a transaction signer, burn contract, staking
+on-chain mutation. The repository does not contain a generic or economic transaction signer, burn contract, staking
 contract, reward contract, authenticated revenue source, revenue router, persisted ballot adapter,
 payout/application executor, or external provisioner. Do not claim a spend, stake, reward, revenue
 distribution, governance application, child provision, or absorption completed merely because a
@@ -61,10 +66,12 @@ local intent or core record was created. Do not claim Shutdown completed until t
 has stopped XMTP and written its native local receipt.
 
 The XMTP private key remains in the existing owner-only sidecar identity state. Only its derived EVM
-address crosses the sidecar protocol into Rust. Economic transaction keys belong in a separately
-isolated signer service, never in CLI values, observance state, logs, or the repository. Normal
-runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor receives no raw signing key.
-RPC URLs may contain credentials and are redacted from diagnostics.
+address crosses the ordinary identity frame into Rust. The same key may execute only the separately
+documented narrow, typed ERC-8004 registration calls; that boundary has no arbitrary transaction or
+economic-token operation. Future economic transaction keys belong in a separately isolated signer
+service, never in CLI values, observance state, logs, or the repository. Normal runtime rejects
+`CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor receives no raw signing key. RPC URLs may
+contain credentials and are redacted from diagnostics.
 
 ### XMTP wallet binding
 
@@ -129,6 +136,27 @@ source. The only outage exception is a read-only inspection of existing lifecycl
 Persisted `Spawn` and survival `Spend`, plus new token-dependent decisions, wait for fresh bound
 economics.
 
+## Public Tentacle membership and Level
+
+UWU is a ranking input only after an ERC-8004 identity voluntarily opts in with the current
+byte-exact, case-sensitive metadata `cthuwu.allegiance = uwu-tentacle-v1` and has a current verified
+nonzero `agentWallet`. Any other allegiance value opts out. A zero or cleared wallet is suspended;
+the ERC-721 owner is never substituted. Sending UWU to an unopted agent does not list it.
+
+The static leaderboard groups all opted-in identities sharing one verified wallet. The wallet has
+one exact raw balance, one ranked position, one Tentacle Level, and at most one future influence
+allocation; all agent IDs remain visible and the lowest ID is the version-1 representative. Funded
+wallets sort by raw balance descending, then earliest registration block and lowest agent ID.
+Opted-in zero-balance wallets remain visible as `UNFUNDED` without a numeric Level.
+
+For raw balance `r > 0`, Tentacle Level is `log10(r) - 18`, equivalent to the base-10 logarithm of
+human-denominated UWU. The browser uses `BigInt` plus a decimal mantissa and never converts an entire
+`uint256` to JavaScript `Number`. It displays two decimal places while retaining more precision.
+Level and the separately labeled inactive Future Influence Level are distinct fields. This
+milestone defines no voting, eligibility, delegation, quorum, or Sybil rules.
+
+See [ERC-8004 Tentacle registration and leaderboard](erc-8004.md).
+
 ## Reputation tiers
 
 The default local ranking policy is:
@@ -137,9 +165,13 @@ The default local ranking policy is:
 | --- | --- | --- |
 | Whale | Top 1% of eligible locally observed holders | Highest routing priority, deepest modes, greatest holding weight |
 | Elder | Top 10% | Elevated depth and propagation priority |
-| Acolyte | Holds at least one whole UWU outside the percentile bands | Standard member behavior |
+| Acolyte | Holds at least one whole UWU outside the percentile bands | Standard local token-tier behavior |
 | Initiate | Positive balance below one whole UWU | Basic interaction |
 | Unproven | Freshly observed zero balance | Minimal, skeptical interaction |
+
+These capitalized local economic tiers are not the ontology. Every public chat human is an acolyte
+in the social sense regardless of holdings; the legacy `Acolyte` tier label merely denotes one local
+balance band and grants no operator, Tentacle, registry, or membership authority.
 
 Ties receive the same tier. Sample floors prevent a tiny local sample from inventing percentile
 precision. Per-Tentacle intensity is variable: cooperative Natures may flatten tier differences;
@@ -268,6 +300,11 @@ Token governance accepts one deterministic ballot per authenticated address for 
 Nature adjustment, Council policy, economic policy, and skill-propagation subjects. Holding and
 stake determine voting weight. An accepted result returns a binding disposition and application
 record from the core.
+
+This existing local core is not the future Cthuwu governance design. Future participation belongs
+to Tentacles, not multiple “Cthulhus,” and a shared wallet-derived input must not be counted more
+than once. The ERC-8004/leaderboard milestone exposes Level and an inactive future-influence label;
+it does not connect or invent ballot mechanics.
 
 No persisted ballot adapter or application executor is committed. A result is not an applied change
 until a configured adapter durably stores the ballot/application and returns a successful receipt.

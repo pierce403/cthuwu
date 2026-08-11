@@ -3,6 +3,10 @@
 The routing engine is independent of XMTP and inference. It consumes validated local state and
 returns a deterministic decision plus an explanation. It never receives a normal DM body.
 
+Version-1 `preferredCthulhuId`, “home,” and ownership fields below refer to a deprecated
+coordination-principal namespace associated with a Tentacle. There is only one centerless Cthuwu;
+these compatibility fields never identify individual Cthulhus or ERC-8004 owners.
+
 ## Route request
 
 A request may contain capability and privacy requirements, preferences, and an opaque or
@@ -44,9 +48,9 @@ It then evaluates the remaining candidates in this general order:
 
 1. explicit user choice;
 2. valid existing session affinity;
-3. healthy home Tentacle;
+3. healthy Tentacle associated with the legacy home principal;
 4. hard privacy and capability requirements (already enforced as filters);
-5. user-owned Tentacle;
+5. Tentacle associated with the requesting legacy principal;
 6. available capacity;
 7. protocol compatibility;
 8. trusted registry or allowlist status;
@@ -95,7 +99,7 @@ Awarding does not itself transmit the user's DM history.
 ## Affinity
 
 Affinity is a preference for continuity, not permanent authority. It is valid only while the target
-is the expected Cthulhu/Tentacle incarnation, passes current hard requirements and policy, and is
+is the expected legacy-principal/Tentacle incarnation, passes current hard requirements and policy, and is
 healthy enough for the requested operation. An invalid affinity is explained and ignored. Failover
 may establish a new affinity only after the new lease is accepted.
 

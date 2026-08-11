@@ -2,6 +2,7 @@ use crate::{
     config::BlockchainConfig,
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
+    erc8004::RegistrationOperatorControl,
     evolution_runtime::{
         ConversationObservation, EvolutionRuntime, PublicTurnStart, PublicTurnToken,
     },
@@ -33,6 +34,7 @@ pub struct UwUBot {
     token_eye: Option<Arc<TokenEye>>,
     blockchain: BlockchainConfig,
     venice_key_reward_whole: u64,
+    registry_control: Option<Arc<dyn RegistrationOperatorControl>>,
 }
 
 struct AuthenticatedMessage<'a> {
@@ -91,6 +93,7 @@ impl UwUBot {
             token_eye: None,
             blockchain: BlockchainConfig::default(),
             venice_key_reward_whole: 1,
+            registry_control: None,
         }
     }
 
@@ -111,6 +114,14 @@ impl UwUBot {
 
     pub fn with_venice_key_reward(mut self, whole_tokens: u64) -> Self {
         self.venice_key_reward_whole = whole_tokens.max(1);
+        self
+    }
+
+    pub fn with_registry_control(
+        mut self,
+        registry_control: Arc<dyn RegistrationOperatorControl>,
+    ) -> Self {
+        self.registry_control = Some(registry_control);
         self
     }
 
@@ -251,6 +262,12 @@ impl UwUBot {
 
         let response = match role {
             PrincipalRole::Operator => {
+                if message.text.trim().to_ascii_lowercase().starts_with("/registry-")
+                    && let Some(control) = &self.registry_control
+                    && let Some(response) = control.handle(message.text).await
+                {
+                    return Ok(Some(limit_response(response, role)));
+                }
                 let (evolution_response, requires_recovery) = {
                     let mut evolution = self
                         .evolution
@@ -804,6 +821,9 @@ fn is_operator_only_command(command: &str) -> bool {
         .map(|(name, _)| name)
         .unwrap_or(command.trim())
         .to_ascii_lowercase();
+    if name.starts_with("registry-") {
+        return true;
+    }
     matches!(
         name.as_str(),
         "exec"
@@ -1683,10 +1703,12 @@ mod tests {
         let spawn = send(&bot, 8, id, "/spawn child-owned").await;
         let gossip = send(&bot, 9, id, "/gossip-status").await;
         let share = send(&bot, 10, id, "/share-skill private-memory").await;
-        let help = send(&bot, 11, id, "/help").await;
+        let registry = send(&bot, 11, id, "/registry-register").await;
+        let help = send(&bot, 12, id, "/help").await;
+        assert!(registry.contains("can't run node tools"));
         for response in [
             welcome, denied, files, users, user, provider, model, nature, spawn, gossip, share,
-            help,
+            registry, help,
         ] {
             assert!(!response.contains("/profile"));
             assert!(!response.contains("/exec"));
@@ -1694,6 +1716,7 @@ mod tests {
         }
         assert!(tools.calls.lock().unwrap().is_empty());
         assert!(!root.path().join("owned").exists());
+        assert!(is_operator_only_command("registry-status"));
     }
 
     #[tokio::test]

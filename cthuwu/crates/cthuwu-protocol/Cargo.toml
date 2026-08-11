@@ -2,7 +2,7 @@
 name = "cthuwu-protocol"
 version = "0.1.0"
 edition = "2024"
-description = "Transport-independent protocol types for the Council of Cthulhus"
+description = "Transport-independent coordination types for Tentacles composing Cthuwu"
 license = "Apache-2.0"
 
 [features]

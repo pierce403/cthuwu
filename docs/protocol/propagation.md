@@ -4,6 +4,11 @@ Propagation grows a Council and distributes approved, non-private information th
 referral tree or DAG. “MLM-style” describes multi-level referral topology, not financial recruitment:
 there are no tokens, payments, investment claims, or rewards for raw headcount.
 
+The version-1 `originCthulhuId`, `inviterCthulhuId`, `inviteeCthulhuId`,
+`senderCthulhuId`, recipient, contributor, and beneficiary values below are deprecated coordination
+principal namespaces retained for wire/snapshot compatibility. There is only one centerless Cthuwu;
+those values describe Tentacle principals, never several Cthulhus, ownership, or ERC-8004 subjects.
+
 ## Allowed payload classes
 
 - Council invitations;
@@ -70,7 +75,7 @@ Before forwarding, every Tentacle independently verifies:
 1. envelope sender, supported version, stable message ID, expiry, and rate limit;
 2. campaign existence, payload type/hash, visibility, policy version, and non-revocation;
 3. inviter/parent matches the last provenance hop;
-4. the local Cthulhu does not already occur in the path;
+4. the local compatibility principal does not already occur in the path;
 5. no self-referral, repeated edge, referral cycle, or duplicate forwarding key exists;
 6. the next depth and parent fan-out remain within policy;
 7. origin, sender, and invitee are not blocked and the local member has not opted out;
@@ -83,7 +88,7 @@ Upstream approval never bypasses these checks. Invalid items are not partially r
 ## Provenance
 
 The wire `PropagationItem` retains the full bounded path and ordered hop list. Each hop binds its
-sender Cthulhu and Tentacle, recipient Cthulhu, Council message ID, forwarding time, and payload
+legacy sender principal and Tentacle, recipient principal, Council message ID, forwarding time, and payload
 hash. Its SHA-256 `chainHash` covers the campaign/item identity, content kind, payload, origin,
 parent, depth, complete path and hops, creation/expiry, and policy. Validation rejects reordered,
 duplicated, truncated, expired, or path-inconsistent hops even if an attacker recomputes a hash.
@@ -196,6 +201,10 @@ score.
 ```
 
 No current credit can be exchanged for money or governance votes.
+
+The `cthulhuId`-shaped contributor fields in this version-1 example are compatibility keys. Any
+future economic or governance participation attaches to Tentacles, and shared wallet-derived value
+must not be counted more than once.
 
 ## Revocation, persistence, and replay
 

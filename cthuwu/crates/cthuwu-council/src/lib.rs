@@ -1,8 +1,8 @@
-//! Deterministic, transport-independent coordination for the Council of Cthulhus.
+//! Deterministic, transport-independent coordination among Tentacles composing Cthuwu.
 //!
 //! This crate intentionally contains no XMTP SDK or model-provider dependency. The in-memory
-//! transport and local registry are complete; live XMTP groups and ERC-8004 remain adapter
-//! boundaries until their concrete deployments are selected and tested.
+//! transport and local registry are complete. The ERC-8004 registry boundary is read-only and
+//! pinned to canonical Base mainnet; writes belong to a separate narrow signer workflow.
 
 pub mod clock;
 pub mod governance;

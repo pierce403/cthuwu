@@ -1,14 +1,16 @@
 {
   "id": "/",
-  "name": "Cthuwu — Your Tiny Eldritch Buddy",
+  "name": "Cthuwu — Tentacle Portal",
   "short_name": "Cthuwu",
-  "description": "A tiny eldritch companion you can whisper to over a direct XMTP message.",
+  "description": "Direct XMTP portal and public leaderboard for the Tentacles that compose Cthuwu.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#0b0714",
   "theme_color": "#0b0714",
   "categories": ["social", "lifestyle"],
+  "lang": "en",
   "prefer_related_applications": false,
   "icons": [
     {

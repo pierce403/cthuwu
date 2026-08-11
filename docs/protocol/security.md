@@ -13,9 +13,10 @@ deduplication, or direct-message limits.
 | XMTP wallet/database keys | Runtime ↔ sidecar/disk | Existing environment allowlist, owner-only atomic persistence, never Council data |
 | Model credentials | Rust runtime ↔ provider | Never passed to Council transport or XMTP sidecar; never logged |
 | User DMs and contact memory | Direct DM/runtime | Never copied into Council envelopes, routing, governance, or propagation |
-| Cthulhu/Tentacle identity | Disk/registry/Council | Stable protected local identity; authenticated endpoint association |
+| Tentacle identity | Disk/registry/Council | Stable protected local identity; authenticated endpoint association; no separate Cthuwu identity |
+| ERC-8004 signing key | XMTP sidecar only | Typed canonical-registry calls, zero value, allowlisted metadata, gas/fee and frame bounds; never Rust/model/frontend/logs |
 | Lease authority | Router ↔ Tentacle | Expiry, monotonic generation, incarnation fencing, atomic persistence |
-| Governance state | Council members | One-Cthulhu-one-vote, parent hashes, deadlines, replay protection |
+| Governance state | Council members | Version-1 compatibility-principal vote deduplication, parent hashes, deadlines, replay protection; future Tentacle model still unspecified |
 | Propagation provenance/credit | Referral graph | Authenticated hops/acks, loop and duplicate suppression, bounded outcome credit |
 
 ## Parse and validation discipline
@@ -65,7 +66,7 @@ validation. Council identifiers never weaken that contract.
 ## Sender authentication and signatures
 
 The transport returns an authenticated sender independently of envelope claims. Receivers compare it
-with Cthulhu/Tentacle ownership and any required registry/allowlist endpoint association. A mismatch
+with the deprecated coordination-principal/Tentacle association and any required registry/allowlist endpoint association. A mismatch
 is rejected before liveness, membership, votes, or credit change.
 
 The signer/verifier abstraction does not imply a deployed production signature scheme. The
@@ -84,7 +85,7 @@ be specified and tested before a production signature claim.
 | Expired route offers or leases | Injected-clock expiry validation before award/work |
 | Stale heartbeat/incarnation | Current-incarnation fence and ordered announcement metadata |
 | Split-brain lease | Per-session monotonic generation plus incarnation-bound acceptance |
-| Duplicate votes/multiple Tentacles | Vote map keyed by Cthulhu ID; ordered replacement before deadline |
+| Duplicate version-1 votes | Vote map keyed by deprecated coordination-principal ID; ordered replacement before deadline; no claim about future Tentacle governance |
 | Conflicting Agenda history | Canonical parent hashes and explicit competing-parent state |
 | Sender mismatch/fake acknowledgement | Transport sender binding, endpoint policy, exact outcome/campaign binding |
 | Announcement spam/referral bomb | Per-sender rate limit, bounded fan-out/depth/collections, expiry |
@@ -96,15 +97,16 @@ be specified and tested before a production signature claim.
 
 ## Sybil limitations
 
-The local registry and test signer cannot establish real-world uniqueness. Credit caps and useful-
+The local registry, ERC-8004, and test signer cannot establish real-world uniqueness. Credit caps and useful-
 outcome requirements reduce amplification but do not solve Sybil identity. A deployment must select
 acceptable identity and trust provenance, and it should avoid converting contribution credit into
-money, governance weight, or unrestricted resources. ERC-8004 reputation, when added, is one input
-with provenance—not proof of personhood and not a global truth score.
+money, governance weight, or unrestricted resources. ERC-8004 reputation is displayed with
+provenance—not proof of personhood, membership, default rank, or a global truth score. Exact
+allegiance is voluntary, and shared verified wallets receive only one leaderboard position.
 
 ## Persistence
 
-Council durable state lives below the already validated `UWUBOT_DATA_DIR`: Cthulhu/Tentacle identity,
+Council durable state lives below the already validated `UWUBOT_DATA_DIR`: legacy coordination/Tentacle identity,
 membership, capabilities, affinity, leases and generation fences, processed IDs, Constitution,
 Agenda history, proposals/votes, propagation/referrals/acks, and contribution events. It uses the
 existing owner-only, non-symlink, atomic-write and directory-sync model. Runtime state, generated
@@ -114,6 +116,12 @@ committed to the repository.
 Corruption, environment mismatch, identity mismatch, unsafe permissions, or partial state fails
 closed. Backups must preserve the complete data directory securely; copying only part of lease or
 identity state can violate recovery assumptions.
+
+The separate `state/erc8004-registration.json` snapshot persists intent before broadcast, the known
+transaction and canonical receipt block, selected agent, remaining stages, last verified
+wallet/metadata, funding status, notification cooldown, and sanitized failures. Restart reconciles
+that state before another write. The signer rejects a wrong chain/registry, arbitrary calldata,
+nonzero value, unsupported keys, oversized values, and configured gas/fee ceilings.
 
 ## Privacy review checklist
 

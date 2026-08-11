@@ -29,6 +29,73 @@ function message(): Omit<InboundText, "type" | "id" | "deadlineUnixMs"> {
 }
 
 describe("JSONL uwubot bridge", () => {
+  it("delivers bounded notices only to an exact operator inbox outside reply matching", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const notices: Array<{ inboxId: string; text: string }> = [];
+    const acknowledgement = nextLine(output);
+    const bridge = new JsonlBridge({
+      input,
+      output,
+      onOperatorNotice: ({ inboxId, text }) => {
+        notices.push({ inboxId, text });
+      },
+    });
+    input.write(
+      `${JSON.stringify({
+        type: "operator_notice",
+        noticeId: "notice:one",
+        inboxId: "ab".repeat(32),
+        text: "fund the exact Base address",
+      })}\n`,
+    );
+    input.write(
+      `${JSON.stringify({
+        type: "operator_notice",
+        noticeId: "notice:invalid",
+        inboxId: "public-user",
+        text: "must never be delivered",
+      })}\n`,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(notices).toEqual([
+      { inboxId: "ab".repeat(32), text: "fund the exact Base address" },
+    ]);
+    expect(JSON.parse(await acknowledgement)).toEqual({
+      type: "operator_notice_result",
+      noticeId: "notice:one",
+      delivered: true,
+    });
+    bridge.close();
+  });
+
+  it("acknowledges a failed XMTP notice delivery without claiming success", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const acknowledgement = nextLine(output);
+    const bridge = new JsonlBridge({
+      input,
+      output,
+      onOperatorNotice: async () => {
+        throw new Error("XMTP send failed");
+      },
+    });
+    input.write(
+      `${JSON.stringify({
+        type: "operator_notice",
+        noticeId: "notice:failed",
+        inboxId: "ab".repeat(32),
+        text: "fund the exact Base address",
+      })}\n`,
+    );
+    expect(JSON.parse(await acknowledgement)).toEqual({
+      type: "operator_notice_result",
+      noticeId: "notice:failed",
+      delivered: false,
+    });
+    bridge.close();
+  });
+
   it("emits one inbound request and resolves a matching reply", async () => {
     const input = new PassThrough();
     const output = new PassThrough();

@@ -2,7 +2,7 @@
 name = "cthuwu-council"
 version = "0.1.0"
 edition = "2024"
-description = "Local Council of Cthulhus coordination engine"
+description = "Local coordination engine for Tentacles composing Cthuwu"
 license = "Apache-2.0"
 
 [dependencies]

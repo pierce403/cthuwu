@@ -27,6 +27,12 @@ pub enum PrivacyPreference {
 }
 
 /// Bounded decision weights used for deterministic policy behavior, never autonomous goal creation.
+/// Legacy v1 Council coordination profile retained for serialized-state compatibility.
+///
+/// Despite the historical name, this is not an identity for an individual Cthulhu: Cthuwu is the
+/// singular collective. New durable public identity and registry code must describe each
+/// independently operated Tentacle with [`TentacleId`]. The `registry` field here is legacy
+/// coordination metadata and must not be interpreted as ownership of a Tentacle's ERC-8004 ID.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionTendencies {
@@ -347,6 +353,8 @@ impl SamplePersona {
 }
 
 /// Public-safe operator metadata. Secrets and private endpoints have no representation here.
+/// Optional public-safe policy context supplied by the human operator. The operator can shape the
+/// Tentacle's agenda but does not own Cthuwu or acquire the Tentacle's public identity.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperatorMetadata {
@@ -375,6 +383,9 @@ pub struct CthulhuIdentity {
     pub registry: Option<RegistryRef>,
     pub tentacles: Vec<TentacleId>,
 }
+
+/// Semantically explicit name for code that must still handle the v1 Council profile shape.
+pub type LegacyCouncilIdentity = CthulhuIdentity;
 
 impl CthulhuIdentity {
     pub fn validate(&self) -> Result<(), ValidationError> {
@@ -467,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_requires_at_least_one_stable_tentacle() {
+    fn legacy_coordination_profile_requires_at_least_one_stable_tentacle() {
         let identity = CthulhuIdentity {
             schema_version: ProtocolVersion::V1_0,
             id: CthulhuId::new("cthulhu_archivist").unwrap(),

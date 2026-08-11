@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalDbEncryptionKey,
   canonicalWalletKey,
+  loadAgentIdentity,
   loadOrCreateIdentity,
   parseEnvironment,
-  prepareAgentEnvironment,
   walletAddressFromKey,
 } from "./identity.js";
 
@@ -129,20 +129,37 @@ describe("XMTP identity persistence", () => {
     expect(await readFile(identityPath, "utf8")).toBe("not-json");
   });
 
-  it("prepares the exact environment expected by Agent.createFromEnv", async () => {
+  it("loads the agent identity without placing private keys in the environment", async () => {
     const dataDir = await temporaryDirectory();
     const environment: NodeJS.ProcessEnv = {
       UWUBOT_DATA_DIR: dataDir,
       UWUBOT_XMTP_ENV: "local",
-      XMTP_WALLET_KEY: `0x${"44".repeat(32)}`,
-      XMTP_DB_ENCRYPTION_KEY: "55".repeat(32),
     };
 
-    const identity = await prepareAgentEnvironment(environment);
-    expect(environment.XMTP_ENV).toBe("local");
-    expect(environment.XMTP_WALLET_KEY).toBe(identity.walletKey);
-    expect(environment.XMTP_DB_ENCRYPTION_KEY).toBe(identity.dbEncryptionKey);
-    expect(environment.XMTP_DB_DIRECTORY).toBe(identity.dbDirectory);
+    const identity = await loadAgentIdentity(environment);
+    expect(identity.environment).toBe("local");
+    expect(environment.XMTP_ENV).toBeUndefined();
+    expect(environment.XMTP_WALLET_KEY).toBeUndefined();
+    expect(environment.XMTP_DB_ENCRYPTION_KEY).toBeUndefined();
+    expect(environment.XMTP_DB_DIRECTORY).toBeUndefined();
+  });
+
+  it("rejects private key environment variables instead of importing them", async () => {
+    const dataDir = await temporaryDirectory();
+    await expect(
+      loadAgentIdentity({
+        UWUBOT_DATA_DIR: dataDir,
+        UWUBOT_XMTP_ENV: "local",
+        XMTP_WALLET_KEY: `0x${"44".repeat(32)}`,
+      }),
+    ).rejects.toThrow("never environment variables");
+    await expect(
+      loadAgentIdentity({
+        UWUBOT_DATA_DIR: dataDir,
+        UWUBOT_XMTP_ENV: "local",
+        XMTP_DB_ENCRYPTION_KEY: "55".repeat(32),
+      }),
+    ).rejects.toThrow("never environment variables");
   });
 });
 

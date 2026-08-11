@@ -3,6 +3,10 @@
 A lease authorizes exactly one Tentacle incarnation to handle one session for a bounded time. Leases
 prevent two runtimes from both believing they own new work after restart or failover.
 
+The version-1 `assignedCthulhuId` and `issuerCthulhuId` fields below are deprecated coordination
+principal namespaces retained for compatibility. They do not denote multiple Cthulhus or ERC-8004
+owners; the authoritative runtime target remains the stable Tentacle plus incarnation/generation.
+
 ## Lease record
 
 The following is a conceptual state sketch combining the wire and local engine vocabulary; it is not

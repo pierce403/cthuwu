@@ -23,6 +23,7 @@ impl XmtpEndpoint {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Incarnation {
+    /// Runtime-generation identifier. Changing it never changes the durable Tentacle identity.
     pub id: IncarnationId,
     pub generation: u64,
 }
@@ -83,7 +84,10 @@ pub struct TentacleHealth {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Tentacle {
+    /// Durable autonomous agent identity; this is stable across incarnation restarts.
     pub id: TentacleId,
+    /// Legacy v1 Council principal association, retained for wire compatibility only.
+    /// It does not mean that Cthuwu owns this Tentacle and must not key ERC-8004 state.
     pub owner: CthulhuId,
     pub xmtp_endpoint: XmtpEndpoint,
     pub incarnation: Incarnation,
@@ -302,6 +306,7 @@ mod tests {
     #[test]
     fn stale_incarnation_cannot_revive_tentacle() {
         let mut tentacle = tentacle();
+        let durable_id = tentacle.id.clone();
         let replacement = TentacleLifecycleUpdate {
             tentacle_id: tentacle.id.clone(),
             owner: tentacle.owner.clone(),
@@ -318,6 +323,8 @@ mod tests {
             last_heartbeat: time(200),
         };
         tentacle.apply_update(&replacement).unwrap();
+        assert_eq!(tentacle.id, durable_id);
+        assert_eq!(tentacle.incarnation.generation, 2);
 
         let stale = TentacleLifecycleUpdate {
             incarnation: Incarnation {

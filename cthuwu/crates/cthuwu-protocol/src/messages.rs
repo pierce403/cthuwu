@@ -122,6 +122,7 @@ impl fmt::Display for MessageType {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CouncilMemberAnnounce {
+    /// Legacy v1 coordination profile, not an announcement of another Cthulhu.
     pub member: crate::CthulhuIdentity,
 }
 

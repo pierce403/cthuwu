@@ -1,13 +1,17 @@
-const CACHE_NAME = "cthuwu-offline-v1";
+const CACHE_NAME = "cthuwu-shell-v2";
 const OFFLINE_PAGE = "/offline.html";
-const OFFLINE_ASSETS = [OFFLINE_PAGE, "/icons/cthuwu-192.png"];
+const OFFLINE_ASSETS = [
+  OFFLINE_PAGE,
+  "/offline-leaderboard.js",
+  "/manifest.webmanifest",
+  "/icons/cthuwu-192.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(OFFLINE_ASSETS))
-      .then(() => self.skipWaiting()),
+      .then((cache) => cache.addAll(OFFLINE_ASSETS)),
   );
 });
 
@@ -18,12 +22,20 @@ self.addEventListener("activate", (event) => {
       .then((names) =>
         Promise.all(
           names
-            .filter((name) => name.startsWith("cthuwu-offline-") && name !== CACHE_NAME)
+            .filter(
+              (name) =>
+                (name.startsWith("cthuwu-offline-") || name.startsWith("cthuwu-shell-")) &&
+                name !== CACHE_NAME,
+            )
             .map((name) => caches.delete(name)),
         ),
       )
       .then(() => self.clients.claim()),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -34,7 +46,9 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(() => caches.match(OFFLINE_PAGE)));
+    event.respondWith(
+      fetch(request).catch(async () => (await caches.match(OFFLINE_PAGE)) ?? Response.error()),
+    );
     return;
   }
 

@@ -94,7 +94,8 @@ cannot force a Tentacle to disclose anything forbidden by local policy.
 
 ## Capability references
 
-A registry may hold a content hash or locator for intentionally public capabilities. The Council
+A registry may hold a content hash or locator for one Tentacle's intentionally public capabilities. The Council
 still validates the resolved document, its provenance, bounds, version, and endpoint association.
 Mutable load and liveness remain Council-local and never go on-chain. See
-[Identity and registry](identity.md) and [Routing](routing.md).
+[Identity and registry](identity.md), [ERC-8004 Tentacle registration](../erc-8004.md), and
+[Routing](routing.md).

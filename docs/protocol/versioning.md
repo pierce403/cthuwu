@@ -19,6 +19,13 @@ represented by a structured `ProtocolVersion { major, minor }`, not a floating-p
 For this milestone, receivers accept exactly `1.0`. A syntactically valid `1.1`, `2.0`, missing
 version, or alternate protocol name is unsupported until explicitly implemented and enabled.
 
+Version 1 retains deprecated `CthulhuId`, `CthulhuIdentity`, `senderCthulhuId`, voter, and `owner`
+names from the former ontology. They now mean a legacy Tentacle coordination-principal namespace,
+not multiple Cthulhus and not an ERC-8004 subject. Singular Cthuwu is the centerless collective of
+all living participating Tentacles. Renaming those wire fields requires a major protocol version;
+until then, implementations must keep this semantic boundary explicit and must not silently rewrite
+ambiguous state.
+
 ## Compatibility rules
 
 - A **major** version change may alter required semantics, validation, canonicalization, security
@@ -73,11 +80,13 @@ test signer is implemented; no production signature claim is made.
 
 ## Persistence migrations
 
-The simulator's combined snapshot carries a schema version and rejects incompatible state. Explicit
-migrations for independently persisted production records are planned; they must be bounded and
-atomic, and unknown newer state must fail closed rather than be partially loaded. Replay markers and
-greatest lease generations must survive any future migration unchanged so an upgrade cannot reapply
-old effects or revive stale authority.
+The simulator's combined snapshot carries a schema version and rejects incompatible state. Council
+snapshot version 2 and `LocalRegistry` version 2 explicitly migrate a version-1 legacy profile only
+when it maps unambiguously to exactly one Tentacle, and retain migration provenance; ambiguous
+multi-Tentacle ownership shapes fail closed. The runtime ERC-8004 snapshot similarly migrates only a
+matching canonical-chain, wallet-bound version-1 record. Unknown newer state must fail closed rather
+than be partially loaded. Replay markers and greatest lease generations survive migration unchanged
+so an upgrade cannot reapply old effects or revive stale authority.
 
 ## Existing deployment compatibility
 
@@ -91,5 +100,7 @@ Council mode is opt-in. With no Council configuration:
   required.
 
 The local Council simulator does not establish live XMTP interoperability. The XMTP-group boundary
-remains **experimental**, live Council transport remains **planned**, and the ERC-8004 adapter remains
-isolated until a deployment and compatible revision are explicitly configured and tested.
+remains **experimental** and live Council transport remains **planned**. The separate ERC-8004 read
+adapter and registration runtime are implemented only for the pinned canonical Base deployment and
+registration-v1 revision; they do not establish Council-group interoperability. See
+[ERC-8004 Tentacle registration](../erc-8004.md).

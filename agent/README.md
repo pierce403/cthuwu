@@ -25,12 +25,15 @@ environment-specific `$UWUBOT_DATA_DIR/state/xmtp/<environment>/` directory.
 
 `XMTP_ENV` must be `local`, `dev`, or `production`. An identity or database
 directory created for one environment is rejected in another. Operators may
-provide `XMTP_WALLET_KEY`, `XMTP_DB_ENCRYPTION_KEY`, or `XMTP_DB_DIRECTORY`;
-the persisted identity must agree with any supplied keys.
+override `XMTP_DB_DIRECTORY`, but private wallet and database keys are never
+accepted through environment variables. The sidecar reads them directly from
+the owner-only persisted identity and constructs `Agent.create(...)` options in
+memory; it does not use `Agent.createFromEnv`.
 
 The identity file contains the wallet private key in plaintext protected by
 filesystem permissions. Keep the data directory private, backed up securely,
-and out of source control. Neither secret is written to logs.
+and out of source control. Neither secret is written to logs, process arguments,
+protocol frames, or the process environment.
 
 ## JSONL boundary
 

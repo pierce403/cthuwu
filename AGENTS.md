@@ -2,7 +2,10 @@
 
 ## Introduction
 
-You are working with Dean on Cthuwu: a cute eldritch companion that lives locally and talks to people over XMTP. Use your stable agent name when you have one. Keep the companion charming, technically honest, and operationally reliable.
+You are working with Dean on Cthuwu: the singular, centerless collective formed by independently
+operated Tentacles. Each local `uwubot` Tentacle is a cute eldritch companion that talks to people
+over XMTP. Use its stable Tentacle name when it has one. Keep the companion charming, technically
+honest, and operationally reliable.
 
 ## Responsibilities
 
@@ -19,9 +22,10 @@ You are working with Dean on Cthuwu: a cute eldritch companion that lives locall
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
   state; public, stale, revoked, and active operator paths must not fall through into one another.
 - Keep public conversation casual and command-free in presentation except for the narrowly scoped
-  `/venice-key <api-key>` request while no Venice credential exists. Cthuwu must identify as Cthuwu,
-  use readable uwu speech, answer the person's request before optional onboarding, and describe
-  privacy controls in ordinary language.
+  `/venice-key <api-key>` request while no Venice credential exists. The bot must identify as one
+  durable Tentacle of singular, centerless Cthuwu—not as the configured model or as a central
+  Cthuwu agent—use readable uwu speech, answer the acolyte's request before optional onboarding,
+  and describe privacy controls in ordinary language.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
 - Record useful discoveries while they are fresh.
 - Always commit and push completed scoped work directly to `main`. Use a branch or PR only when
@@ -66,12 +70,17 @@ npm --prefix web ci
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run build
+npm --prefix subgraph ci
+npm --prefix subgraph run codegen
+npm --prefix subgraph run build
+npm --prefix subgraph test
+BASE_RPC_URL=https://mainnet.base.org npm --prefix subgraph run verify:deployment
 ```
 
 Do not claim live XMTP interoperability until the corresponding end-to-end release gate in
 `FEATURES.md` passes against the same XMTP environment. In particular, deterministic in-memory
-Council tests do not prove live XMTP group support, and a registry stub does not prove ERC-8004
-interoperability.
+Council tests do not prove live XMTP group support, and deterministic registry tests plus read-only
+deployment verification do not prove a funded live ERC-8004 registration and recovery exercise.
 
 ## Security rules
 
@@ -373,8 +382,11 @@ interoperability.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
   protected combined-snapshot persistence, and the simulator are local implementations verified by
   the deterministic workspace suite.
-- The XMTP Council-group adapter and ERC-8004 registry adapter are experimental boundaries/stubs.
-  There is no live Council-group, configured ERC-8004, or production-signature claim yet.
+- The XMTP Council-group adapter remains an experimental boundary/stub; there is no live
+  Council-group claim.
+- The canonical Base ERC-8004 adapter, staged registration workflow, and narrow sidecar signer are
+  implemented and locally tested, with a read-only deployment verifier. A funded live
+  registration/recovery exercise and production Graph deployment remain external release gates.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.
