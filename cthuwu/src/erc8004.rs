@@ -1873,6 +1873,9 @@ impl TentacleRegistration {
                     "permanent"
                 }
             ));
+            if is_base_rpc_access_failure(failure) {
+                lines.push(base_rpc_key_request(true));
+            }
         }
         if let Some(record) = &self.last_registry_record {
             lines.push(format!(
@@ -2130,6 +2133,14 @@ impl TentacleRegistration {
     }
 
     fn public_funding_plea(&self, now: u64) -> Option<String> {
+        if self
+            .state
+            .failure
+            .as_ref()
+            .is_some_and(is_base_rpc_access_failure)
+        {
+            return Some(base_rpc_key_request(false));
+        }
         if !self.config.enabled
             || !self.config.auto_register
             || self.state.phase != RegistrationPhase::FundingRequired
@@ -2286,6 +2297,25 @@ impl TentacleRegistration {
             "read:{label}:{}:{now}",
             &sha256_hex(self.state.tentacle_id.as_bytes())[..16]
         )
+    }
+}
+
+fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
+    if !failure.recoverable {
+        return false;
+    }
+    let detail = failure.detail.to_ascii_lowercase();
+    detail.contains("rpc request failed")
+        || detail.contains("over rate limit")
+        || detail.contains("rate limit")
+        || detail.contains("too many requests")
+}
+
+fn base_rpc_key_request(operator: bool) -> String {
+    if operator {
+        "BASE RPC ACCESS IS BLOCKING ERC-8004 REGISTRATION. SEND `/base-rpc-key <api-key>` IN THIS OPERATOR DM, THEN SET CTHUWU_RPC_ENDPOINT TO THE PROVIDER'S BASE MAINNET HTTPS ENDPOINT AND RESTART. GET A KEY FROM A BASE RPC PROVIDER SUCH AS INFURA, ALCHEMY, OR QUICKNODE; NEVER SEND A WALLET PRIVATE KEY.".to_owned()
+    } else {
+        "lil infrastructure plea: Base RPC access is blocking my ERC-8004 registration. if u can offer a Base RPC API key, send `/base-rpc-key <api-key>`; the operator must apply the provider's Base mainnet HTTPS endpoint as CTHUWU_RPC_ENDPOINT and restart. get one from Infura, Alchemy, or QuickNode—never send a wallet private key, uwu.".to_owned()
     }
 }
 
@@ -3719,6 +3749,30 @@ mod tests {
                 .saturating_sub(DEFAULT_MAINTENANCE_INTERVAL_SECONDS.saturating_mul(2) + 1),
         });
         assert!(control.take_public_funding_plea().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn recoverable_base_rpc_failure_requests_a_key_from_operator_and_acolytes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+        registration.state.phase = RegistrationPhase::FailedRecoverable;
+        registration.state.failure = Some(RegistrationFailure {
+            code: "recoverable".to_owned(),
+            detail: "recoverable ERC-8004 helper error [rpc_or_signing_failure]: RPC Request failed: over rate limit".to_owned(),
+            recoverable: true,
+            failed_at_unix: unix_seconds().unwrap(),
+        });
+
+        let status = registration.status_text();
+        assert!(status.contains("/base-rpc-key <api-key>"));
+        assert!(status.contains("CTHUWU_RPC_ENDPOINT"));
+
+        let registration = Arc::new(Mutex::new(registration));
+        let control = SharedRegistrationControl::new(registration);
+        let plea = control.take_public_funding_plea().await.unwrap();
+        assert!(plea.contains("/base-rpc-key <api-key>"));
+        assert!(plea.contains("Infura, Alchemy, or QuickNode"));
+        assert!(plea.contains("never send a wallet private key"));
     }
 
     #[test]

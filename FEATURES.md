@@ -224,6 +224,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     Venice credential is loaded, both public acolytes and the authenticated operator receive the
     out-of-band `/venice-key <api-key>` provisioning request before deterministic inference can
     mask the missing dependency.
+  - A recoverable Base RPC/rate-limit failure in ERC-8004 registration asks both the authenticated
+    operator and acolytes for `/base-rpc-key <api-key>`, identifies reputable provider consoles,
+    warns against wallet private keys, and tells the operator to apply the Base mainnet endpoint as
+    `CTHUWU_RPC_ENDPOINT` and restart.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.

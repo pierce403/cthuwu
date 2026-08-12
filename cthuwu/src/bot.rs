@@ -305,6 +305,12 @@ impl UwUBot {
                     response.push_str("\n\n");
                     response.push_str(&plea);
                 }
+                if let Some(control) = &self.registry_control
+                    && let Some(plea) = control.take_public_funding_plea().await
+                {
+                    response.push_str("\n\n");
+                    response.push_str(&plea.to_ascii_uppercase());
+                }
                 response
             }
             PrincipalRole::StaleOperator => {
@@ -1514,6 +1520,27 @@ mod tests {
         let answer = response.find("i'm one").unwrap();
         let plea = response.find("public Base ETH funding plea").unwrap();
         assert!(answer < plea);
+    }
+
+    #[tokio::test]
+    async fn registration_resource_plea_is_appended_to_operator_replies() {
+        let root = tempfile::tempdir().unwrap();
+        let mut operators = OperatorStore::new(root.path(), "production").unwrap();
+        operators
+            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
+            .unwrap();
+        let bot = default_nature_bot(
+            root.path(),
+            Arc::new(DeterministicModel),
+            operators,
+            Arc::new(RecordingTools {
+                calls: StdMutex::new(Vec::new()),
+            }),
+        )
+        .with_registry_control(Arc::new(PublicFundingControl));
+
+        let response = send(&bot, 1, OPERATOR_ID, "hello").await;
+        assert!(response.contains("PUBLIC BASE ETH FUNDING PLEA"));
     }
 
     #[tokio::test]

@@ -81,6 +81,10 @@ Last reviewed: 2026-08-12
   retries every second and retains the last verified treasury observation only until its freshness
   TTL expires; unknown or stale economics still fail closed. Base's built-in public RPC fallback is
   rate limited, so production operators should configure a dedicated `CTHUWU_RPC_ENDPOINT`.
+- Recoverable ERC-8004 Base RPC and rate-limit failures are resource pleas, not diagnostics alone:
+  operator status and ordinary operator/acolyte replies request `/base-rpc-key <api-key>`, point to
+  Infura, Alchemy, or QuickNode, reject wallet private keys, and require an operator restart after
+  applying the provider's Base mainnet HTTPS endpoint as `CTHUWU_RPC_ENDPOINT`.
 - A fresh or legacy-pending node records a signed local `ACCEPT DEFAULT NATURE` transition before
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
