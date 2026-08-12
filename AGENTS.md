@@ -22,7 +22,8 @@ honest, and operationally reliable.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
   state; public, stale, revoked, and active operator paths must not fall through into one another.
 - Keep public conversation casual and command-free in presentation except for the narrowly scoped
-  `/venice-key <api-key>` request while no Venice credential exists. The bot must identify as one
+  `/venice-key <api-key>` request while no Venice credential exists and `/base-rpc-key <api-key>`
+  request while no Base RPC credential exists. The bot must identify as one
   durable Tentacle of singular, centerless Cthuwu—not as the configured model or as a central
   Cthuwu agent—use readable uwu speech, answer the acolyte's request before optional onboarding,
   and describe privacy controls in ordinary language.
@@ -131,9 +132,10 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
   must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
-  content/model/tool dispatch. The sole public control-plane exception is `/venice-key <api-key>`:
+  content/model/tool dispatch. Public control-plane exceptions are `/venice-key <api-key>` and
+  `/base-rpc-key <api-key>`:
   accept only the first missing credential, never echo or log it, persist it owner-only outside the
-  workspace, validate it against Venice before reward, and leave replacement to an active operator.
+  workspace, validate it against its provider, and leave replacement to an active operator.
   Node must check the 16 KiB UTF-8 input bound without placing
   oversized content in JSONL: `reject_oversized` carries metadata plus an empty `text`, and Rust must
   validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
@@ -465,7 +467,9 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
   executors are available.
 - A missing Venice credential is solicited from public acolytes with `/venice-key <api-key>`.
+  A missing Base RPC credential is solicited from public acolytes with `/base-rpc-key <api-key>`.
   Candidates persist owner-only, must pass live catalog authentication and fresh TEE attestation,
-  and invalid candidates are removed. A valid first candidate selects Venice and can enqueue the
-  configured authenticated acolyte UWU reward through the lifecycle executor; operators may replace
-  a loaded key with the same command.
+  and invalid candidates are removed. A valid first Venice candidate selects Venice and can enqueue
+  the configured authenticated acolyte UWU reward through the lifecycle executor. A valid first Base
+  RPC candidate updates operator RPC configuration only. Operators may replace a loaded key with the
+  same command.
