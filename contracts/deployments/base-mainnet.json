@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "status": "confirmed",
+  "chain": "Base mainnet",
+  "chainId": 8453,
+  "contract": "CthuwuAcolyteBranding",
+  "contractAddress": "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da",
+  "deployer": "0x1969c87929ba439cda44c9eb3e82b0273c122c00",
+  "transactionHash": "0xd41f0ddebfed7cd36f2409bccebaa922bc324ede3df688033082b56253cc4af2",
+  "transactionNonce": "0",
+  "receiptBlockNumber": "49852729",
+  "receiptBlockHash": "0x21ac04bdd198b9e5219741a55bdf6da30aa43f8e7cf47cf0fd82548fcc61cfc7",
+  "receiptBlockTimestamp": "1786494805",
+  "confirmationsRequired": 12,
+  "gasUsed": "4957837",
+  "effectiveGasPriceWei": "5000052",
+  "executionFeeWei": "24789442807524",
+  "receiptL1FeeWei": "90325050975",
+  "identityRegistry": "0x8004a169fb4a3325136eb29fa0ceb6d2e539a432",
+  "identityRegistryVersion": "2.0.0",
+  "identityRegistryProxyCodeHash": "0xd0e45b1d89fa9b6cc7e97c1f155d64180e5c232aaccf9900ef9d4fd738c02b41",
+  "identityRegistryImplementation": "0x7274e874ca62410a93bd8bf61c69d8045e399c02",
+  "identityRegistryImplementationCodeHash": "0xa5f9624ea85e45b3f4b8558581f03bfb3e6cefab278d7bf0500ec9bd065dc16f",
+  "uwu": "0x9dba3ae7002daefd7324e7b9f829ed31cb5f0b07",
+  "uwuDecimals": 18,
+  "runtimeCodeKeccak256": "0x3a22b742a570dc2d030edf2bd82dceda1e068a297e2c36883f97b7b66ed4ef2d",
+  "runtimeCodeSha256": "0x7771312650b2607b79f96b5c610b107ec8a015cb16f6ce7cf2f4c3ba4721d163",
+  "artifactRuntimeTemplateSha256": "0xd21c603f85d6afda42adcbb575d57545e1cfb490ea3cfe3fffdd947ac8c34a52",
+  "immutableReferenceCount": 18,
+  "creationBytecodeSha256": "0x731beecb81681e9e365940189c98dd91d1ae6f03d63ffca4bc73afffc5bf991f",
+  "fundingEstimate": {
+    "estimatedAtUnix": 1786494661,
+    "balanceWei": "10000000000000000",
+    "executionGas": "4998352",
+    "maxFeePerGasWei": "11000000",
+    "maxPriorityFeePerGasWei": "1000000",
+    "l1DataFeeWei": "110448897904",
+    "estimatedCostWei": "55092320897904",
+    "safetyBps": "12500",
+    "reserveWei": "50000000000000",
+    "targetBalanceWei": "118865401122380",
+    "shortfallWei": "0",
+    "pendingNonce": "0",
+    "creationBytecodeSha256": "0x731beecb81681e9e365940189c98dd91d1ae6f03d63ffca4bc73afffc5bf991f",
+    "l1FeeTransactionBytes": 24209
+  },
+  "toolchain": {
+    "foundry": "1.7.1",
+    "solc": "0.8.28",
+    "openzeppelinContracts": {
+      "version": "5.3.0",
+      "commit": "e4f70216d759d8e6a64144a9e1f7bbeed78e7079",
+      "tree": "48a8de6b15f3c4f708072626d7646390674a93b8"
+    },
+    "forgeStd": {
+      "version": "1.16.1",
+      "commit": "620536fa5277db4e3fd46772d5cbc1ea0696fb43",
+      "tree": "7a87f9b3d611ddb4475c1e883c79b0d5a4693be4"
+    }
+  },
+  "verifiedAtUnix": 1786495355
+}

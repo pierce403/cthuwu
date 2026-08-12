@@ -453,10 +453,11 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
 - The canonical Base ERC-8004 adapter, staged registration workflow, and narrow sidecar signer are
   implemented and locally tested, with a read-only deployment verifier. A funded live
   registration/recovery exercise remains an external release gate; the restricted Graph key is public client configuration.
-- The Acolyte Branding Foundry workspace is in progress. Its canonical design binds an immutable
+- The Acolyte Branding Foundry workspace is deployed on Base at
+  `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`. Its canonical design binds an immutable
   acolyte address, exact eligible controller agent ID, referral-split weekly upkeep, compulsory UWU
-  sale, immutable 10% referrer, and fail-closed claim status. No Base Branding deployment or frontend
-  Branding routing is currently claimed.
+  sale, immutable 10% referrer, and fail-closed claim status. Canonical deployment provenance is in
+  `contracts/deployments/base-mainnet.json`; frontend Branding routing is not yet claimed.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.

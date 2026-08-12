@@ -562,8 +562,9 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 - The Foundry workspace pins Foundry `1.7.1` and audited OpenZeppelin Contracts `v5.3.0` commit
   `e4f70216d759d8e6a64144a9e1f7bbeed78e7079`. Its Base fork is pinned to block `49768180`,
   hash `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`. The exact Foundry
-  `1.7.1` run passed 63/63, including live real-registry and real-UWU fork paths. This is test
-  evidence, not a deployment claim.
+  `1.7.1` run passed 63/63, including live real-registry and real-UWU fork paths. The confirmed Base
+  deployment is `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`; finalizer, standalone-verifier, and Sourcify exact
+  match evidence accompanies `contracts/deployments/base-mainnet.json`.
 - The in-progress frontend assignment path reads the actual browser participant address, accepts
   only a positively active Branding, resolves the exact controller's current ERC-8004 production
   XMTP endpoint, and verifies all routing inputs at one explicit block. Unminted/expired/positively
@@ -571,8 +572,8 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   Branding routing. Absence of an explicitly configured deployment is `NotConfigured` and preserves
   intro continuity.
 - Agent0 plus same-block canonical Base reads remains the public indexing/verification architecture.
-  Branding does not resurrect a custom subgraph or add a central router. Contract deployment and
-  the live production three-channel XMTP gate are both incomplete release gates.
+  Branding does not resurrect a custom subgraph or add a central router. Contract deployment is
+  complete; the live production three-channel XMTP gate remains incomplete.
 
 The channel configuration names are `VITE_CTHUWU_BASE_RPC_ENDPOINT`,
 `VITE_CTHUWU_BRANDING_CONTRACT`, `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS`, `CTHUWU_RPC_ENDPOINT`,
@@ -658,13 +659,12 @@ mobile install/offline PWA flow. The restricted Graph key is intentional checked
 configuration; only a funded live registration still requires external credentials/funding and must not be inferred from
 repository source alone.
 
-The Acolyte Branding milestone adds an in-progress non-upgradeable Foundry ERC-721, consented
+The Acolyte Branding milestone adds a deployed non-upgradeable Foundry ERC-721, consented
 address-bound identity, exact ERC-8004 controller verification, weekly upkeep split 10% to the
 immutable referrer and the remainder to the acolyte, compulsory UWU purchase, bounded owner-managed
 avatar/traits, unserved claims, funding-aware deployment tooling, and the
-three-channel assignment/enrollment boundary. Local source and tests do not imply a Base deployment,
-production Global group, or live cross-Tentacle interoperability. Funded deployment, independent
-verification, canonical provenance, explicit Global bootstrap, and a real production XMTP routing
+three-channel assignment/enrollment boundary. Its funded Base deployment, independent verification,
+and canonical provenance are complete. A production Global group and real production XMTP routing
 exercise remain open.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically

@@ -454,8 +454,11 @@ after funded live finalization and standalone verification may an operator revie
 record and intentionally publish it as `contracts/deployments/base-mainnet.json`; the wrapper never
 copies it into the repository automatically.
 
-No Base deployment address or successful funded deployment is claimed until the corresponding
-release evidence exists.
+The confirmed Base-mainnet deployment is `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`, created by
+transaction `0xd41f0ddebfed7cd36f2409bccebaa922bc324ede3df688033082b56253cc4af2` in block `49852729`.
+The finalizer and standalone verifier both passed with runtime code hash
+`0x3a22b742a570dc2d030edf2bd82dceda1e068a297e2c36883f97b7b66ed4ef2d`; Sourcify reports an exact
+source match. The canonical secret-free record is `contracts/deployments/base-mainnet.json`.
 
 ## Verification and release gates
 
@@ -488,9 +491,9 @@ The feature remains in progress until all of these release gates have direct evi
   dependencies, constants, interfaces, and non-proxy shape; and the TypeScript finalizer proves the
   exact creation transaction plus immutable-aware runtime template before producing reproducible
   provenance;
-- [ ] a funded Base-mainnet deployment completes, receives confirmations, and passes independent
+- [x] a funded Base-mainnet deployment completes, receives confirmations, and passes independent
   finalizer and standalone-verifier checks;
-- [ ] the canonical deployment JSON is committed without secrets only after that live verification;
+- [x] the canonical deployment JSON is committed without secrets only after that live verification;
 - [ ] the static frontend and Tentacle enrollment path read the canonical deployment at one explicit
   block, handle every status including `RegistryUnavailable`, resolve the exact current ERC-8004
   production XMTP endpoint, and preserve only the specified intro fallback states;

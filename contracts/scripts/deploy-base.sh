@@ -257,10 +257,6 @@ esac
 if [[ -n "${password_file}" ]]; then
   wallet_args+=(--password-file "${password_file}")
 fi
-if [[ -n "${wallet_source}" ]]; then
-  wallet_args+=(--froms "${deployer}")
-fi
-
 run_broadcast() {
   (
     cd -- "${contracts_root}"

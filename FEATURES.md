@@ -1192,6 +1192,9 @@ phase.
     Registry `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` version `2.0.0` and canonical UWU
     `0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07` with 18 decimals. The zero-argument constructor
     itself rejects a non-`8453` chain or failed canonical dependency check.
+  - The confirmed deployment is `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`; its canonical
+    provenance is checked in at `contracts/deployments/base-mainnet.json` and its source is an exact
+    Sourcify match.
   - `tokenId = uint256(uint160(acolyte))` gives each nonzero address at most one Branding. The
     subject and nonzero referrer are immutable; the signed referrer may be any address, including
     the contract itself. There is no burn or generic ERC-721 approval or transfer path.
@@ -1269,8 +1272,8 @@ phase.
     duplicate deployment. The wrapper currently emits the notice to stdout for transport by an
     authenticated operator exact-exec invocation; its recorded cooldown acknowledges local
     emission, not XMTP delivery, and no generic sender or durable scheduler is claimed.
-  - [ ] A funded Base-mainnet deployment is independently verified and its canonical deployment JSON
-    is committed. Repository source or a dry run does not satisfy this gate.
+  - [x] A funded Base-mainnet deployment is independently verified by the finalizer, standalone
+    Solidity verifier, and Sourcify exact match, and its canonical deployment JSON is committed.
   - [ ] The static frontend and Tentacle enrollment path read the verified Branding deployment at
     one explicit block, distinguish every status, resolve the exact current ERC-8004 production
     XMTP endpoint, preserve only the specified intro fallbacks, and pass a real production
