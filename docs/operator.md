@@ -39,7 +39,26 @@ is bound to the selected XMTP environment, size-bounded, symlink-rejected, atomi
 owner-only on Unix. It stores the local authorization time as a nanosecond boundary; it does not
 store or require an activation proof.
 
-## Add an operator
+## Choose the sole operator
+
+A Tentacle has at most one active operator. Set one during normal startup with an Ethereum address
+or ENS name:
+
+```bash
+./uwu.sh --operator dean.eth
+```
+
+The same value may be supplied as `UWUBOT_OPERATOR`. It is resolved to the canonical XMTP inbox
+before transport starts. Restarting with the same operator is idempotent; a different active
+operator is rejected. The console reports `Tentacle has imprinted on 0x...` after resolution.
+
+If neither the flag nor any prior operator record exists, the first DM sender with an Ethereum
+address resolved from the authenticated XMTP envelope is atomically imprinted. That first message
+remains public and cannot execute tools; only messages authored after its `sentAtNs` fence enter the
+operator lane. If the sender has no authenticated EVM identifier, imprinting waits. Revocation
+leaves a tombstone and never enables another automatic first-contact imprint.
+
+### Offline management
 
 Use the same `UWUBOT_DATA_DIR` and XMTP environment as the Tentacle. The deployed website uses XMTP
 `production`. Operator ACL state is loaded at process start and is not hot-reloaded. Stop the
@@ -59,7 +78,8 @@ cryptographically sent from that exact inbox may use the operator harness immedi
 activation message to copy. ENS is resolved only when `add` runs; later ENS changes do not silently
 move operator authority.
 
-Running `add` again advances the role generation and replaces the authorization boundary. Messages
+Adding the same inbox again advances the role generation and replaces the authorization boundary.
+Adding a different inbox while an operator is active is rejected. Messages
 authored at or before the boundary get a fixed stale-message response, never reach public chat or a
 tool, and never create a contact note. Keep the node and XMTP sender clocks synchronized so fresh
 messages sort after the locally recorded boundary.

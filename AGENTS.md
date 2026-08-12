@@ -106,7 +106,11 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   revocation guidance. Do not describe rooted file helpers or environment filtering as an `exec`
   isolation boundary.
 - Authorization is by the canonical full 64-character XMTP inbox ID, not wallet address or message
-  claim. Pin the role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
+  claim, and each Tentacle may have at most one active operator. `--operator` resolves an address or
+  ENS name before transport startup. With an empty operator history and no flag, atomically imprint
+  only the first SDK-authenticated EVM DM sender; keep that triggering message public/stale, fence
+  later authority at its `sentAtNs`, and never reopen automatic imprinting after revocation. Pin the
+  role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
   authorization boundary must not privilege older messages delivered later. Every valid
   installation attached to an authorized inbox inherits authority; preserve stale-message quarantine and
   revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
@@ -431,8 +435,13 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   the model reply contains no question; all deferred and later prompts use the cadence without
   advertising slash commands. Ambiguous consent is re-cadenced. Public chat can expose only an
   explicitly configured Brave web-search function.
-- `uwubot operator add|list|revoke` manages an environment-bound owner-only inbox ACL. Local add
-  authorizes immediately without an XMTP proof; active operator DMs use an isolated privileged
+- Each Tentacle has at most one active operator. `--operator <address-or-ENS>` resolves and pins it
+  before transport startup. With no operator history and no flag, the first DM sender whose
+  Ethereum address is resolved from SDK-authenticated XMTP metadata is durably imprinted; that
+  triggering message stays public/stale and only later messages gain authority. Never auto-imprint
+  again after a record exists, including after revocation. `uwubot operator add|list|revoke`
+  manages the environment-bound owner-only record. Local add authorizes immediately without an XMTP
+  proof; active operator DMs use an isolated privileged
   local harness. That harness loads bounded protected SOUL/shared memory plus per-inbox operator
   profiles and history, treats workspace context as untrusted reference data, advertises an exact
   per-turn tool inventory, discovers files with `list_files`, permits one exact-command-bound natural

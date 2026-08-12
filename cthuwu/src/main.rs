@@ -90,6 +90,11 @@ struct Cli {
     #[arg(long, env = "UWUBOT_XMTP_ENV", value_enum, default_value_t = Network::Production)]
     xmtp_env: Network,
 
+    /// Sole operator Ethereum address or ENS name. Without it, the first authenticated EVM DM
+    /// sender is imprinted as operator for subsequent messages.
+    #[arg(long, env = "UWUBOT_OPERATOR")]
+    operator: Option<String>,
+
     /// Optional startup override. Without one, the persisted selection or Venice default is used.
     #[arg(long, env = "UWUBOT_MODEL", value_enum)]
     model: Option<ModelKind>,
@@ -678,6 +683,11 @@ async fn main() -> Result<()> {
     cli.data_dir = fs::canonicalize(&cli.data_dir)
         .with_context(|| format!("resolving data directory {}", cli.data_dir.display()))?;
     if let Some(command) = cli.command.take() {
+        if cli.operator.is_some() {
+            bail!(
+                "--operator configures normal runtime and cannot be combined with a management command"
+            );
+        }
         let operators = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
         return run_management_command(
             operators,
@@ -832,10 +842,16 @@ async fn main() -> Result<()> {
         }
     }
     let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()));
-    let operators = Arc::new(Mutex::new(OperatorStore::new(
-        &cli.data_dir,
-        cli.xmtp_env.as_str(),
-    )?));
+    let mut operator_store = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
+    if let Some(identity) = cli.operator.as_deref() {
+        let (address, inbox_id) =
+            resolve_operator_inbox(&cli.node, &cli.sidecar, identity, cli.xmtp_env.as_str())
+                .await
+                .context("resolving --operator to its canonical XMTP inbox")?;
+        operator_store.ensure_sole_operator(&inbox_id, &address.to_string())?;
+        info!("Tentacle has imprinted on {address}");
+    }
+    let operators = Arc::new(Mutex::new(operator_store));
     let contacts = ContactStore::new(&cli.data_dir)?;
     let processed = ProcessedMessages::new(&cli.data_dir)?;
     let search = build_web_search(&cli)?;
@@ -2130,6 +2146,20 @@ mod tests {
                 command: OperatorCommand::Add { .. }
             })
         ));
+    }
+
+    #[test]
+    fn parses_explicit_sole_operator_runtime_flag() {
+        let parsed = Cli::try_parse_from([
+            "uwubot",
+            "--operator",
+            "0x1234567890abcdef1234567890abcdef12345678",
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.operator.as_deref(),
+            Some("0x1234567890abcdef1234567890abcdef12345678")
+        );
     }
 
     #[test]

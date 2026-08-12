@@ -632,8 +632,15 @@ pub async fn run_xmtp_sidecar(
             error!("ignored invalid XMTP transport metadata");
             continue;
         }
-        let role =
-            bot.role_for_authenticated_message(&request.sender_inbox_id, &request.sent_at_ns)?;
+        let imprint = bot.classify_or_imprint_operator(
+            &request.sender_inbox_id,
+            request.sender_address.as_deref(),
+            &request.sent_at_ns,
+        )?;
+        let role = imprint.role;
+        if let Some(address) = imprint.imprinted_address {
+            info!("Tentacle has imprinted on {address}");
+        }
         info!(
             role = ?role,
             message_bytes = request.text.len(),

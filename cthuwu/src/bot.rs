@@ -9,7 +9,7 @@ use crate::{
     matching::suggest_matches,
     model::{Model, ModelPolicy, ModelRequest},
     operator::{ModelControl, OperatorHarness},
-    principal::{OperatorStore, PrincipalRole},
+    principal::{OperatorImprint, OperatorStore, PrincipalRole},
     token_eye::{Address, BalanceObservation, ObservationFreshness, ReputationTier, TokenEye},
 };
 use anyhow::{Context, Result};
@@ -151,6 +151,7 @@ impl UwUBot {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) fn role_for_authenticated_message(
         &self,
         inbox_id: &str,
@@ -160,6 +161,18 @@ impl UwUBot {
             .lock()
             .map_err(|_| anyhow::anyhow!("operator registry lock is poisoned"))?
             .role_for_message(inbox_id, sent_at_ns)
+    }
+
+    pub(crate) fn classify_or_imprint_operator(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: Option<&str>,
+        sent_at_ns: &str,
+    ) -> Result<OperatorImprint> {
+        self.operators
+            .lock()
+            .map_err(|_| anyhow::anyhow!("operator registry lock is poisoned"))?
+            .classify_or_imprint(inbox_id, authenticated_sender_address, sent_at_ns)
     }
 
     /// Claim the authenticated XMTP message before concurrency admission or content dispatch.

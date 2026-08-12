@@ -457,6 +457,13 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     active environment-specific version-3 record for the canonical XMTP inbox it resolves. A missing
     ENS address or missing inbox fails closed. No XMTP activation proof is required, and later ENS
     changes do not retarget an existing grant.
+  - A Tentacle permits at most one active operator. Normal runtime accepts
+    `--operator <address-or-ENS>` (or `UWUBOT_OPERATOR`) and resolves it before XMTP starts. If the
+    owner-only operator store has never contained a record and the flag is absent, the first DM
+    sender with an SDK-authenticated Ethereum address is atomically imprinted. The triggering
+    message remains public and fenced at its authenticated `sentAtNs`; only a later message enters
+    the operator lane. Revocation never reopens automatic imprinting. The console logs the resolved
+    `0x` address when imprinting occurs without logging message content.
   - Adding or re-adding an inbox advances its generation and records the local grant time as its
     authorization boundary. Messages authored at or before that boundary cannot use tools.
   - Rust classifies the Agent SDK-authenticated `senderInboxId` and `sentAtNs` before deduplication,
@@ -676,8 +683,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     Hermes state, or beside metrics/history/lineage projections, startup fails without silently
     rekeying or adopting orphaned projections.
   - First boot and legacy pending nodes append a signed `ACCEPT DEFAULT NATURE` transition locally
-    and open normal work without an operator ACL. Operator authorization remains optional and is
-    required only for the privileged operator lane and later authenticated Nature controls.
+    and open normal work before operator imprinting. Operator authorization is required only for the
+    privileged operator lane and later authenticated Nature controls.
   - `state/awakening_log.md` is a signed, hash-chained, logically append-only audit journal with
     normalized actions, hashed event IDs, local or authenticated operator provenance, restart
     recovery, and immutable reroll epochs. Each update verifies and atomically copy-on-write

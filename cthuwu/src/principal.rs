@@ -73,6 +73,12 @@ pub struct AuthorizedOperator {
     pub generation: u64,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct OperatorImprint {
+    pub role: PrincipalRole,
+    pub imprinted_address: Option<String>,
+}
+
 impl OperatorStore {
     pub fn new(data_dir: &Path, xmtp_environment: &str) -> Result<Self> {
         if !matches!(xmtp_environment, "dev" | "production" | "local") {
@@ -182,6 +188,57 @@ impl OperatorStore {
         })
     }
 
+    /// Atomically classify an authenticated sender and, only when no operator history exists,
+    /// imprint the first sender with an SDK-authenticated Ethereum address. The triggering message
+    /// remains fenced at the public/stale boundary and gains no operator authority itself.
+    pub fn classify_or_imprint(
+        &mut self,
+        authenticated_sender_inbox_id: &str,
+        authenticated_sender_address: Option<&str>,
+        authenticated_sent_at_ns: &str,
+    ) -> Result<OperatorImprint> {
+        let existing_role =
+            self.role_for_message(authenticated_sender_inbox_id, authenticated_sent_at_ns)?;
+        if existing_role != PrincipalRole::User || !self.operators.is_empty() {
+            return Ok(OperatorImprint {
+                role: existing_role,
+                imprinted_address: None,
+            });
+        }
+        let Some(address) = authenticated_sender_address else {
+            return Ok(OperatorImprint {
+                role: PrincipalRole::User,
+                imprinted_address: None,
+            });
+        };
+        let address = normalize_operator_address(address)?;
+        self.add_at(
+            authenticated_sender_inbox_id,
+            &address,
+            authenticated_sent_at_ns,
+        )?;
+        Ok(OperatorImprint {
+            role: PrincipalRole::User,
+            imprinted_address: Some(address),
+        })
+    }
+
+    pub fn ensure_sole_operator(&mut self, inbox_id: &str, label: &str) -> Result<bool> {
+        let inbox_id = normalize_operator_inbox_id(inbox_id)?;
+        if let Some(active) = self
+            .operators
+            .iter()
+            .find(|operator| operator.status == OperatorStatus::Active)
+        {
+            if active.inbox_id == inbox_id {
+                return Ok(false);
+            }
+            bail!("this Tentacle already has its sole active operator");
+        }
+        self.add(&inbox_id, label)?;
+        Ok(true)
+    }
+
     /// Authorize an inbox immediately while fencing messages authored before the local grant.
     pub fn add(&mut self, inbox_id: &str, label: &str) -> Result<AuthorizedOperator> {
         self.add_at(inbox_id, label, &unix_nanoseconds().to_string())
@@ -198,6 +255,12 @@ impl OperatorStore {
         let authorization_boundary = parse_sent_at_ns(authorized_after_sent_at_ns)?;
         let now = unix_seconds();
         let mut operators = self.operators.clone();
+
+        if operators.iter().any(|operator| {
+            operator.status == OperatorStatus::Active && operator.inbox_id != inbox_id
+        }) {
+            bail!("this Tentacle already has its sole active operator");
+        }
 
         let generation = if let Some(existing) = operators
             .iter_mut()
@@ -312,6 +375,14 @@ impl OperatorStore {
 
 fn validate_records(records: Vec<OperatorRecord>) -> Result<Vec<OperatorRecord>> {
     validate_common_records(&records)?;
+    if records
+        .iter()
+        .filter(|operator| operator.status == OperatorStatus::Active)
+        .count()
+        > 1
+    {
+        bail!("operator configuration contains more than one active operator");
+    }
     for operator in &records {
         if operator.status == OperatorStatus::Pending {
             bail!("operator configuration version 3 does not permit pending roles");
@@ -435,6 +506,17 @@ fn validate_label(value: &str) -> Result<String> {
     Ok(value.to_owned())
 }
 
+fn normalize_operator_address(value: &str) -> Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.len() != 42
+        || !value.starts_with("0x")
+        || !value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("automatic operator imprint requires an SDK-authenticated Ethereum address");
+    }
+    Ok(value)
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -551,6 +633,111 @@ mod tests {
             store.role_for_message(OPERATOR_ID, "201").unwrap(),
             PrincipalRole::Operator
         );
+    }
+
+    #[test]
+    fn first_authenticated_evm_sender_is_atomically_imprinted_but_trigger_stays_public() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = OperatorStore::new(root.path(), "production").unwrap();
+        let address = "0x1234567890abcdef1234567890abcdef12345678";
+
+        let missing_address = store.classify_or_imprint(OPERATOR_ID, None, "100").unwrap();
+        assert_eq!(missing_address.role, PrincipalRole::User);
+        assert_eq!(missing_address.imprinted_address, None);
+
+        let imprint = store
+            .classify_or_imprint(OPERATOR_ID, Some(address), "101")
+            .unwrap();
+        assert_eq!(imprint.role, PrincipalRole::User);
+        assert_eq!(imprint.imprinted_address.as_deref(), Some(address));
+        assert_eq!(
+            store.role_for_message(OPERATOR_ID, "101").unwrap(),
+            PrincipalRole::StaleOperator
+        );
+        assert_eq!(
+            store.role_for_message(OPERATOR_ID, "102").unwrap(),
+            PrincipalRole::Operator
+        );
+
+        let second = store
+            .classify_or_imprint(
+                OTHER_OPERATOR_ID,
+                Some("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+                "102",
+            )
+            .unwrap();
+        assert_eq!(second.role, PrincipalRole::User);
+        assert_eq!(second.imprinted_address, None);
+        assert!(store.add_at(OTHER_OPERATOR_ID, "other", "102").is_err());
+
+        assert!(store.revoke(OPERATOR_ID).unwrap());
+        let after_revocation = store
+            .classify_or_imprint(
+                OTHER_OPERATOR_ID,
+                Some("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+                "103",
+            )
+            .unwrap();
+        assert_eq!(after_revocation.role, PrincipalRole::User);
+        assert_eq!(after_revocation.imprinted_address, None);
+
+        let reloaded = OperatorStore::new(root.path(), "production").unwrap();
+        assert_eq!(reloaded.list().count(), 1);
+        assert_eq!(
+            reloaded.role_for_message(OPERATOR_ID, "104").unwrap(),
+            PrincipalRole::RevokedOperator
+        );
+    }
+
+    #[test]
+    fn explicit_sole_operator_configuration_is_idempotent_and_rejects_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = OperatorStore::new(root.path(), "production").unwrap();
+        assert!(store.ensure_sole_operator(OPERATOR_ID, "Dean").unwrap());
+        assert!(!store.ensure_sole_operator(OPERATOR_ID, "Dean").unwrap());
+        assert!(
+            store
+                .ensure_sole_operator(OTHER_OPERATOR_ID, "Other")
+                .is_err()
+        );
+        assert_eq!(store.list().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_configuration_with_two_active_operators_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        fs::create_dir(&state).unwrap();
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
+        let record = |inbox_id: &str| {
+            serde_json::json!({
+                "inbox_id": inbox_id,
+                "label": "operator",
+                "status": "active",
+                "generation": 1,
+                "added_at_unix": 1,
+                "authorized_at_unix": 1,
+                "authorized_after_sent_at_ns": "1",
+                "revoked_at_unix": null
+            })
+        };
+        let path = state.join("operators.json");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": 3,
+                "xmtp_environment": "production",
+                "operators": [record(OPERATOR_ID), record(OTHER_OPERATOR_ID)]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(OperatorStore::new(root.path(), "production").is_err());
     }
 
     #[cfg(unix)]
