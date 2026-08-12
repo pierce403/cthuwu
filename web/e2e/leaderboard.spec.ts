@@ -6,12 +6,13 @@ import { LEADERBOARD_CACHE_KEY } from "../src/leaderboard-types";
 
 const GRAPH_ENDPOINT = "https://graph.fixture.invalid/graphql";
 const RPC_ENDPOINT = "https://rpc.fixture.invalid/";
+const BRANDING_CONTRACT = "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da";
 const graphFixture = readFileSync(
   resolve(process.cwd(), "e2e/agent0-leaderboard.json"),
   "utf8",
 );
 
-test("exposes keyboard-operable channel tabs without displacing the leaderboard", async ({ page }) => {
+test("keeps the mobile chat focused and links to each public directory", async ({ page }) => {
   await page.route(/^https:\/\//u, (route) => route.abort("blockedbyclient"));
   await page.goto("/", { waitUntil: "domcontentloaded" });
   const tabs = page.getByRole("tab");
@@ -22,7 +23,15 @@ test("exposes keyboard-operable channel tabs without displacing the leaderboard"
   await page.getByRole("tab", { name: /^Direct/u }).focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: /^Acolytes/u })).toBeFocused();
-  await expect(page.locator("#tentacles")).toBeAttached();
+  await expect(page.locator("#tentacles")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Tentacles", exact: true })).toHaveAttribute("href", "/tentacles/");
+  await expect(page.getByRole("link", { name: "Acolytes", exact: true })).toHaveAttribute("href", "/acolytes/");
+  await expect(page.getByRole("link", { name: /GitHub/u })).toHaveAttribute("href", "https://github.com/pierce403/cthuwu");
+  const chat = page.locator("#chat");
+  const viewportHeight = page.viewportSize()?.height ?? 0;
+  const chatBox = await chat.boundingBox();
+  expect(chatBox).not.toBeNull();
+  if (viewportHeight > 500 && chatBox) expect(chatBox.height).toBeGreaterThan(viewportHeight * 0.78);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 
@@ -70,7 +79,7 @@ test("renders a validated cache first, then refreshes the complete mobile leader
     await route.abort("blockedbyclient");
   });
 
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.goto("/tentacles/", { waitUntil: "domcontentloaded" });
   await sawGraph;
   await expect(page.getByText("Cached First", { exact: true }).first()).toBeVisible();
   await expect(page.locator("#leaderboard-state")).toHaveText("REFRESHING");
@@ -107,6 +116,32 @@ test("renders a validated cache first, then refreshes the complete mobile leader
   expect(pageErrors).toEqual([]);
 });
 
+test("serves the Acolyte catalog as a direct mobile route with a truthful unavailable state", async ({
+  page,
+}) => {
+  const thirdPartyImages: string[] = [];
+  page.on("request", (request) => {
+    if (request.resourceType() === "image" && !request.url().startsWith("http://127.0.0.1:4173")) {
+      thirdPartyImages.push(request.url());
+    }
+  });
+  await page.route(/^https:\/\//u, (route) => route.abort("blockedbyclient"));
+  await page.goto("/acolytes/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Acolyte NFTs" })).toBeVisible();
+  await expect(page.locator("#acolyte-state")).toHaveText("UNAVAILABLE");
+  await expect(page.locator("#acolyte-error")).toBeVisible();
+  await expect(page.getByRole("link", { name: /contract on BaseScan/u })).toHaveAttribute(
+    "href",
+    `https://basescan.org/address/${BRANDING_CONTRACT}`,
+  );
+  await expect(page.getByRole("link", { name: /GitHub/u })).toHaveAttribute(
+    "href",
+    "https://github.com/pierce403/cthuwu",
+  );
+  expect(thirdPartyImages).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
 test("serves an installable manifest, narrowly scoped worker, and cached offline shell", async ({
   context,
   page,
@@ -131,8 +166,9 @@ test("serves an installable manifest, narrowly scoped worker, and cached offline
     }
     await route.abort("blockedbyclient");
   });
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.goto("/tentacles/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("#leaderboard-state")).toHaveText("CURRENT");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const manifestHref = await page.locator('link[rel="manifest"]').getAttribute("href");
   expect(manifestHref).toBe("/manifest.webmanifest");

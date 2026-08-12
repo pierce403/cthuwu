@@ -9,9 +9,20 @@ const chat = vi.hoisted(() => ({
   initialize: vi.fn(),
 }));
 
+const balances = vi.hoisted(() => ({
+  fetch: vi.fn(async () => ({
+    blockNumber: 123n,
+    formattedEth: "1.25",
+    formattedUwu: "2,500",
+    level: "3.40",
+  })),
+}));
+
 vi.mock("./chat/controller", () => ({
   initializeChatController: chat.initialize.mockReturnValue(chat),
 }));
+
+vi.mock("./account-balances", () => ({ fetchAccountBalances: balances.fetch }));
 
 const html = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
 
@@ -29,9 +40,22 @@ describe("application shell", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     localStorage.clear();
     mountMarkup();
+    const dialog = document.querySelector<HTMLDialogElement>("#identity-dialog");
+    if (dialog) dialog.showModal = vi.fn(() => dialog.setAttribute("open", ""));
   });
 
-  it("preserves accessible chat, PWA, identity, and leaderboard landmarks", () => {
+  it("loads a same-block Base balance snapshot only when identity settings open", async () => {
+    await import("./main");
+    expect(balances.fetch).not.toHaveBeenCalled();
+    document.querySelector<HTMLButtonElement>("#settings")?.click();
+    await vi.waitFor(() => expect(balances.fetch).toHaveBeenCalledTimes(1));
+    expect(document.querySelector("#identity-eth-balance")?.textContent).toBe("1.25 ETH");
+    expect(document.querySelector("#identity-uwu-balance")?.textContent).toBe("2,500 UWU");
+    expect(document.querySelector("#identity-level")?.textContent).toBe("3.40");
+    expect(document.querySelector("#identity-balance-state")?.textContent).toContain("123");
+  });
+
+  it("preserves accessible chat, PWA, identity, and route navigation landmarks", () => {
     const log = document.querySelector<HTMLElement>("#messages");
     const message = document.querySelector<HTMLTextAreaElement>("#message");
     const tabs = [...document.querySelectorAll<HTMLElement>('[role="tab"]')];
@@ -53,15 +77,17 @@ describe("application shell", () => {
     const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content");
     expect(csp).toContain("img-src 'self' data:");
     expect(csp).not.toMatch(/img-src[^;]*https:/u);
-    expect(document.querySelector("#tentacles")?.getAttribute("aria-labelledby")).toBe("leaderboard-title");
-    expect(document.querySelector("#leaderboard-list")?.getAttribute("role")).toBe("list");
-    const ontology = document.querySelector("#tentacles")?.textContent?.replace(/\s+/gu, " ");
-    expect(ontology).toContain("one human operator");
-    expect(ontology).toContain("singular, centerless Cthuwu");
+    expect(document.querySelector("#tentacles")).toBeNull();
+    expect(document.querySelector<HTMLAnchorElement>('a[href="/tentacles/"]')).not.toBeNull();
+    expect(document.querySelector<HTMLAnchorElement>('a[href="/acolytes/"]')).not.toBeNull();
+    expect(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/pierce403/cthuwu"]')?.textContent).toContain("GitHub");
+    expect(document.querySelector("#identity-dialog")?.textContent).toContain("Base balances");
+    expect(document.querySelector("#identity-dialog")?.textContent).toContain("export encrypted key");
+    expect(document.querySelector("#identity-level")).not.toBeNull();
     expect(document.querySelector(".intro")?.textContent).toContain("three trusted XMTP channels");
   });
 
-  it("keeps main as lifecycle coordination for chat, identity, leaderboard, and PWA", async () => {
+  it("keeps main as lifecycle coordination for chat, identity, balances, and PWA", async () => {
     await import("./main");
     await vi.waitFor(() => expect(chat.connect).toHaveBeenCalledWith(false));
     expect(chat.initialize).toHaveBeenCalledWith(
@@ -72,7 +98,7 @@ describe("application shell", () => {
       }),
       expect.objectContaining({ environment: "production" }),
     );
-    expect(document.querySelector("#tentacles")).not.toBeNull();
+    expect(document.querySelector("#tentacles")).toBeNull();
 
     window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
     expect(chat.close).not.toHaveBeenCalled();

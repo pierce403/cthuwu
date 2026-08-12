@@ -8,7 +8,7 @@ import {
 } from "./identity";
 import { decryptIdentityBackup, encryptIdentityBackup } from "./identity-backup";
 import { initializePwaInstallPrompt, type PwaInstallController } from "./pwa";
-import { initializeLeaderboard, type LeaderboardController } from "./leaderboard";
+import { fetchAccountBalances } from "./account-balances";
 import { initializeChatController, type ChatController } from "./chat/controller";
 import "./style.css";
 
@@ -23,6 +23,11 @@ const dialogElement = requireElement<HTMLDialogElement>("identity-dialog");
 const dialogCloseElement = requireElement<HTMLButtonElement>("identity-close");
 const addressElement = requireElement<HTMLElement>("identity-address");
 const environmentElement = requireElement<HTMLElement>("identity-environment");
+const ethBalanceElement = requireElement<HTMLElement>("identity-eth-balance");
+const uwuBalanceElement = requireElement<HTMLElement>("identity-uwu-balance");
+const levelElement = requireElement<HTMLElement>("identity-level");
+const balanceStateElement = requireElement<HTMLElement>("identity-balance-state");
+const refreshBalancesElement = requireElement<HTMLButtonElement>("refresh-balances");
 const passphraseElement = requireElement<HTMLInputElement>("backup-passphrase");
 const exportElement = requireElement<HTMLButtonElement>("export-identity");
 const importElement = requireElement<HTMLInputElement>("import-identity");
@@ -40,8 +45,8 @@ const updateDismissElement = requireElement<HTMLButtonElement>("update-dismiss")
 
 let identity: StoredIdentity | undefined;
 let chatController: ChatController | undefined;
-let leaderboardController: LeaderboardController | undefined;
 let pwaController: PwaInstallController | undefined;
+let balancesLoading = false;
 
 bootstrap();
 
@@ -62,30 +67,6 @@ function bootstrap(): void {
 }
 
 function initializePublicFeatures(): void {
-  try {
-    leaderboardController = initializeLeaderboard({
-      root: requireElement<HTMLElement>("tentacles"),
-      status: requireElement<HTMLElement>("leaderboard-state"),
-      source: requireElement<HTMLElement>("leaderboard-source"),
-      summary: requireElement<HTMLElement>("leaderboard-summary"),
-      refresh: requireElement<HTMLButtonElement>("leaderboard-refresh"),
-      search: requireElement<HTMLInputElement>("leaderboard-search"),
-      funding: requireElement<HTMLSelectElement>("leaderboard-funding"),
-      verification: requireElement<HTMLSelectElement>("leaderboard-verification"),
-      protocol: requireElement<HTMLSelectElement>("leaderboard-protocol"),
-      shared: requireElement<HTMLSelectElement>("leaderboard-shared"),
-      sort: requireElement<HTMLSelectElement>("leaderboard-sort"),
-      ranked: requireElement<HTMLElement>("leaderboard-list"),
-      suspendedSection: requireElement<HTMLElement>("leaderboard-suspended-section"),
-      suspended: requireElement<HTMLElement>("leaderboard-suspended"),
-      empty: requireElement<HTMLElement>("leaderboard-empty"),
-    });
-  } catch (error) {
-    console.error("The public leaderboard configuration is invalid", error);
-    requireElement<HTMLElement>("leaderboard-state").textContent = "UNAVAILABLE";
-    requireElement<HTMLElement>("leaderboard-source").textContent =
-      "Leaderboard configuration unavailable";
-  }
   pwaController = initializePwaInstallPrompt(
     {
       card: installPromptElement,
@@ -97,7 +78,10 @@ function initializePublicFeatures(): void {
     },
     {
       enabled: import.meta.env.PROD,
-      onBackupRequested: () => dialogElement.showModal(),
+      onBackupRequested: () => {
+        dialogElement.showModal();
+        void refreshBalances();
+      },
       onMenuRequested: () => {
         if (dialogElement.open) dialogElement.close();
         return settingsElement;
@@ -113,11 +97,37 @@ function initializePublicFeatures(): void {
 
 function wireIdentityControls(): void {
   dialogElement.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
-  settingsElement.addEventListener("click", () => dialogElement.showModal());
+  settingsElement.addEventListener("click", () => {
+    dialogElement.showModal();
+    void refreshBalances();
+  });
   dialogCloseElement.addEventListener("click", () => dialogElement.close());
   exportElement.addEventListener("click", () => void exportIdentity());
+  refreshBalancesElement.addEventListener("click", () => void refreshBalances());
   importElement.addEventListener("change", () => void importIdentity());
   resetElement.addEventListener("click", () => void confirmReset());
+}
+
+async function refreshBalances(): Promise<void> {
+  if (!identity || balancesLoading) return;
+  balancesLoading = true;
+  refreshBalancesElement.disabled = true;
+  balanceStateElement.textContent = "reading Base…";
+  try {
+    const snapshot = await fetchAccountBalances(parseConfig().baseRpcEndpoint, identity.address);
+    ethBalanceElement.textContent = `${snapshot.formattedEth} ETH`;
+    uwuBalanceElement.textContent = `${snapshot.formattedUwu} UWU`;
+    levelElement.textContent = snapshot.level;
+    balanceStateElement.textContent = `Base block ${snapshot.blockNumber}`;
+  } catch (error) {
+    ethBalanceElement.textContent = "unavailable";
+    uwuBalanceElement.textContent = "unavailable";
+    levelElement.textContent = "unavailable";
+    balanceStateElement.textContent = publicError(error);
+  } finally {
+    balancesLoading = false;
+    refreshBalancesElement.disabled = false;
+  }
 }
 
 async function exportIdentity(): Promise<void> {
@@ -131,7 +141,7 @@ async function exportIdentity(): Promise<void> {
     link.download = `cthuwu-${environment}-identity.json`;
     link.click();
     URL.revokeObjectURL(url);
-    setSettingsStatus("encrypted identity backup downloaded");
+    setSettingsStatus("encrypted wallet key backup downloaded");
   } catch (error) {
     setSettingsStatus(publicError(error));
   }
@@ -163,7 +173,6 @@ async function confirmReset(): Promise<void> {
 
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
-  leaderboardController?.dispose();
   pwaController?.dispose();
   void chatController?.close();
 });

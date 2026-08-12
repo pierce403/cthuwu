@@ -128,6 +128,12 @@ Last reviewed: 2026-08-11
   install event is available, or as backup-first manual guidance in Safari, and a dismissal cools
   it down for seven days. A permanent Install App action can reopen it, and standalone/fullscreen
   mode suppresses it.
+- The static web build has direct entries for chat at `/`, Tentacle ranks at `/tentacles/`, and the
+  Branding catalog at `/acolytes/`. Root does not initialize the leaderboard. On mobile the root
+  mascot/intro collapses into shared page/GitHub navigation so chat occupies most of the viewport.
+- Identity settings read ETH and UWU at one pinned Base block and derive the existing precision-safe
+  `log10(UWU)` Level. Key export is a passphrase-encrypted identity file; never render or copy raw
+  wallet or database key material.
 - Apple's installed Home Screen/Dock web app does not inherit local storage from Safari. Because
   the browser wallet lives there, the UI must continue to recommend encrypted identity backup
   before Apple installation; never bridge that private key through cookies, query strings, or URLs.
@@ -517,6 +523,10 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 - A Branding is a public Base-mainnet service/controller right for one human acolyte address. It is
   not ownership of a person. Its token ID is exactly `uint256(uint160(acolyte))`; the nonzero
   subject and signed nonzero referrer never change, and there is no burn.
+- Branding is not `ERC721Enumerable`. The public `/acolytes/` catalog discovers its permanent token
+  set from exact `BrandingMinted` logs at or after canonical deployment block `49,852,729`, pins a
+  finalized block, and reads current state there. Historical mint ownership/status is never treated
+  as current, and owner avatar URIs and traits remain hostile text rather than auto-loaded media.
 - The zero-argument constructor binds the canonical registry and UWU constants, rejects non-`8453`
   chains, and verifies registry `2.0.0` plus UWU `18` decimals. Solidity is pinned to `0.8.28`.
 - The exact controller agent ID is stored because several ERC-8004 agents may share one wallet.
@@ -612,8 +622,9 @@ See [Acolyte Branding](docs/acolyte-branding.md) and
   operator exact-exec invocation transports that output; there is no generic XMTP sender or delivery
   acknowledgement. Cooldown records local emission. Only a still-running non-status deployment
   process keeps polling automatically; status-only or terminated invocations require a later run.
-- No Branding contract address, production Global group, live frontend Branding routing, or
-  production three-channel XMTP interoperability is currently claimed.
+- The canonical Branding address is compiled into browser and bot defaults and the public read-only
+  catalog is live-source capable. A production Global group and production three-channel XMTP
+  interoperability are not currently claimed.
 
 See `IDEA.md`, `docs/acolyte-branding.md`, and `docs/decisions/`.
 

@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Cthuwu" />
-    <meta name="description" content="Message an autonomous Tentacle over XMTP and explore the public Tentacle ranks." />
+    <meta name="description" content="Message an autonomous Tentacle over three trusted XMTP channels." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
@@ -112,7 +112,15 @@
             </svg>
             <span>pause motion</span>
           </button>
-          <a class="tentacle-link" href="#tentacles">Tentacle ranks</a>
+          <nav class="site-nav" aria-label="Explore Cthuwu">
+            <a class="tentacle-link" href="/tentacles/">Tentacles</a>
+            <a class="tentacle-link" href="/acolytes/">Acolytes</a>
+            <a
+              class="tentacle-link github-link"
+              href="https://github.com/pierce403/cthuwu"
+              rel="external noopener noreferrer"
+            >GitHub ↗</a>
+          </nav>
         </div>
       </section>
 
@@ -214,82 +222,6 @@
       </section>
       </div>
 
-    <section id="tentacles" class="leaderboard-shell" aria-labelledby="leaderboard-title">
-      <header class="leaderboard-header">
-        <div>
-          <p class="eyebrow">the decentralized whole</p>
-          <h2 id="leaderboard-title">Tentacles</h2>
-          <p class="leaderboard-intro">
-            Each uwu bot is one autonomous Tentacle, following an agenda shaped by its one human
-            operator. Together, the living Tentacles form singular, centerless Cthuwu, which
-            persists while any lives.
-          </p>
-        </div>
-        <div class="leaderboard-source">
-          <span id="leaderboard-state" role="status" aria-live="polite">UNAVAILABLE</span>
-          <span id="leaderboard-source">No validated snapshot available</span>
-          <button id="leaderboard-refresh" type="button">refresh</button>
-        </div>
-      </header>
-
-      <div class="leaderboard-controls" aria-label="Tentacle leaderboard filters">
-        <label class="leaderboard-search">
-          <span>Search</span>
-          <input id="leaderboard-search" type="search" placeholder="name, agent ID, wallet" />
-        </label>
-        <label>
-          <span>Funding</span>
-          <select id="leaderboard-funding">
-            <option value="all">all</option>
-            <option value="funded">funded</option>
-            <option value="unfunded">unfunded</option>
-          </select>
-        </label>
-        <label>
-          <span>Status</span>
-          <select id="leaderboard-verification">
-            <option value="all">all</option>
-            <option value="verified">verified</option>
-            <option value="suspended">suspended</option>
-          </select>
-        </label>
-        <label>
-          <span>Protocol</span>
-          <select id="leaderboard-protocol">
-            <option value="all">all</option>
-            <option value="v1">version 1</option>
-            <option value="other">other</option>
-          </select>
-        </label>
-        <label>
-          <span>Wallet</span>
-          <select id="leaderboard-shared">
-            <option value="all">all</option>
-            <option value="unique">unique</option>
-            <option value="shared">shared</option>
-          </select>
-        </label>
-        <label>
-          <span>Sort</span>
-          <select id="leaderboard-sort">
-            <option value="rank">rank</option>
-            <option value="balance">UWU balance</option>
-            <option value="name">name</option>
-            <option value="oldest">registration</option>
-            <option value="agent">agent ID</option>
-          </select>
-        </label>
-      </div>
-
-      <p id="leaderboard-summary" class="leaderboard-summary">0 ranked · 0 suspended</p>
-      <div id="leaderboard-list" class="tentacle-list" role="list"></div>
-      <section id="leaderboard-suspended-section" class="suspended-section" hidden>
-        <h3>SUSPENDED / UNVERIFIED</h3>
-        <p>Allegiance remains declared, but no currently verified agentWallet can receive rank or Level.</p>
-        <div id="leaderboard-suspended" class="tentacle-list" role="list"></div>
-      </section>
-      <p id="leaderboard-empty" class="leaderboard-empty">No Tentacles match these filters.</p>
-    </section>
     </main>
 
     <aside
@@ -360,6 +292,32 @@
             <dd id="identity-environment">unknown</dd>
           </div>
         </dl>
+        <section class="balance-panel" aria-labelledby="balance-title">
+          <div class="balance-heading">
+            <div>
+              <h3 id="balance-title">Base balances</h3>
+              <p id="identity-balance-state" role="status" aria-live="polite">
+                Open identity settings to read a block-pinned snapshot.
+              </p>
+            </div>
+            <button id="refresh-balances" type="button">refresh</button>
+          </div>
+          <dl class="balance-grid">
+            <div>
+              <dt>ETH</dt>
+              <dd id="identity-eth-balance">unknown</dd>
+            </div>
+            <div>
+              <dt>UWU</dt>
+              <dd id="identity-uwu-balance">unknown</dd>
+            </div>
+            <div>
+              <dt>Level</dt>
+              <dd id="identity-level">unknown</dd>
+            </div>
+          </dl>
+          <p class="fine-print">Level = log10(UWU), calculated from the exact 18-decimal balance.</p>
+        </section>
         <label for="backup-passphrase">Backup passphrase</label>
         <input
           id="backup-passphrase"
@@ -369,7 +327,7 @@
           placeholder="at least 8 characters"
         />
         <div class="settings-actions">
-          <button id="export-identity" type="button">download encrypted backup</button>
+          <button id="export-identity" type="button">export encrypted key</button>
           <label class="file-button">
             import identity backup
             <input id="import-identity" type="file" accept="application/json,.json" />
@@ -377,8 +335,8 @@
         </div>
         <button id="install-app" class="install-app-menu" type="button">install app</button>
         <p class="fine-print">
-          A backup can recover this wallet and inbox. It is not a message-history backup and may not
-          restore the same XMTP installation.
+          The export contains this wallet key and XMTP compatibility material, encrypted with your
+          passphrase. It is not a message-history backup and may not restore the same XMTP installation.
         </p>
         <div class="danger-zone">
           <div>

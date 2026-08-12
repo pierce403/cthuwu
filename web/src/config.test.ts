@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_BRANDING_CONTRACT,
+  CANONICAL_BRANDING_DEPLOYMENT_BLOCK,
   DEFAULT_BASE_RPC_ENDPOINT,
   INTRO_TENTACLE_ADDRESS,
   XMTP_ENVIRONMENT,
@@ -26,6 +27,7 @@ describe("configuration", () => {
 
   it("defaults to the verified canonical Branding deployment", () => {
     expect(parseConfig().brandingContract).toBe(CANONICAL_BRANDING_CONTRACT);
+    expect(CANONICAL_BRANDING_DEPLOYMENT_BLOCK).toBe(49_852_729n);
     expect(parseConfig({ VITE_CTHUWU_BRANDING_CONTRACT: "" }).brandingContract).toBe(
       CANONICAL_BRANDING_CONTRACT,
     );

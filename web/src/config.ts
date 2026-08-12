@@ -7,6 +7,7 @@ export const XMTP_ENVIRONMENT: XmtpEnvironment = "production";
 export const INTRO_TENTACLE_ADDRESS = "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db";
 export const DEFAULT_BASE_RPC_ENDPOINT = "https://mainnet.base.org/";
 export const CANONICAL_BRANDING_CONTRACT = "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da";
+export const CANONICAL_BRANDING_DEPLOYMENT_BLOCK = 49_852_729n;
 
 const ADDRESS = /^0x[0-9a-f]{40}$/u;
 

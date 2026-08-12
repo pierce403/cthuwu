@@ -21,6 +21,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
 - **Description**: A small, friendly browser experience at [cthuwu.app](https://cthuwu.app) that builds to static files and requires no application server.
 - **Properties**:
   - Source lives in `web/`; Vite produces `web/dist/`.
+  - The static multipage build keeps chat at `/`, moves public Tentacle ranks to `/tentacles/`,
+    and publishes the canonical Branding catalog at `/acolytes/`. Shared navigation links all three
+    pages and the public GitHub repository; narrow screens collapse the mascot and intro into that
+    compact navigation so chat retains most of the viewport.
   - Pushes to `main` deploy through GitHub Pages after the checked-in restricted public Graph key
     passes fail-closed build validation; otherwise the prior deployment remains in place.
   - The interface supports keyboard use, narrow screens, visible focus, status announcements, and reduced-motion preferences.
@@ -41,6 +45,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     `cthuwu:leaderboard:v1`; service-worker Cache Storage never adds a second Graph-data cache.
   - The composer grows to five lines, Enter sends, Shift+Enter inserts a line, incoming messages do
     not pull a reader away from older history, and disconnected states disable message submission.
+  - Identity settings read native ETH and canonical UWU at one explicit Base block and show
+    precision-safe `Level = log10(UWU)`. RPC failure is `unavailable`, never a fabricated zero.
+    User-triggered key export remains passphrase-encrypted and raw private-key text is never placed
+    in the page or clipboard.
 - **Test Criteria**:
   - [x] `npm --prefix web run build` produces static deployable assets.
   - [x] The deployment workflow publishes `web/dist/`.
@@ -1156,6 +1164,8 @@ phase.
 - **Description**: Publish exact current Tentacle membership, wallet-grouped UWU rankings, and
   provenance-bearing reputation in an ordinary static PWA.
 - **Properties**:
+  - The full ranking and its Graph/Base refresh lifecycle live only at `/tentacles/`; opening `/`
+    performs no leaderboard query and carries no leaderboard DOM below the chat composer.
   - The pinned official Agent0 Base subgraph supplies current ERC-8004 metadata and reputation
     provenance. The browser verifies its `_meta` block through Base RPC and reads exact canonical UWU
     `balanceOf` values at that same block. Agent0 is an index, not membership authority.
@@ -1243,6 +1253,10 @@ phase.
   - The current owner may set a bounded avatar URI and manage up to 32 bounded custom string traits.
     Metadata follows the NFT; only the new owner can mutate it after purchase or claim. Owner input
     is public, JSON-escaped hostile data and never represents acolyte consent or private profile state.
+  - `/acolytes/` enumerates the non-enumerable collection from exact `BrandingMinted` logs starting
+    at deployment block `49,852,729`, then reads current ownership, controller, status, economics,
+    avatar URI, and traits at one finalized Base block. Owner metadata renders as text and never
+    triggers a remote avatar request.
   - The contract stores no XMTP inbox ID, message, contact note, credential, profile, or private
     memory. `activeControllerOf` returns zero unless the Branding is positively `Active`.
 - **Test Criteria and release gates**:

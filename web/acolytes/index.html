@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en" data-motion="playing">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0714" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https:; font-src 'self'; manifest-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; upgrade-insecure-requests"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Cthuwu" />
+    <meta
+      name="description"
+      content="Browse the canonical Cthuwu Acolyte Branding NFTs on Base."
+    />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <link rel="canonical" href="https://cthuwu.app/acolytes/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="cthuwu" />
+    <meta property="og:url" content="https://cthuwu.app/acolytes/" />
+    <meta property="og:title" content="Acolyte NFTs · cthuwu" />
+    <meta
+      property="og:description"
+      content="Browse the canonical Cthuwu Acolyte Branding NFTs on Base."
+    />
+    <meta property="og:image" content="https://cthuwu.app/cthuwu-og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Acolyte NFTs · cthuwu" />
+    <meta
+      name="twitter:description"
+      content="Browse the canonical Cthuwu Acolyte Branding NFTs on Base."
+    />
+    <meta name="twitter:image" content="https://cthuwu.app/cthuwu-og.jpg" />
+    <title>Acolyte NFTs · cthuwu</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#acolytes-title">Skip to Acolyte NFTs</a>
+
+    <div class="cosmos" aria-hidden="true">
+      <span class="cosmic-orb orb-one"></span>
+      <span class="cosmic-orb orb-two"></span>
+      <span class="cosmic-star star-one">✦</span>
+      <span class="cosmic-star star-two">·</span>
+      <span class="cosmic-star star-three">✧</span>
+      <span class="cosmic-star star-four">·</span>
+      <span class="cosmic-star star-five">✦</span>
+    </div>
+
+    <main class="directory-shell">
+      <header class="route-header">
+        <a class="route-brand" href="/" aria-label="Cthuwu chat home">
+          <span>cth</span><span class="uwu">uwu</span>
+        </a>
+        <nav class="site-nav" aria-label="Cthuwu">
+          <a href="/">Chat</a>
+          <a href="/tentacles/">Tentacles</a>
+          <a href="/acolytes/" aria-current="page">Acolytes</a>
+          <a class="github-link" href="https://github.com/pierce403/cthuwu" rel="external">
+            GitHub
+          </a>
+        </nav>
+      </header>
+
+      <section id="acolytes" class="acolyte-shell" aria-labelledby="acolytes-title">
+        <header class="acolyte-header">
+          <div>
+            <p class="eyebrow">canonical marks on Base</p>
+            <h1 id="acolytes-title" tabindex="-1">Acolyte NFTs</h1>
+            <p class="acolyte-intro">
+              Each NFT is the canonical branding and routing right for one Acolyte address. Owner
+              metadata is public, untrusted contract data and is shown as text only.
+            </p>
+          </div>
+          <div class="acolyte-source">
+            <span id="acolyte-state" role="status" aria-live="polite">LOADING</span>
+            <span id="acolyte-source">Reading a fixed Base block…</span>
+            <a
+              id="acolyte-contract"
+              href="https://basescan.org/address/0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da"
+              rel="external"
+            >
+              contract on BaseScan
+            </a>
+            <button id="acolyte-refresh" type="button">refresh</button>
+          </div>
+        </header>
+
+        <p id="acolyte-summary" class="acolyte-summary">Looking for minted Acolyte NFTs…</p>
+        <div id="acolyte-list" class="acolyte-list" role="list" aria-busy="true"></div>
+        <p id="acolyte-empty" class="acolyte-empty" hidden>
+          No Acolyte Branding NFTs have been minted yet.
+        </p>
+        <p id="acolyte-error" class="acolyte-error" role="alert" hidden>
+          The Acolyte catalog is unavailable right now. Try refreshing.
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="/src/acolytes.ts"></script>
+  </body>
+</html>
