@@ -22,6 +22,10 @@ use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+const BASE_RPC_HELP: &str =
+    "get a Base RPC key from a provider console such as Infura, Alchemy, or QuickNode, then tell an active operator to update CTHUWU_RPC_ENDPOINT and restart so the node uses it.";
+const VENICE_KEY_HELP: &str =
+    "the Venice API key should come from your Venice account settings or admin API page; this Tentacle never echoes it back.";
 
 pub struct UwUBot {
     contacts: ContactStore,
@@ -360,6 +364,19 @@ impl UwUBot {
             let (name, arguments) = command
                 .split_once(char::is_whitespace)
                 .unwrap_or((command, ""));
+            if name.eq_ignore_ascii_case("base-rpc-key") {
+                let arguments = arguments.trim();
+                if arguments.is_empty() || arguments.eq_ignore_ascii_case("status") {
+                    return Ok(format!(
+                        "this Tentacle can keep a Base RPC key only for operator-guided updates. if ur node keeps losing Base economics state, send `/base-rpc-key <api-key>` here first so the operator knows it was offered. {}",
+                        BASE_RPC_HELP
+                    ));
+                }
+                return Ok(format!(
+                    "thanks, fwiend. i heard `/base-rpc-key <api-key>` but Base RPC keys are applied by operator action during a restart. {}",
+                    BASE_RPC_HELP
+                ));
+            }
             if name.eq_ignore_ascii_case("venice-key") {
                 let Some(control) = &self.model_control else {
                     return Ok("this Tentacle can't load Venice credentials in its current runtime, fwiend."
@@ -432,8 +449,10 @@ impl UwUBot {
         if let Some(control) = &self.model_control
             && matches!(control.venice_key_configured(), Ok(false))
         {
-            return Ok("this Tentacle needs a Venice key for its remote mind, fwiend. if u trust this node with one, send `/venice-key <api-key>` and i'll store it owner-only without echoing it. the command itself will still remain in ur XMTP conversation history, uwu."
-                .to_owned());
+            return Ok(format!(
+                "this Tentacle needs a Venice key for its remote mind, fwiend. if u trust this node with one, send `/venice-key <api-key>` and i'll store it owner-only without echoing it. the command itself will still remain in ur XMTP conversation history, uwu. {}",
+                VENICE_KEY_HELP
+            ));
         }
 
         let token_observation = match self
@@ -443,10 +462,10 @@ impl UwUBot {
             Ok(observation) => observation,
             Err(error) => {
                 warn!(%error, "required UWU balance observation is unavailable");
-                return Ok(
-                    "economic verification is unavailable, so this Tentacle refuses to operate until a current Base UWU balance can be confirmed."
-                        .to_owned(),
-                );
+                return Ok(format!(
+                    "economic verification is unavailable, so this Tentacle refuses to operate until a current Base UWU balance can be confirmed. if this is a Base RPC key outage, reply `/base-rpc-key <api-key>` with a provider key and tell the operator to set CTHUWU_RPC_ENDPOINT, then restart. {}",
+                    BASE_RPC_HELP
+                ));
             }
         };
         if let Some(observation) = token_observation.as_ref()

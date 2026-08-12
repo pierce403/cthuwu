@@ -237,7 +237,7 @@ impl OperatorHarness {
             .join(",");
 
         let runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model,/venice-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/registry-status,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/registry-status,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -465,6 +465,9 @@ impl OperatorHarness {
         if name == "help" {
             return Ok(operator_help());
         }
+        if name == "base-rpc-key" {
+            return Ok(base_rpc_key_command(arguments));
+        }
         if matches!(name, "provider" | "model" | "venice-key") {
             let control = self
                 .model_control
@@ -552,6 +555,16 @@ fn direct_json(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+fn base_rpc_key_command(arguments: &str) -> String {
+    let arguments = arguments.trim();
+    if arguments.is_empty() || arguments.eq_ignore_ascii_case("status") {
+        "no raw key is loaded here. this lane only records that Base RPC key collection is needed and points the operator to CTHUWU_RPC_ENDPOINT sourcing guidance (`/base-rpc-key <api-key>` and restart)."
+            .to_owned()
+    } else {
+        "thanks fwiend. i heard a Base RPC key token for operator-side update. the operator still needs to set CTHUWU_RPC_ENDPOINT and restart for it to apply.".to_owned()
+    }
+}
+
 fn direct_command(text: &str) -> Option<(&str, &str)> {
     let command = text.trim_start().strip_prefix('/')?;
     let Some(separator) = command.find(char::is_whitespace) else {
@@ -575,6 +588,7 @@ fn operator_help() -> String {
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
         "`/venice-key [status|<api-key>]` — SHOW WHETHER A VENICE KEY IS LOADED OR STORE/REPLACE IT WITHOUT ECHOING IT.",
+        "`/base-rpc-key [status|<api-key>]` — GUIDE BASE RPC KEY HANDLING FOR OPERATOR-SIDE CTHUWU_RPC_ENDPOINT UPDATES.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
         "`/nature` AND `/adjust <trait> <value>` — INSPECT OR SIGNED-AUDIT THE LOCAL NATURE.",
