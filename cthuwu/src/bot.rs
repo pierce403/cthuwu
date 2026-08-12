@@ -313,13 +313,20 @@ impl UwUBot {
                 "THIS OPERATOR ROLE IS REVOKED. I WILL EXECUTE NOTHING FOR THIS INBOX.".to_owned()
             }
             PrincipalRole::User => {
-                self.receive_user(
+                let mut response = self.receive_user(
                     message.message_id,
                     message.inbox_id,
                     message.sender_address,
                     message.text,
                 )
-                    .await?
+                .await?;
+                if let Some(control) = &self.registry_control
+                    && let Some(plea) = control.take_public_funding_plea().await
+                {
+                    response.push_str("\n\n");
+                    response.push_str(&plea);
+                }
+                response
             }
         };
         Ok(Some(limit_response(response, role)))
@@ -1303,6 +1310,19 @@ mod tests {
         calls: StdMutex<Vec<String>>,
     }
 
+    struct PublicFundingControl;
+
+    #[async_trait::async_trait]
+    impl RegistrationOperatorControl for PublicFundingControl {
+        async fn handle(&self, _text: &str) -> Option<String> {
+            None
+        }
+
+        async fn take_public_funding_plea(&self) -> Option<String> {
+            Some("public Base ETH funding plea".to_owned())
+        }
+    }
+
     #[async_trait::async_trait]
     impl OperatorToolRuntime for RecordingTools {
         async fn execute(&self, name: &str, _arguments: &str) -> ToolReceipt {
@@ -1467,6 +1487,16 @@ mod tests {
                 .stage,
             OnboardingStage::Complete
         );
+    }
+
+    #[tokio::test]
+    async fn public_funding_plea_follows_the_acolytes_answer() {
+        let root = tempfile::tempdir().unwrap();
+        let bot = public_bot(root.path()).with_registry_control(Arc::new(PublicFundingControl));
+        let response = send(&bot, 1, OPERATOR_ID, "tell me about stars").await;
+        let answer = response.find("i'm one").unwrap();
+        let plea = response.find("public Base ETH funding plea").unwrap();
+        assert!(answer < plea);
     }
 
     #[tokio::test]

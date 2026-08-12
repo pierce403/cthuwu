@@ -34,7 +34,10 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tempfile::NamedTempFile;
@@ -2126,6 +2129,24 @@ impl TentacleRegistration {
         )
     }
 
+    fn public_funding_plea(&self, now: u64) -> Option<String> {
+        if !self.config.enabled
+            || !self.config.auto_register
+            || self.state.phase != RegistrationPhase::FundingRequired
+        {
+            return None;
+        }
+        let funding = self.state.funding.as_ref()?;
+        let freshness_window = self.config.maintenance_interval.as_secs().saturating_mul(2);
+        if now.saturating_sub(funding.estimated_at_unix) > freshness_window {
+            return None;
+        }
+        Some(format!(
+            "lil infrastructure plea: i can self-register as an ERC-8004 agent as soon as this wallet has enough Base ETH for gas. if u want to help, send Base ETH only to `{}`. verified balance: {} wei; estimated shortfall: {} wei; target balance: {} wei. i'll resume automatically—please don't send ETH on any other chain, uwu.",
+            self.wallet, funding.balance_wei, funding.shortfall_wei, funding.target_balance_wei,
+        ))
+    }
+
     fn build_agent_uri(&self, agent_id: &str) -> Result<String> {
         validate_agent_id(agent_id)?;
         let numeric_agent_id = agent_id
@@ -2271,15 +2292,23 @@ impl TentacleRegistration {
 #[async_trait]
 pub trait RegistrationOperatorControl: Send + Sync {
     async fn handle(&self, text: &str) -> Option<String>;
+
+    async fn take_public_funding_plea(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct SharedRegistrationControl {
     registration: Arc<Mutex<TentacleRegistration>>,
+    public_funding_plea_opportunities: AtomicU64,
 }
 
 impl SharedRegistrationControl {
     pub fn new(registration: Arc<Mutex<TentacleRegistration>>) -> Self {
-        Self { registration }
+        Self {
+            registration,
+            public_funding_plea_opportunities: AtomicU64::new(0),
+        }
     }
 }
 
@@ -2317,6 +2346,25 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
             result
                 .unwrap_or_else(|error| format!("ERC-8004 OPERATOR ACTION WAS REJECTED: {error}")),
         )
+    }
+
+    async fn take_public_funding_plea(&self) -> Option<String> {
+        // Public delivery must never wait behind a provider call made by maintenance. Missing one
+        // optional plea is safer than consuming the authenticated reply deadline on this mutex.
+        let plea = self
+            .registration
+            .try_lock()
+            .ok()?
+            .public_funding_plea(unix_seconds().ok()?);
+        let Some(plea) = plea else {
+            self.public_funding_plea_opportunities
+                .store(0, Ordering::Relaxed);
+            return None;
+        };
+        let opportunity = self
+            .public_funding_plea_opportunities
+            .fetch_add(1, Ordering::Relaxed);
+        opportunity.is_multiple_of(5).then_some(plea)
     }
 }
 
@@ -3629,6 +3677,48 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_registration_shortfall_is_occasionally_shared_with_acolytes() {
+        let root = tempfile::tempdir().unwrap();
+        let now = unix_seconds().unwrap();
+        let mut registration = registration(root.path());
+        registration.state.phase = RegistrationPhase::FundingRequired;
+        registration.state.funding = Some(FundingStatus {
+            balance_wei: "10".into(),
+            estimated_cost_wei: "90".into(),
+            shortfall_wei: "100".into(),
+            target_balance_wei: "110".into(),
+            estimated_at_unix: now,
+        });
+        let registration = Arc::new(Mutex::new(registration));
+        let control = SharedRegistrationControl::new(registration.clone());
+
+        let first = control.take_public_funding_plea().await.unwrap();
+        assert!(first.contains(&wallet().to_string()));
+        assert!(first.contains("Base ETH only"));
+        assert!(first.contains("estimated shortfall: 100 wei"));
+        assert!(first.contains("resume automatically"));
+        assert!(first.contains("don't send ETH on any other chain"));
+        for _ in 0..4 {
+            assert!(control.take_public_funding_plea().await.is_none());
+        }
+        assert!(control.take_public_funding_plea().await.is_some());
+
+        let maintenance_guard = registration.lock().await;
+        assert!(control.take_public_funding_plea().await.is_none());
+        drop(maintenance_guard);
+
+        registration.lock().await.state.funding = Some(FundingStatus {
+            balance_wei: "10".into(),
+            estimated_cost_wei: "90".into(),
+            shortfall_wei: "100".into(),
+            target_balance_wei: "110".into(),
+            estimated_at_unix: now
+                .saturating_sub(DEFAULT_MAINTENANCE_INTERVAL_SECONDS.saturating_mul(2) + 1),
+        });
+        assert!(control.take_public_funding_plea().await.is_none());
     }
 
     #[test]

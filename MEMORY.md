@@ -485,9 +485,13 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
   another write; discovery and ambiguous-candidate selection prevent duplicate minting.
 - Registration defaults on. Provider estimation covers the complete remaining sequence plus a
   configurable 125% safety factor and post-registration reserve. Funding requests contain trusted
-  exact Base values, are operator-only and persisted-cooldown-limited (24 hours by default), and
-  registration resumes automatically after funding. Immediate repeat notice requires at least a
-  10% change in estimated cost, shortfall, or target; smaller fee jitter waits for the cooldown.
+  exact Base values. Operator notices are persisted-cooldown-limited (24 hours by default), while a
+  fresh binding shortfall may also produce a public plea after the acolyte's answer on the first and
+  every fifth eligible conversation. Public pleas expose no registry control, disappear when the
+  estimate is older than two maintenance intervals, and may repeat once after restart because their
+  cadence is process-local. Registration resumes automatically after funding. Immediate repeat
+  operator notice requires at least a 10% change in estimated cost, shortfall, or target; smaller fee
+  jitter waits for the cooldown.
 - The persistent wallet key never enters Rust. The sidecar permits only typed, zero-value calls to
   the canonical registry, exact `cthuwu.*` keys, bounded URI/metadata/frames, and gas/fee ceilings;
   it exposes no arbitrary destination, calldata, or generic signer.

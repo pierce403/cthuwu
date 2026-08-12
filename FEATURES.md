@@ -1133,9 +1133,12 @@ phase.
     requires operator selection for ambiguity, and can opt an existing agent in without minting.
   - The state machine persists intent before broadcast and resumes registration, receipt/finality,
     profile publication, wallet verification, and metadata stages without duplicate minting.
-  - A provider-estimated complete cost receives configurable safety and reserve. Shortfall notices
-    are exact, operator-only, and rate-limited; only a 10% cost/shortfall/target change bypasses the
-    default 24-hour cooldown. Registration resumes automatically after funding.
+  - A provider-estimated complete cost receives configurable safety and reserve. Operator shortfall
+    notices are exact, delivery-acknowledged, and persistently rate-limited; only a 10%
+    cost/shortfall/target change bypasses the default 24-hour cooldown. While that fresh shortfall
+    remains binding, ordinary acolyte replies may append the exact Base-only funding address and
+    estimate on the first and every fifth eligible conversation. Registration resumes automatically
+    after funding; public senders receive no registry command or signing authority.
   - The Node sidecar exposes only typed zero-value canonical-registry calls with allowlisted
     functions/metadata keys, strict bounds, and fee/gas ceilings. No generic transaction signer or
     raw key crosses the boundary.
@@ -1152,6 +1155,8 @@ phase.
   - [x] A bounded CI integration test forks canonical Base at verified block `41663800`, generates
     and funds an ephemeral production-bound signer only inside Anvil, then exercises real registry
     registration, lost-response discovery, exact-once recovery, final URI, wallet, and metadata.
+  - [x] Public-reply tests prove a fresh funding plea follows the acolyte's answer, names only the
+    exact Base wallet and verified estimate, is cadence-limited, and disappears when stale.
   - [ ] A funded production Tentacle completes one live registration and recovery exercise.
 
 ### Static Tentacle leaderboard
