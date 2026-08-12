@@ -244,16 +244,16 @@ erased. Deleted-message stream events remove expired messages from the rendered 
 
 ## Configuration
 
-These names describe the production trust inputs; their absence must not be replaced by an implicit
-deployment or group:
+These names describe the production trust inputs. Branding defaults to the verified canonical Base
+deployment; the Global group remains explicit and must never be inferred:
 
 | Name | Consumer | Meaning |
 |---|---|---|
 | `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static browser build | Credential-free HTTPS Base RPC; defaults to `https://mainnet.base.org/`. |
-| `VITE_CTHUWU_BRANDING_CONTRACT` | Static browser build | Explicit verified Branding deployment; absence is `NotConfigured`. |
+| `VITE_CTHUWU_BRANDING_CONTRACT` | Static browser build | Verified Branding deployment; defaults to the canonical Base address. |
 | `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Static browser build | Browser revalidation cadence; defaults to `600000`, with accepted values from `60000` through `3600000`. |
 | `CTHUWU_RPC_ENDPOINT` | Tentacle runtime | Credential-free HTTPS or loopback HTTP Base RPC; defaults to `https://mainnet.base.org`. |
-| `CTHUWU_BRANDING_CONTRACT` | Tentacle runtime | The same explicit Branding deployment used to authorize and reconcile enrollment. |
+| `CTHUWU_BRANDING_CONTRACT` | Tentacle runtime | The same deployment used to authorize and reconcile enrollment; defaults to the canonical Base address. |
 | `CTHUWU_GLOBAL_GROUP_ID` | Tentacle runtime | Exact singleton production Global conversation ID. |
 | `CTHUWU_GLOBAL_ADMIN_INBOX_IDS` | Tentacle runtime/bootstrap | Comma-separated authorized Tentacle inbox-admin set, at most 32 including the local inbox. |
 | `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` | Tentacle runtime | Membership sweep cadence; defaults to `900`, with accepted values from `60` through `86400`. |
@@ -262,7 +262,7 @@ For example, a reviewed static build configuration has this shape:
 
 ```dotenv
 VITE_CTHUWU_BASE_RPC_ENDPOINT=https://mainnet.base.org/
-VITE_CTHUWU_BRANDING_CONTRACT=0x<verified-lowercase-branding-address>
+VITE_CTHUWU_BRANDING_CONTRACT=0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da
 VITE_CTHUWU_ASSIGNMENT_REFRESH_MS=600000
 ```
 
@@ -270,7 +270,7 @@ The matching Tentacle environment has this shape:
 
 ```dotenv
 CTHUWU_RPC_ENDPOINT=https://mainnet.base.org
-CTHUWU_BRANDING_CONTRACT=0x<verified-branding-address>
+CTHUWU_BRANDING_CONTRACT=0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da
 CTHUWU_GLOBAL_GROUP_ID=<64-lowercase-hex-group-id>
 CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<64-lowercase-hex-inbox-id>,<64-lowercase-hex-inbox-id>
 CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900

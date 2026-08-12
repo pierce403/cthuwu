@@ -133,14 +133,14 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Normalized messages carry `conversationId`, `senderInboxId`, `sentAtNs`, content type, text, and
     `mine`. All-message, new-group, and deleted-message streams feed one router that admits only
     exact trusted IDs; deleted events remove expired messages from the rendered channel.
-  - The acolyte address comes only from the recovered `StoredIdentity`. When
-    `VITE_CTHUWU_BRANDING_CONTRACT` is configured, assignment is verified at one explicit Base block:
+  - The acolyte address comes only from the recovered `StoredIdentity`. The verified canonical
+    Branding deployment is the browser and Tentacle default. Assignment is verified at one explicit Base block:
     Branding status/controller, owner/controller wallet, canonical registry/deployment, exact
     allegiance and protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
     selected production XMTP endpoint must all agree. Agent0 and the leaderboard cache are
     discovery/display hints, never routing authority.
-  - `NotConfigured`, `Unminted`, `Expired`, and positively verified `Ineligible` preserve service
-    through the configured intro Tentacle. For a configured deployment, `RegistryUnavailable`, a
+  - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the
+    configured intro Tentacle. `RegistryUnavailable`, a
     block-consistency failure, or an unverifiable canonical endpoint freezes Branding routing in a
     retryable state instead of being treated as abandonment.
   - Assignment is revalidated on connect, PWA resume, and a bounded
@@ -167,10 +167,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     disappear from supporting clients after 14 days.
   - Browser persistence uses only `cthuwu.chat.*`; leaderboard cache keys remain untouched and no
     inbox ID, group ID, assignment revision, or conversation data is put on-chain.
-  - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, optional
+  - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, canonical-default
     `VITE_CTHUWU_BRANDING_CONTRACT`, and `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` (default 600000 ms,
-    bounded 60000–3600000). Tentacle enrollment separately uses `CTHUWU_RPC_ENDPOINT`, optional
-    `CTHUWU_BRANDING_CONTRACT`, required `CTHUWU_GLOBAL_GROUP_ID`,
+    bounded 60000–3600000). Tentacle enrollment separately uses `CTHUWU_RPC_ENDPOINT`,
+    canonical-default `CTHUWU_BRANDING_CONTRACT`, required `CTHUWU_GLOBAL_GROUP_ID`,
     `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`, and `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` (default 900 s,
     bounded 60–86400). The two revalidation settings are independent.
 - **Test Criteria and release gates**:

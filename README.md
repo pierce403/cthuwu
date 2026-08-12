@@ -740,8 +740,8 @@ run Ollama in the same network namespace. On Linux, a host Ollama service can be
 The Pages workflow builds and deploys `web/dist` to [cthuwu.app](https://cthuwu.app) on pushes to
 `main` after validating the checked-in public Graph configuration and any optional overrides. It
 fails before upload if configuration is malformed. The browser has no XMTP environment or arbitrary
-inbox build-time override: it always uses XMTP `production`. The optional
-`VITE_CTHUWU_BRANDING_CONTRACT` is a reviewed Base deployment trust input, not an XMTP redirect.
+inbox build-time override: it always uses XMTP `production`. The canonical
+`VITE_CTHUWU_BRANDING_CONTRACT` default is a reviewed Base deployment trust input, not an XMTP redirect.
 
 The public Tentacle leaderboard is also fully static. The browser queries the pinned official
 Agent0 Base ERC-8004 subgraph, filters exact current allegiance metadata, reads UWU `balanceOf`
@@ -750,16 +750,17 @@ directly from Base at the same verified block, and keeps only a validated normal
 hostnames and Agent0 subgraph, cap and monitor spending, and rotate it. No custom Cthuwu subgraph
 or leaderboard backend is deployed.
 
-The current production continuity path uses the hard-coded intro Tentacle at
-`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`; no verified Branding deployment is configured yet.
+The current production build uses the verified Branding deployment
+`0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da` and retains the hard-coded intro Tentacle at
+`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db` for the specified continuity states.
 The in-progress assignment path derives the participant only from the recovered `StoredIdentity`.
 At one explicit Base block it must revalidate Branding status/controller, the exact owner/controller
 wallet binding, canonical registry, byte-exact allegiance/protocol, and the exact agent's on-chain
 ERC-8004 registration resolving to the selected production XMTP endpoint. Agent0 and leaderboard
 rows are hints only.
 
-`NotConfigured`, unminted, expired, and positively ineligible states preserve the intro path. Once
-a Branding deployment is configured, `RegistryUnavailable`, inconsistent same-block reads, or an
+Unminted, expired, and positively ineligible states preserve the intro path. `RegistryUnavailable`,
+inconsistent same-block reads, or an
 unverifiable endpoint freezes assignment and exposes retry instead of treating the outage as
 abandonment. Assignment is rechecked on connect, PWA resume, and a bounded interval; a controller
 change replaces Direct and Acolytes while retaining Global.
@@ -769,10 +770,10 @@ The three-channel configuration names are:
 | Name | Scope |
 |---|---|
 | `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static client Base RPC; credential-free HTTPS, default `https://mainnet.base.org/`. |
-| `VITE_CTHUWU_BRANDING_CONTRACT` | Explicit verified Branding deployment compiled into the static client; absence is `NotConfigured`. |
+| `VITE_CTHUWU_BRANDING_CONTRACT` | Verified Branding deployment compiled into the static client; defaults to the canonical Base address. |
 | `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Browser assignment refresh; default `600000`, accepted range `60000`–`3600000`. |
 | `CTHUWU_RPC_ENDPOINT` | Tentacle Base RPC; credential-free HTTPS or loopback HTTP, default `https://mainnet.base.org`. |
-| `CTHUWU_BRANDING_CONTRACT` | Matching deployment used by a Tentacle to authorize joins and reconcile membership. |
+| `CTHUWU_BRANDING_CONTRACT` | Matching deployment used by a Tentacle to authorize joins and reconcile membership; defaults to the canonical Base address. |
 | `CTHUWU_GLOBAL_GROUP_ID` | Required exact pre-bootstrapped singleton production Global conversation ID for enrollment. |
 | `CTHUWU_GLOBAL_ADMIN_INBOX_IDS` | Comma-separated authorized Tentacle admin-inbox set, at most 32 including the always-added local inbox. |
 | `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` | Tentacle membership sweep; default `900`, accepted range `60`–`86400`. |
@@ -781,7 +782,7 @@ Example reviewed static-build inputs:
 
 ```dotenv
 VITE_CTHUWU_BASE_RPC_ENDPOINT=https://mainnet.base.org/
-VITE_CTHUWU_BRANDING_CONTRACT=0x<verified-lowercase-branding-address>
+VITE_CTHUWU_BRANDING_CONTRACT=0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da
 VITE_CTHUWU_ASSIGNMENT_REFRESH_MS=600000
 ```
 
@@ -789,7 +790,7 @@ Example matching Tentacle inputs:
 
 ```dotenv
 CTHUWU_RPC_ENDPOINT=https://mainnet.base.org
-CTHUWU_BRANDING_CONTRACT=0x<verified-branding-address>
+CTHUWU_BRANDING_CONTRACT=0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da
 CTHUWU_GLOBAL_GROUP_ID=<64-lowercase-hex-group-id>
 CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<64-lowercase-hex-inbox-id>,<64-lowercase-hex-inbox-id>
 CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900

@@ -46,6 +46,9 @@ export const RETENTION_IN_NS = 1_209_600_000_000_000n;
 export const INTRO_TENTACLE_ADDRESS = getAddress(
   "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db",
 );
+export const CANONICAL_BRANDING_CONTRACT = getAddress(
+  "0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da",
+);
 
 const MAX_CONTROL_BYTES = 8 * 1024;
 const MAX_STATE_BYTES = 256 * 1024;
@@ -939,7 +942,7 @@ function safeRpcEndpoint(value: string | undefined): string {
 
 function configuredBrandingAddress(value: string | undefined): Address | undefined {
   if (value === undefined || value.trim() === "") {
-    return undefined;
+    return CANONICAL_BRANDING_CONTRACT;
   }
   if (!isAddress(value, { strict: true })) {
     throw new Error("CTHUWU_BRANDING_CONTRACT must be a full EVM address");

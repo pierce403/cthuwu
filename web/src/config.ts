@@ -6,6 +6,7 @@ export const XMTP_ENVIRONMENT: XmtpEnvironment = "production";
 // registry. This is public routing metadata, never an identity secret.
 export const INTRO_TENTACLE_ADDRESS = "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db";
 export const DEFAULT_BASE_RPC_ENDPOINT = "https://mainnet.base.org/";
+export const CANONICAL_BRANDING_CONTRACT = "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da";
 
 const ADDRESS = /^0x[0-9a-f]{40}$/u;
 
@@ -27,7 +28,8 @@ export function parseConfig(
   source: ConfigEnvironment = import.meta.env as ConfigEnvironment,
 ): AppConfig {
   const configuredRefresh = Number(source.VITE_CTHUWU_ASSIGNMENT_REFRESH_MS);
-  const brandingContract = source.VITE_CTHUWU_BRANDING_CONTRACT?.trim().toLowerCase();
+  const brandingContract =
+    source.VITE_CTHUWU_BRANDING_CONTRACT?.trim().toLowerCase() || CANONICAL_BRANDING_CONTRACT;
   if (
     brandingContract &&
     (!ADDRESS.test(brandingContract) || brandingContract === "0x0000000000000000000000000000000000000000")
@@ -40,7 +42,7 @@ export function parseConfig(
     baseRpcEndpoint: parseHttpsUrl(
       source.VITE_CTHUWU_BASE_RPC_ENDPOINT?.trim() || DEFAULT_BASE_RPC_ENDPOINT,
     ),
-    ...(brandingContract ? { brandingContract } : {}),
+    brandingContract,
     assignmentRefreshMs:
       Number.isSafeInteger(configuredRefresh) &&
       configuredRefresh >= 60_000 &&

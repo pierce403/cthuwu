@@ -4,6 +4,7 @@ import { getAddress } from "viem";
 import {
   ASSIGNMENT_CONTENT_TYPE,
   AssignmentCodec,
+  CANONICAL_BRANDING_CONTRACT,
   ChatControlService,
   GLOBAL_LOGICAL_CHANNEL_ID,
   JOIN_CONTENT_TYPE,
@@ -37,6 +38,14 @@ const EVIL = "ee".repeat(32);
 const AGENT_ID = "42";
 const ADDRESS = getAddress("0x1111111111111111111111111111111111111111");
 const REVISION = `50000000:0x${"12".repeat(32)}`;
+
+describe("canonical deployment configuration", () => {
+  it("pins the verified Base Branding contract", () => {
+    expect(CANONICAL_BRANDING_CONTRACT).toBe(
+      getAddress("0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da"),
+    );
+  });
+});
 
 const ADMIN_ONLY_POLICY = {
   addMemberPolicy: 2,
