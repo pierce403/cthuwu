@@ -334,14 +334,6 @@ struct Cli {
     #[arg(long, env = "CTHUWU_AUTO_SPAWN", action = ArgAction::Set)]
     auto_spawn: Option<bool>,
 
-    /// Death-to-shutdown grace period. Production default is 24 hours.
-    #[arg(
-        long,
-        env = "CTHUWU_DEATH_GRACE_SECONDS",
-        default_value_t = 24 * 60 * 60
-    )]
-    death_grace_seconds: u64,
-
     /// Executable that consumes one JSON lifecycle intent and returns one JSON receipt.
     #[arg(long, env = "CTHUWU_LIFECYCLE_EXECUTOR")]
     lifecycle_executor: Option<PathBuf>,
@@ -565,6 +557,9 @@ async fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
     let starts_normal_runtime = cli.command.is_none() && !cli.council_simulate && !cli.show_nature;
+    if starts_normal_runtime && EvolutionRuntime::migrate_legacy_death_to_dormancy(&cli.data_dir)? {
+        info!("migrated legacy terminal Death state to recoverable dormancy");
+    }
     let mut mandatory_recovery = if starts_normal_runtime {
         EvolutionRuntime::mandatory_recovery_kind(&cli.data_dir)?
     } else {
@@ -615,9 +610,6 @@ async fn main() -> Result<()> {
             bail!(
                 "normal runtime requires token observation; --observe-tokens=false is limited to non-runtime management and simulation paths"
             );
-        }
-        if mandatory_recovery == MandatoryRecoveryKind::None && cli.death_grace_seconds == 0 {
-            bail!("CTHUWU_DEATH_GRACE_SECONDS must be positive (default: 86400)");
         }
         if mandatory_recovery == MandatoryRecoveryKind::None
             && cli.propagation_minimum_stake_basis_points > 10_000
@@ -722,11 +714,6 @@ async fn main() -> Result<()> {
         auto_spawn: (!recovering_binding_death)
             .then_some(cli.auto_spawn)
             .flatten(),
-        death_grace_period_seconds: if recovering_binding_death && cli.death_grace_seconds == 0 {
-            24 * 60 * 60
-        } else {
-            cli.death_grace_seconds
-        },
         propagation_minimum_stake_basis_points: if recovering_binding_death {
             cli.propagation_minimum_stake_basis_points.min(10_000)
         } else {

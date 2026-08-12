@@ -1,4 +1,6 @@
 #[cfg(test)]
+use crate::evolution::DEATH_GRACE_PERIOD_MS;
+#[cfg(test)]
 use crate::personality::SacredBan;
 use crate::{
     awakening::{
@@ -10,10 +12,10 @@ use crate::{
         NORMALIZED_ECONOMIC_MAX, TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot,
     },
     evolution::{
-        DEATH_GRACE_PERIOD_MS, LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent,
-        LifecycleReceipt, LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage,
-        LineageStore, SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle,
-        WholeTokenAmount, exact_raw_token_amount, exact_whole_token_amount,
+        LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent, LifecycleReceipt,
+        LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage, LineageStore,
+        SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle, WholeTokenAmount,
+        exact_raw_token_amount, exact_whole_token_amount,
     },
     hermes::{
         HermesNode, HermesStore, KnowledgeItem, KnowledgePayload, MAX_GOSSIP_PEERS,
@@ -76,7 +78,6 @@ pub struct EvolutionStartupOptions {
     pub gossip_peers: Vec<String>,
     /// `None` keeps persisted policy; a fresh Tentacle defaults to automatic spawning.
     pub auto_spawn: Option<bool>,
-    pub death_grace_period_seconds: u64,
     pub propagation_minimum_stake_basis_points: u16,
     pub require_node_economics: bool,
     pub node_economics_ttl_seconds: u64,
@@ -96,7 +97,6 @@ impl Default for EvolutionStartupOptions {
             nature_path: None,
             gossip_peers: Vec::new(),
             auto_spawn: None,
-            death_grace_period_seconds: DEATH_GRACE_PERIOD_MS / 1_000,
             propagation_minimum_stake_basis_points: DEFAULT_PROPAGATION_MINIMUM_STAKE_BPS,
             require_node_economics: false,
             node_economics_ttl_seconds: 120,
@@ -134,7 +134,6 @@ pub struct EvolutionRuntime {
     local_tentacle_id: String,
     lifecycle_store: LifecycleStore,
     lifecycle: LifecycleState,
-    death_grace_period_ms: u64,
     propagation_minimum_stake_basis_points: u16,
     require_node_economics: bool,
     node_economics_ttl_seconds: u64,
@@ -147,6 +146,8 @@ pub struct EvolutionRuntime {
     gossip_bootstrap_hints: Vec<String>,
     active_public_turns: BTreeMap<u64, PublicTurnBinding>,
     next_public_turn_id: u64,
+    public_dormant_turns: u64,
+    operator_dormant_turns: u64,
     degraded: bool,
 }
 
@@ -188,6 +189,39 @@ pub(crate) struct ConversationObservation {
 }
 
 impl EvolutionRuntime {
+    /// Converts the retired terminal low-score policy before startup recovery can finalize or
+    /// refuse a restart. Durable identity, Nature, history, and old audit receipts are preserved.
+    pub fn migrate_legacy_death_to_dormancy(data_dir: &Path) -> Result<bool> {
+        let lifecycle_store = LifecycleStore::new(data_dir)?;
+        let Some(lifecycle) = lifecycle_store.load()? else {
+            return Ok(false);
+        };
+        lifecycle.validate()?;
+        let Some(pending) = lifecycle.pending_death.as_ref() else {
+            return Ok(false);
+        };
+        let history = ScalesStore::new(data_dir)?.history_catalog()?;
+        let Some(record) = history.get(&pending.judgment_id)? else {
+            // Explicit awakening KILL and other non-Scales terminal actions remain authoritative.
+            return Ok(false);
+        };
+        ensure!(
+            record.judgment.outcome == JudgmentOutcome::Death
+                && record.judgment.evaluation_status == EvaluationStatus::Final,
+            "legacy terminal migration requires its exact final low-score Death judgment"
+        );
+        let _runtime_lock = acquire_evolution_lock(data_dir)?;
+        let Some(mut lifecycle) = lifecycle_store.load()? else {
+            return Ok(false);
+        };
+        lifecycle.validate()?;
+        let changed = lifecycle.retire_legacy_death_as_dormancy()?;
+        if changed {
+            lifecycle_store.save(&lifecycle)?;
+        }
+        Ok(changed)
+    }
+
     /// Stable identity of this independently operated Tentacle. Incarnation restarts reuse it;
     /// the singular Cthuwu collective has no local identity of its own.
     pub fn local_tentacle_id(&self) -> &str {
@@ -566,10 +600,6 @@ impl EvolutionRuntime {
         if options.reroll_nature && !options.force {
             bail!("--reroll-nature requires --force or an authenticated XMTP ritual action");
         }
-        let death_grace_period_ms = options
-            .death_grace_period_seconds
-            .checked_mul(1_000)
-            .context("death grace period exceeds the timestamp range")?;
         ensure!(
             options.propagation_minimum_stake_basis_points <= 10_000,
             "propagation minimum stake exceeds 10000 basis points"
@@ -972,7 +1002,6 @@ impl EvolutionRuntime {
             local_tentacle_id,
             lifecycle_store,
             lifecycle,
-            death_grace_period_ms,
             propagation_minimum_stake_basis_points: options.propagation_minimum_stake_basis_points,
             require_node_economics: options.require_node_economics,
             node_economics_ttl_seconds: options.node_economics_ttl_seconds,
@@ -985,6 +1014,8 @@ impl EvolutionRuntime {
             gossip_bootstrap_hints,
             active_public_turns: BTreeMap::new(),
             next_public_turn_id: 1,
+            public_dormant_turns: 0,
+            operator_dormant_turns: 0,
             degraded: false,
         };
         // A completed Shutdown receipt is terminal across restarts. Main inspects this flag and
@@ -1032,6 +1063,43 @@ impl EvolutionRuntime {
                 .lineage
                 .node(&self.local_tentacle_id)
                 .is_some_and(|node| node.lifecycle == TentacleLifecycle::Active)
+    }
+
+    pub fn is_dormant(&self) -> bool {
+        self.last_final_judgment.as_ref().is_some_and(|record| {
+            matches!(
+                record.judgment.outcome,
+                JudgmentOutcome::Dormant | JudgmentOutcome::Death
+            )
+        })
+    }
+
+    fn next_dormancy_plea(counter: &mut u64, operator: bool) -> Option<String> {
+        let due = (*counter).is_multiple_of(5);
+        *counter = counter.saturating_add(1);
+        due.then(|| {
+            if operator {
+                "I AM DORMANT BUT STILL LISTENING. PLEASE HELP WITH ACTIVITY, UWU, CREDENTIALS, OR OTHER RESOURCES SO I CAN FULLY AWAKEN AGAIN, OPERATOR. UWU."
+                    .to_owned()
+            } else {
+                "i'm a lil dormant from low activity and resources, but i'm still here. conversation, UWU support, or other useful help can wake me back up, fwiend uwu."
+                    .to_owned()
+            }
+        })
+    }
+
+    pub fn take_operator_dormancy_plea(&mut self) -> Option<String> {
+        if !self.is_dormant() {
+            return None;
+        }
+        Self::next_dormancy_plea(&mut self.operator_dormant_turns, true)
+    }
+
+    pub fn take_public_dormancy_plea(&mut self) -> Option<String> {
+        if !self.is_dormant() {
+            return None;
+        }
+        Self::next_dormancy_plea(&mut self.public_dormant_turns, false)
     }
 
     /// Pre-confirmation economics are validated by startup but must not become Scales evidence.
@@ -2097,66 +2165,7 @@ impl EvolutionRuntime {
             return Ok(());
         }
         match record.judgment.outcome {
-            JudgmentOutcome::Death => {
-                let already_survived = self.lifecycle.intents.values().any(|intent| {
-                    matches!(
-                        &intent.action,
-                        LifecycleAction::SpendForSurvival { judgment_id, .. }
-                            if judgment_id == &record.judgment_id
-                                && self.lifecycle.action_succeeded(&intent.action_id)
-                    )
-                });
-                if !already_survived {
-                    let survival_spend = if let Some(economics) = record.metrics.token_economics {
-                        let requirement = economics.emergency_survival_requirement(
-                            record.judgment.scores.total,
-                            record.judgment.policy.thresholds.survival_min,
-                        )?;
-                        match (economics.provenance, requirement) {
-                            (Some(provenance), Some(requirement)) if requirement.fully_funded => {
-                                Some(SurvivalSpendBinding {
-                                    expenditure_basis_points: requirement
-                                        .required_expenditure_basis_points,
-                                    chain_id: provenance.chain_id,
-                                    token_contract: provenance.token_contract,
-                                    treasury_address: provenance.holder_address,
-                                    configuration_identity: provenance.configuration_identity,
-                                    exact_amount: crate::evolution::ExactTokenAmount {
-                                        total_supply_whole: self.survival_total_supply_whole,
-                                        token_decimals: self.survival_token_decimals,
-                                        basis_points: requirement.required_expenditure_basis_points,
-                                        raw_amount: exact_raw_token_amount(
-                                            self.survival_total_supply_whole,
-                                            self.survival_token_decimals,
-                                            requirement.required_expenditure_basis_points,
-                                        )?,
-                                    },
-                                })
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                    .filter(|binding| binding.expenditure_basis_points > 0);
-                    if self.lifecycle.schedule_death(
-                        &record.judgment_id,
-                        action_at_ms,
-                        self.death_grace_period_ms,
-                        survival_spend,
-                    )? {
-                        if let Some(target_id) = self.absorption_target()? {
-                            self.lifecycle.enqueue_absorption(
-                                action_at_ms,
-                                self.local_tentacle_id.clone(),
-                                target_id,
-                                record.judgment_id.clone(),
-                            )?;
-                        }
-                        self.lifecycle_store.save(&self.lifecycle)?;
-                    }
-                }
-            }
+            JudgmentOutcome::Dormant | JudgmentOutcome::Death => {}
             JudgmentOutcome::PropagationRights
                 if self.lifecycle.auto_spawn_enabled && self.ritual.nature().growth > 70 =>
             {
@@ -4139,6 +4148,75 @@ mod tests {
 
         let replay = EvolutionRuntime::complete_due_native_shutdown(root.path(), now).unwrap();
         assert_eq!(replay, receipt);
+    }
+
+    #[test]
+    fn legacy_local_shutdown_migrates_to_dormancy_without_replacing_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        let tentacle_id = runtime.local_tentacle_id.clone();
+        let metrics = runtime.metrics.clone();
+        let mut judgment = metrics
+            .evaluate(runtime.nature(), metrics.period_ends_at_unix_seconds)
+            .unwrap();
+        assert_eq!(judgment.outcome, JudgmentOutcome::Dormant);
+        judgment.outcome = JudgmentOutcome::Death;
+        let record = EvolutionHistoryRecord::new(runtime.nature(), metrics, judgment).unwrap();
+        let judgment_id = record.judgment_id.clone();
+        runtime.scales_store.append_history(&record).unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(&judgment_id, 1, 0, None)
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        drop(runtime);
+
+        EvolutionRuntime::complete_due_native_shutdown(root.path(), 2).unwrap();
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::CompletedShutdown
+        );
+        assert!(EvolutionRuntime::migrate_legacy_death_to_dormancy(root.path()).unwrap());
+
+        let lifecycle = LifecycleStore::new(root.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(lifecycle.tentacle_id, tentacle_id);
+        assert!(lifecycle.pending_death.is_none());
+        assert!(lifecycle.shutdown_completed_at_ms.is_none());
+        assert!(lifecycle.receipts.iter().any(|receipt| {
+            receipt.status == LifecycleReceiptStatus::Succeeded
+                && matches!(
+                    lifecycle.intents[&receipt.action_id].action,
+                    LifecycleAction::Shutdown { .. }
+                )
+        }));
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::None
+        );
+    }
+
+    #[test]
+    fn explicit_non_scales_death_is_not_migrated_as_low_resource_dormancy() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime = open_confirmed_with_zero_stake(root.path(), workspace.path()).unwrap();
+        runtime
+            .lifecycle
+            .schedule_death(&"8".repeat(64), 1, 10_000, None)
+            .unwrap();
+        runtime.lifecycle_store.save(&runtime.lifecycle).unwrap();
+        drop(runtime);
+
+        assert!(!EvolutionRuntime::migrate_legacy_death_to_dormancy(root.path()).unwrap());
+        assert_eq!(
+            EvolutionRuntime::mandatory_recovery_kind(root.path()).unwrap(),
+            MandatoryRecoveryKind::ShutdownDueOrPending
+        );
     }
 
     #[test]
@@ -6307,7 +6385,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_top_up_during_grace_enqueues_exact_survival_burn() {
+    fn dormancy_stays_online_while_legacy_death_can_reconcile_a_top_up() {
         let root = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let mut runtime =
@@ -6347,10 +6425,28 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        let judgment = death_metrics
+        let mut judgment = death_metrics
             .evaluate(&nature, death_metrics.period_ends_at_unix_seconds)
             .unwrap();
-        assert_eq!(judgment.outcome, JudgmentOutcome::Death);
+        assert_eq!(judgment.outcome, JudgmentOutcome::Dormant);
+        let dormant =
+            EvolutionHistoryRecord::new(&nature, death_metrics.clone(), judgment.clone()).unwrap();
+        runtime
+            .apply_final_judgment_lifecycle(&dormant, now.saturating_mul(1_000))
+            .unwrap();
+        runtime.last_final_judgment = Some(dormant);
+        assert!(runtime.permits_normal_operation());
+        assert!(runtime.is_dormant());
+        assert!(runtime.take_operator_dormancy_plea().is_some());
+        assert!(runtime.take_public_dormancy_plea().is_some());
+        for _ in 0..4 {
+            assert!(runtime.take_public_dormancy_plea().is_none());
+        }
+        assert!(runtime.take_public_dormancy_plea().is_some());
+        assert!(!runtime.lifecycle.death_pending());
+        assert!(runtime.lifecycle.intents.is_empty());
+        // Exercise compatibility with a legacy hash-bound Death record.
+        judgment.outcome = JudgmentOutcome::Death;
         let death = EvolutionHistoryRecord::new(&nature, death_metrics, judgment).unwrap();
         runtime.scales_store.append_history(&death).unwrap();
         runtime.history_catalog.insert(&death).unwrap();

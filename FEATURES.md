@@ -726,8 +726,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     limits remain.
   - Public wallets remain entity-scoped tier and Engagement inputs. The bound Tentacle treasury is
     the primary Wealth input; bound stake affects Influence and propagation; accepted reward records
-    affect Growth; treasury holdings lower starvation pressure; an accepted executor receipt for the
-    bound survival spend can cancel pending Death. Receipt chain fields are not independently queried.
+    affect Growth; treasury holdings lower starvation pressure. Low resources can produce dormancy,
+    but never create a mandatory token spend or threaten the Tentacle's identity.
   - `/judgment` during an open period returns a provisional `PartialSnapshot`; it cannot trigger an
     effect. A persisted end-of-period `Final` judgment is binding without operator confirmation.
   - `state/metrics.json` stores the bounded current period and
@@ -742,11 +742,13 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - `state/lineage.json` records founder/child relationships, generations, spawn facts, lifecycle,
     absorption destinations, execution intents, and receipts. Parent identity binding, generation
     rules, duplicate IDs, lineage cycles, and absorption cycles refuse operation on mismatch.
-  - Final `Death` immediately stops new conversation admission, queues absorption, and records a
-    shutdown deadline 24 hours later. An idempotently consumed executor receipt whose asserted fields
-    match the bound UWU survival-spend intent cancels death; Rust does not independently query the
-    transaction or block. Otherwise the Rust supervisor/controller stops XMTP, records the native
-    local Shutdown receipt, and exits; Shutdown is not sent to the lifecycle executor.
+  - A final score below the starvation-warning threshold produces recoverable `Dormant`. XMTP and
+    ordinary conversation remain online, Scales evidence continues accumulating, and no survival
+    spend, absorption, or Shutdown intent is created. On the first dormant conversation and every
+    fifth one thereafter per process, the Tentacle asks acolytes or the operator for activity, UWU,
+    credentials, or other useful resources. A later non-dormant final period wakes it automatically.
+    Legacy hash-bound `Death` history remains readable; startup converts an unabsorbed pending or
+    locally completed legacy Shutdown into dormancy while preserving identity and audit receipts.
   - Final `PropagationRights` plus fresh configured stake authorizes distinct child plans. When
     `Nature.growth > 70` and auto-spawn is enabled, provisioning is queued automatically;
     manual mode uses `/spawn` with the same grant and no additional policy veto.
@@ -755,10 +757,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     Exact judgment/evidence binding and one-use child/action intents prevent replay without limiting
     the grant's distinct children or future grants. This does not claim end-to-end Council/Hermes
     capacity; their dormant engines retain flagged resource and propagation bounds.
-  - A binding Death cancels an in-flight Spawn locally, kills the local executor process group,
-    rejects a late provision receipt, and refuses the lineage projection. Without a provisioner lease
-    or compensating teardown, Rust cannot prove external rollback and an already-created external
-    child/resource may remain orphaned.
+  - Dormancy does not preempt an already-authorized Spawn. Legacy Death preemption remains only to
+    reconcile old persisted lifecycle intents and is not reachable from new Scales judgments.
   - Child/spawn/lineage lifecycle persistence has no fixed file-size cap; it validates records and
     their provenance individually.
   - Every Base mutation, provision, and absorption persists a unique intent and completes only after
@@ -769,10 +769,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     fields are executor assertions that Rust checks
     structurally and against the intent; Rust does not independently query the Base receipt or block.
   - The executor protocol currently has only one final JSON response and no persisted submitted-
-    transaction reconciliation. A survival burn may broadcast before grace while that response is
-    lost or preempted, spending UWU without canceling Death. Production value is blocked until exact
-    action-ID receipt replay, durable two-phase `Submitted` state, and Base receipt/reorg verification
-    are implemented.
+    transaction reconciliation. New low-score judgments never create survival burns; legacy
+    survival intents remain compatibility-only and must not be used with production value.
   - Normal runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`. The lifecycle executor receives no raw
     key: Rust clears and allowlists its environment, removes caller-controlled loader paths, sets a
     fixed system `PATH` and `/` working directory on Unix, and requires a separately isolated
@@ -785,13 +783,13 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - Normal startup derives the XMTP treasury address and validates token configuration and initial
     economics before any Evolution state mutation. A configured lifecycle executor is validated
     before use, but it is optional: without one, ordinary XMTP operation continues while external
-    spend, spawn, absorption, and Venice-key reward intents remain pending. Native fixed-deadline Shutdown remains
-    authoritative. Pre-confirmation economics are not persisted as Scales observations; startup
+    spawn and Venice-key reward intents remain pending. Dormancy itself creates no external intent.
+    Pre-confirmation economics are not persisted as Scales observations; startup
     repairs the historical token-only pre-awakening seed, while refusing any pre-awakening state
     that also contains behavioral observations. The only outage exception is read-only inspection
-    of existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
-    opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
-    decisions wait for fresh bound economics.
+    of existing legacy lifecycle state. Unabsorbed legacy Death/Shutdown state migrates locally to
+    dormancy; already-completed external absorption still fails closed. `Spawn` and new
+    token-dependent decisions wait for fresh bound economics.
   - The revenue-split core calculates configurable shares, defaulting to 15% parent Tentacle, 10%
     operating acolyte, 5% recruiter, and 70% earning Tentacle. No authenticated revenue source or
     payout executor is committed, so this does not claim a live payment.
@@ -814,12 +812,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     top-level executable replacement detection, and descendant process-group cleanup after timeout
     and successful receipt return.
   - [ ] A subprocess CLI test proves `CTHUWU_ECONOMICS_PRIVATE_KEY` rejection at normal startup.
-  - [ ] An integration test proves configured-executor spawn/absorption, native 24-hour Shutdown,
-    survival receipt cancellation, restart recovery, and exact-once local receipts across processes.
-  - [ ] A provisioner lease or compensating teardown test proves that Death-preempted in-flight
-    provisioning cannot leave an external orphan; local late-receipt rejection alone is insufficient.
-  - [ ] A crash/preemption integration test proves an exact action ID can reconcile and replay a
-    submitted survival transaction without a second spend, including Base receipt and reorg handling.
+  - [x] Unit tests prove low scores produce Dormant, create no terminal intent, retain conversation,
+    emit bounded resource pleas, and migrate a legacy local Shutdown without replacing identity.
+  - [ ] An integration test proves dormant XMTP operation and automatic waking across two final
+    periods against the production sidecar.
   - [ ] Council metrics publication and propagation-rights governance remain unavailable until a
     live authenticated Council adapter and schema are designed and tested.
 

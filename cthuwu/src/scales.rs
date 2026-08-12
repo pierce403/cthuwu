@@ -836,7 +836,7 @@ impl JudgmentThresholds {
         } else if score >= starvation_warning_min {
             JudgmentOutcome::StarvationWarning
         } else {
-            JudgmentOutcome::Death
+            JudgmentOutcome::Dormant
         })
     }
 }
@@ -1080,6 +1080,8 @@ pub enum JudgmentOutcome {
     PropagationRights,
     Survival,
     StarvationWarning,
+    Dormant,
+    /// Legacy hash-bound outcome retained for existing history records.
     Death,
 }
 
@@ -1285,18 +1287,13 @@ impl Judgment {
         } else {
             score_outcome
         };
+        let legacy_death_matches_dormancy =
+            self.outcome == JudgmentOutcome::Death && expected_outcome == JudgmentOutcome::Dormant;
         ensure!(
-            self.outcome == expected_outcome,
+            self.outcome == expected_outcome || legacy_death_matches_dormancy,
             "judgment outcome does not match its score, thresholds, and evidence floor"
         );
         Ok(())
-    }
-
-    pub fn requires_death_execution(&self) -> bool {
-        self.schema_version == JUDGMENT_SCHEMA_VERSION
-            && self.execution == DecisionExecution::AutomaticLifecycleActionRequired
-            && self.evaluation_status == EvaluationStatus::Final
-            && self.outcome == JudgmentOutcome::Death
     }
 }
 
@@ -2313,7 +2310,7 @@ mod tests {
         assert_eq!(inactive_success.scores.growth, 7_000);
         assert_eq!(inactive_success.scores.influence, SCORE_MAX);
         assert_eq!(inactive_success.scores.total, 0);
-        assert_eq!(inactive_success.outcome, JudgmentOutcome::Death);
+        assert_eq!(inactive_success.outcome, JudgmentOutcome::Dormant);
     }
 
     #[test]
@@ -2585,7 +2582,7 @@ mod tests {
             thresholds
                 .classify(STARVATION_WARNING_MIN_SCORE - 1)
                 .unwrap(),
-            JudgmentOutcome::Death
+            JudgmentOutcome::Dormant
         );
     }
 
@@ -2621,15 +2618,14 @@ mod tests {
 
         let candidate = nature(25, 25, 25, 25);
         let empty = TentacleMetrics::new(EvaluationPeriod::Daily, 0, false, &candidate, 1).unwrap();
-        let provisional_death = empty.evaluate_snapshot(&nature(25, 25, 25, 25), 1).unwrap();
-        assert_eq!(provisional_death.outcome, JudgmentOutcome::Death);
-        assert!(!provisional_death.requires_death_execution());
-        let death = empty
+        let provisional_dormancy = empty.evaluate_snapshot(&nature(25, 25, 25, 25), 1).unwrap();
+        assert_eq!(provisional_dormancy.outcome, JudgmentOutcome::Dormant);
+        let dormancy = empty
             .evaluate(&nature(25, 25, 25, 25), empty.period_ends_at_unix_seconds)
             .unwrap();
-        assert!(death.requires_death_execution());
+        assert_eq!(dormancy.outcome, JudgmentOutcome::Dormant);
         assert_eq!(
-            death.execution,
+            dormancy.execution,
             DecisionExecution::AutomaticLifecycleActionRequired
         );
     }

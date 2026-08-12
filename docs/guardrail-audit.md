@@ -29,23 +29,15 @@ The project baseline is:
 Previous documentation described all Scales judgments as recommendations and prohibited process
 effects. That rule is removed. A persisted final judgment is a binding runtime input:
 
-- `Death` closes conversation admission, queues absorption, and schedules shutdown after 24 hours;
-- an idempotently accepted executor receipt for the bound UWU survival spend cancels pending death;
+- a low final score produces recoverable `Dormant`, keeps conversation online, and periodically
+  asks acolytes and the operator for resources without creating a spend, absorption, or Shutdown;
 - `PropagationRights` plus fresh required stake may provision a child automatically when
   `Nature.growth > 70` and auto-spawn is enabled;
 - manual spawn remains a per-Tentacle configuration choice, not a global confirmation requirement.
 
-External Base transactions, child provisioning, and absorption cross a durable intent/receipt
-boundary. An absent executor blocks those external effects; it does not convert the judgment into a
-report or justify claiming an effect occurred. Shutdown is native: the Rust supervisor/controller
-stops XMTP at the deadline, writes the local Shutdown receipt, and lets the process exit without
-invoking the configured lifecycle executor.
-
-The current executor returns one final JSON response and has no durable submitted-transaction
-reconciliation. A survival burn can broadcast before grace while that response is lost or
-preempted, spending UWU without canceling Death. This is a production-value launch blocker. Require
-exact action-ID receipt replay, a durable two-phase `Submitted` state, and Base receipt/reorg
-verification before production value is used.
+External Base transactions and child provisioning cross a durable intent/receipt boundary. An
+absent executor blocks those external effects; it does not justify claiming an effect occurred.
+Dormancy crosses no external-effect boundary.
 
 ### Detached token economics
 
@@ -58,8 +50,7 @@ is removed:
 - bound stake affects Influence and propagation eligibility;
 - bound rewards affect Growth;
 - treasury holdings lower starvation pressure;
-- accepted executor receipts whose asserted fields match survival-spend intents can cancel pending
-  death; Rust does not independently query those transactions or blocks.
+- low resources may produce Dormant but never create a survival spend or terminal lifecycle action.
 
 This requires cryptographic and configuration provenance. A user's wallet cannot be substituted for
 the Tentacle treasury, and a stale cache entry cannot be treated as a current stake. Current
@@ -138,10 +129,8 @@ require fresh bound observations.
 Scales counters likewise have no artificial policy ceiling. Count fields saturate at `u32::MAX` and
 accumulated totals at `u64::MAX`; per-sample validation and persistence-integrity bounds remain.
 
-Death preemption cancels an in-flight Spawn locally, kills the local executor process group, rejects
-a late receipt, and refuses the lineage projection. Rust cannot prove that a remote provisioner
-reversed already-completed work. Until provisioners implement a lease or compensating teardown, an
-external child/resource can remain orphaned.
+Dormancy does not preempt an already-authorized Spawn. Legacy Death-preemption paths remain only for
+old persisted lifecycle records.
 
 ## Integrity requirements retained
 
@@ -187,15 +176,14 @@ waiting period. Dormant Council/Hermes capacity bounds remain separately flagged
 The repository currently does not commit:
 
 - a deployed UWU contract or final token address;
-- a staking, survival-spend, reward, or revenue-routing contract;
+- a staking, reward, or revenue-routing contract;
 - a transaction signer/private-key service;
 - live `decimals()`/`totalSupply()` checks, block-pinned balance observations, and independent Base
   verification of executor transaction/block receipt assertions;
 - durable two-phase submitted-transaction state and exact action-ID receipt replay;
 - an authenticated revenue source or payout executor;
 - a persisted ballot adapter or governance application executor;
-- an external child provisioner or absorption adapter, including a provisioner lease or
-  compensating teardown for Death preemption;
+- an external child provisioner or absorption adapter;
 - peer-to-peer Council discovery or production XMTP Council-group transport;
 - live Hermes transport and asymmetric peer/operator key binding;
 - an automatic received-skill installer.

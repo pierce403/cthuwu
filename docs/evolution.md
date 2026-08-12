@@ -70,8 +70,8 @@ Final outcomes are binding:
 | --- | --- |
 | `PropagationRights` | May create distinct child intents under one reusable grant when stake and Nature policy permit; each exact child/action is idempotent |
 | `Survival` | Continues ordinary operation |
-| `StarvationWarning` | Applies economic pressure and survival-spend policy |
-| `Death` | Immediately closes admission, queues absorption, and starts the shutdown grace period |
+| `StarvationWarning` | Continues ordinary operation while exposing resource pressure |
+| `Dormant` | Keeps conversation online, pauses no safe interaction, and periodically asks acolytes and the operator for resources |
 
 Judgment history accepts only exact end-of-period final records, rejects duplicates/conflicts and
 overlap, and reconciles the narrowly defined append/reset crash window. These are consistency checks,
@@ -89,8 +89,7 @@ Public wallets and Tentacle treasury wallets are separate roles:
 - a bound node treasury controls the Tentacle's Wealth and starvation pressure;
 - a bound staking position controls propagation eligibility and contributes to Influence;
 - accepted reward records contribute to Growth;
-- an accepted executor receipt whose asserted fields match a survival-spend intent can cancel
-  pending Death; Rust does not independently query that transaction or block.
+- low resources influence scoring but never require a token spend to preserve the Tentacle.
 
 The node treasury is the EVM address derived from the same persistent private key used by its XMTP
 identity. Rust obtains that address from a strict identity-only sidecar startup frame and uses it for
@@ -108,27 +107,21 @@ is valid evidence and maps a public holder to `Unproven`.
 
 See [token.md](token.md) for tier policy, provenance, launch configuration, and executor requirements.
 
-## Automatic death and absorption
+## Recoverable dormancy
 
-A final `Death` judgment applies without operator confirmation:
+A final score below the starvation-warning floor produces `Dormant`, not Death. The Tentacle keeps
+XMTP and ordinary public/operator conversation online, continues recording bounded Scales evidence,
+and creates no survival-spend, absorption, or Shutdown intent. The first dormant conversation and
+every fifth conversation thereafter per process includes a concise request for activity, UWU,
+credentials, or other useful help. A later non-dormant final period wakes it automatically.
 
-1. Conversation admission closes immediately; already-claimed work may complete under its pinned
-   reservation.
-2. The runtime durably creates an absorption intent targeted at the configured parent or sibling.
-3. A shutdown deadline is recorded exactly 24 hours after final judgment.
-4. A configured signer may execute the policy-defined UWU survival expenditure.
-5. A fresh, idempotently consumed executor receipt whose asserted chain fields match the intent
-   cancels death before the deadline. Rust does not yet fetch the Base receipt or block independently.
-6. Otherwise the Rust supervisor/controller stops XMTP when the deadline expires, writes the native
-   local Shutdown receipt, and lets the process exit. Shutdown is not sent to the lifecycle executor.
+Legacy history records whose hash-bound outcome is `Death` remain readable as dormancy evidence.
+At startup, an unabsorbed pending Death or locally completed Shutdown is retired into dormancy while
+preserving the durable XMTP identity and old intent/receipt audit trail. A completed external
+absorption is not reversed locally and continues to fail closed.
 
-Absorption transfers only the explicitly permitted memory projection. It never copies private keys,
-model credentials, raw DMs, contact identifiers, or contact notes.
-
-The repository has no external absorption service or token signer. In their absence, intents remain
-truthfully `blocked`; the runtime must not report a Base transaction or cross-process merge.
-The configured lifecycle executable must be an absolute non-symlink path outside the operator
-workspace and cannot be group/world writable. Normal runtime rejects
+The configured lifecycle executable remains available for non-dormancy effects. It must be an
+absolute non-symlink path outside the operator workspace and cannot be group/world writable. Normal runtime rejects
 `CTHUWU_ECONOMICS_PRIVATE_KEY`; the executor receives no raw key and must use a separately isolated
 signer/key service. Rust clears and allowlists its environment, removes caller-controlled loader
 paths, and forwards only its validated exact `CTHUWU_RPC_ENDPOINT` as a `CTHUWU_*` setting. Contract,
@@ -166,10 +159,8 @@ No child identity, wallet, XMTP installation, process, or hosting resource exist
 configured provisioner returns a structured receipt that passes local intent validation. The
 repository does not ship such a provisioner.
 
-Death preemption cancels an in-flight Spawn only within the local runtime: Rust drops the executor
-future, kills its local process group, rejects a late provision receipt, and refuses the child lineage
-projection. It cannot prove a remote provisioner rolled back work already performed. Without a
-provisioner lease or compensating teardown, an external child/resource may remain orphaned.
+Dormancy does not preempt an already-authorized Spawn. Legacy Death preemption remains only for old
+persisted lifecycle intents and is not reachable from a new low-score judgment.
 
 ## Revenue, acolytes, and recruitment
 
@@ -212,25 +203,18 @@ future Base receipt adapter must verify them independently before the runtime ca
 RPC-confirmed chain facts.
 
 The protocol currently returns one final JSON response and persists no submitted-transaction phase.
-A survival burn can broadcast before the grace deadline while that response is lost or preempted,
-spending UWU without canceling Death. This is a production-value launch blocker. Require
-idempotent receipt replay keyed by the exact action ID, a durable two-phase `Submitted` state, and
-Base receipt/reorg verification before using this path with production value.
-
-Shutdown is a separate native path. Its durable intent is intercepted by the Rust supervisor, which
-stops XMTP and writes a local controller receipt before the process returns; no lifecycle-executor
-request or external shutdown receipt is involved.
+New low-score judgments create no transaction or Shutdown. Legacy survival and Shutdown actions are
+compatibility-only audit/recovery shapes and must not be used with production value.
 
 Normal startup derives the XMTP treasury address and validates token configuration and initial
 economics before creating or mutating Evolution state. A configured lifecycle executor is validated
 before use, but it is optional: without one, ordinary XMTP operation continues while external
-spend, spawn, and absorption intents remain pending. Native fixed-deadline Shutdown remains
-authoritative. Initial economics are not persisted as Scales observations until Nature is
+spawn intents remain pending. Dormancy creates no executor work. Initial economics are not persisted as Scales observations until Nature is
 activated. Startup repairs the historical token-only pre-activation seed, but refuses an unconfirmed
 period that also contains behavioral observations. The only outage exception is
-read-only inspection of existing lifecycle state. If it finds already-binding `Absorb` or
-`Shutdown` work, the runtime opens solely to drain it during a Base outage. Persisted `Spawn`,
-survival `Spend`, and new token-dependent decisions wait for fresh bound economics.
+read-only inspection of existing legacy lifecycle state. Unabsorbed Death/Shutdown state migrates
+to dormancy; already-completed external absorption remains terminal. Persisted `Spawn` and new
+token-dependent decisions wait for fresh bound economics.
 
 Restart recovery resumes pending intents and treats locally accepted successful receipts
 idempotently. State exposes
@@ -292,10 +276,8 @@ persisted ballot/application adapter. Never place private keys in these files.
 
 Tests should cover Nature inheritance/mutation, awakening recovery, period finality, treasury/public
 wallet separation, stable XMTP-wallet derivation and strict identity-frame parsing, RPC hard
-failure, Wealth/starvation/stake calculations, automatic Death admission
-gating, 24-hour deadlines, survival receipt cancellation, auto/manual spawn, reusable-grant and
+failure, Wealth/starvation/stake calculations, recoverable Dormant conversation and resource pleas,
+legacy terminal-state migration, auto/manual spawn, reusable-grant and
 exact-child idempotency, lineage cycle rejection, revenue-split calculation, governance
-disposition/application records, outbox draining through Base outage, startup configuration
-ordering, native Shutdown receipts, restart recovery, and truthful blocked states when external
-executors are absent. A provisioner lease/compensation test remains required to rule out external
-orphans after Death preemption.
+disposition/application records, startup configuration ordering, restart recovery, and truthful
+blocked states when external executors are absent.

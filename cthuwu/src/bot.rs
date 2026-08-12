@@ -268,7 +268,7 @@ impl UwUBot {
                 {
                     return Ok(Some(limit_response(response, role)));
                 }
-                let (evolution_response, requires_recovery) = {
+                let (evolution_response, requires_recovery, dormancy_plea) = {
                     let mut evolution = self
                         .evolution
                         .lock()
@@ -279,9 +279,10 @@ impl UwUBot {
                             message.message_id,
                             message.text,
                         );
-                    (response, evolution.requires_recovery())
+                    let plea = evolution.take_operator_dormancy_plea();
+                    (response, evolution.requires_recovery(), plea)
                 };
-                match evolution_response {
+                let mut response = match evolution_response {
                     Ok(Some(response)) => response,
                     Ok(None) => self
                         .operator_harness
@@ -297,7 +298,12 @@ impl UwUBot {
                     Err(error) => format!(
                         "THE REQUESTED EVOLUTION EFFECT WAS SAFELY REJECTED. ROUTINE PERIOD RECONCILIATION MAY HAVE COMPLETED, BUT THE REQUESTED CHANGE DID NOT: {error}"
                     ),
+                };
+                if let Some(plea) = dormancy_plea {
+                    response.push_str("\n\n");
+                    response.push_str(&plea);
                 }
+                response
             }
             PrincipalRole::StaleOperator => {
                 "THIS MESSAGE PREDATES THE LOCAL OPERATOR AUTHORIZATION BOUNDARY. I WILL EXECUTE NOTHING FROM IT; SEND A NEW MESSAGE, OPERATOR."
@@ -490,6 +496,11 @@ impl UwUBot {
 
         let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
         let profile = contact.model_profile_markdown();
+        let dormancy_plea = self
+            .evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+            .take_public_dormancy_plea();
         let mut response = self.model_reply(&profile, text, &model_policy).await;
         if created && !response.contains('?') {
             contact.mark_onboarding_prompted();
@@ -503,6 +514,10 @@ impl UwUBot {
                 response.push_str("\n\n");
                 response.push_str(&prompt_for_stage(&contact));
             }
+        }
+        if let Some(plea) = &dormancy_plea {
+            response.push_str("\n\n");
+            response.push_str(plea);
         }
 
         let conversation_depth = 1_u32.saturating_add(

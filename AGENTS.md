@@ -274,19 +274,14 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   Require each signed entry's exact immediate-predecessor Nature snapshot; recover only the head or
   final signed predecessor, never a different independently valid Nature/log combination. Never
   generate a missing pre-action Nature over existing Evolution projections or alternate Nature.
-- Scales judgments are binding runtime inputs. An open-period snapshot cannot trigger a lifecycle
-  transition, but a persisted final judgment applies without operator confirmation. Final `Death`
-  immediately closes conversation admission, queues absorption, and starts a 24-hour grace period.
-  An idempotently accepted executor receipt for the bound UWU survival spend cancels the pending
-  death; otherwise the Rust supervisor/controller stops XMTP at the deadline, records the native
-  local Shutdown receipt, and lets the process exit. Shutdown never goes to the configured lifecycle
-  executor. Do not call the survival receipt independently chain-confirmed without a Base receipt
-  lookup.
-- Treat the current executor's single final JSON response as a production-value launch blocker for
-  UWU spends. A survival transaction may be broadcast before the grace deadline while its response
-  is lost or preempted, spending tokens without canceling Death. Require exact action-ID idempotent
-  receipt replay, a durable two-phase `Submitted` transaction state, and Base receipt/reorg
-  verification before placing production value behind this path.
+- Scales judgments are binding runtime inputs. An open-period snapshot cannot change lifecycle
+  posture, but a persisted final judgment applies without operator confirmation. A score below the
+  starvation-warning floor means recoverable `Dormant`, never Death: keep XMTP and ordinary
+  conversation online, stop creating survival-spend, absorption, or Shutdown work, continue
+  collecting Scales evidence, and periodically ask acolytes and the operator for activity, UWU,
+  credentials, or other useful resources. A later non-dormant final period wakes the Tentacle
+  automatically. Preserve legacy hash-bound `Death` history as an audit value, but migrate its
+  unabsorbed local terminal state to dormancy without replacing the XMTP identity.
 - Preserve the exact Nature ID/fingerprint, awakening epoch, period, and scored-scale-availability
   bindings on metrics and judgments. Renormalize weight only across available scales.
   Cryptographically bound Tentacle treasury, stake, reward, and spend observations directly drive
@@ -305,10 +300,9 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   volume or expiry quota on an economically valid grant. Consume each exact child/action receipt
   once and cross-check every loaded intent and receipt against the exact final judgment, parent
   Nature, configured stake observation, and execution identity.
-- Treat Death preemption of an in-flight `Spawn` as local cancellation only. Rust kills the local
-  executor process group, rejects a late provision receipt, and refuses the child lineage projection,
-  but cannot prove that an external provisioner rolled back work already performed. Until the
-  provisioner implements a lease or compensating teardown, report a possible external orphan.
+- Dormancy does not preempt an in-flight `Spawn`; it creates no terminal lifecycle work. Legacy
+  Death-preemption code remains compatibility-only for old persisted intents and must not be
+  reachable from a new low-score judgment.
 - Permit judgment history to contain only deterministic `Final` records evaluated exactly at period
   end. Reject duplicate IDs, same-period conflicts, reordering, and overlap; do not describe these
   unkeyed consistency checks as cryptographic tamper evidence. Cross-check open metrics against the

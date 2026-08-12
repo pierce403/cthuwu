@@ -1258,6 +1258,54 @@ impl LifecycleState {
             })
     }
 
+    /// Retires the old policy that treated a low Scales judgment as terminal. A completed
+    /// external absorption cannot be undone, but pending work and a local Shutdown receipt can be
+    /// preserved as audit history while this identity returns to ordinary dormant operation.
+    pub fn retire_legacy_death_as_dormancy(&mut self) -> Result<bool, EvolutionError> {
+        let Some(pending) = self.pending_death.clone() else {
+            return Ok(false);
+        };
+        let has_successful_absorption = self.receipts.iter().any(|receipt| {
+            receipt.status == LifecycleReceiptStatus::Succeeded
+                && self.intents.get(&receipt.action_id).is_some_and(|intent| {
+                    matches!(
+                        &intent.action,
+                        LifecycleAction::Absorb { judgment_id, .. }
+                            if judgment_id == &pending.judgment_id
+                    )
+                })
+        });
+        if has_successful_absorption || self.has_unapplied_absorption_projection() {
+            return Err(EvolutionError::Conflict(
+                "legacy Death already completed external absorption and cannot be revived locally"
+                    .to_owned(),
+            ));
+        }
+
+        let canceled = self
+            .intents
+            .values()
+            .filter(|intent| {
+                self.receipt(&intent.action_id).is_none()
+                    && matches!(
+                        &intent.action,
+                        LifecycleAction::SpendForSurvival { judgment_id, .. }
+                            | LifecycleAction::Absorb { judgment_id, .. }
+                            | LifecycleAction::Shutdown { judgment_id, .. }
+                            if judgment_id == &pending.judgment_id
+                    )
+            })
+            .map(|intent| intent.action_id.clone())
+            .collect::<Vec<_>>();
+        for action_id in canceled {
+            self.canceled_action_ids.insert(action_id);
+        }
+        self.pending_death = None;
+        self.shutdown_completed_at_ms = None;
+        self.bump_revision()?;
+        Ok(true)
+    }
+
     pub fn schedule_death(
         &mut self,
         judgment_id: &str,

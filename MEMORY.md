@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-12
 
 ## Product
 
@@ -260,13 +260,13 @@ Last reviewed: 2026-08-11
   record local wall-clock observation time and no block number. Public wallets remain entity-scoped
   tier/Engagement inputs. Scales counters have no artificial policy ceilings: count fields saturate
   at `u32::MAX` and accumulated totals at `u64::MAX`; per-sample and persistence bounds remain.
-  Bound treasury, stake, reward, and survival-spend evidence drives Wealth, starvation, Influence,
-  Growth, propagation, and survival.
-- Final `Death` immediately closes new conversation admission, queues absorption, and records a
-  shutdown deadline 24 hours later. A fresh, idempotently consumed executor receipt whose asserted
-  fields match the bound UWU survival-spend intent cancels pending death; Rust does not independently
-  query the transaction or block. Otherwise the Rust supervisor/controller stops XMTP, records the
-  native local Shutdown receipt, and exits; it never sends Shutdown to the lifecycle executor.
+  Bound treasury, stake, and reward evidence drives Wealth, starvation, Influence, Growth, and
+  propagation.
+- Final low scores now produce recoverable `Dormant`: XMTP and conversation stay online, Scales
+  evidence continues, no survival/absorption/Shutdown intent is created, and bounded pleas ask
+  acolytes and the operator for resources. A later non-dormant final period wakes automatically.
+  Legacy hash-bound `Death` history stays readable; startup migrates unabsorbed pending or locally
+  completed Shutdown state without replacing the XMTP identity or deleting audit receipts.
 - Final `PropagationRights` plus fresh required stake authorizes distinct child plans without a
   volume or expiry quota. When `Nature.growth > 70` and auto-spawn is enabled, provisioning
   is queued automatically; acolytes may configure manual `/spawn` using the same reusable grant.
@@ -274,20 +274,10 @@ Last reviewed: 2026-08-11
   spawn-rate, child-count, or lineage-depth quota; dormant Council/Hermes bounds are a separate
   flagged limitation. Lineage binds every intent/receipt to its exact final judgment, parent Nature,
   treasury/stake evidence, and execution ID.
-- A binding Death preempts an in-flight Spawn locally: Rust kills the local executor process group,
-  rejects a late provision receipt, and refuses its lineage projection. Without a provisioner lease
-  or compensating teardown, it cannot prove external rollback and an already-created child/resource
-  may remain orphaned.
-- Base mutations, child provisioning, and absorption use durable unique intents and locally validated
-  idempotent executor receipts. Shutdown instead uses the Rust supervisor/controller's native receipt
-  after XMTP stops. No lifecycle signer, deployed survival-spend contract, child provisioner, or
-  absorption service is committed, so absent external effects are reported blocked rather than
-  completed. The live UWU token and in-progress closed Branding source do not satisfy those adapters.
-- The executor currently returns one final JSON response and does not persist a submitted-
-  transaction phase. A survival burn can broadcast before grace while its response is lost or
-  preempted, spending UWU without canceling Death. This blocks production-value use until exact
-  action-ID receipt replay, durable two-phase `Submitted` state, and Base receipt/reorg verification
-  exist.
+- Dormancy does not preempt an already-authorized Spawn. Legacy Death preemption is compatibility-
+  only and is not reachable from new Scales judgments.
+- Base mutations and child provisioning use durable unique intents and locally validated idempotent
+  executor receipts. No child provisioner is committed, so absent effects are reported blocked.
 - Normal runtime rejects `CTHUWU_ECONOMICS_PRIVATE_KEY`; no raw signing key is accepted or forwarded.
   The lifecycle executor must use a separately isolated signer/key service. Rust clears and
   allowlists its environment, drops caller-controlled loader paths, and, on Unix, sets a fixed
@@ -301,14 +291,13 @@ Last reviewed: 2026-08-11
   already exited.
 - Normal startup derives the XMTP treasury address and validates token configuration and initial
   economics before mutating Evolution state. A configured lifecycle executor is validated before
-  use, but it is optional: ordinary XMTP operation continues without one while external spend,
-  spawn, and absorption intents remain pending and native fixed-deadline Shutdown stays active. The
+  use, but it is optional: ordinary XMTP operation continues without one while external spawn and
+  reward intents remain pending. Dormancy creates no executor work. The
   initial economics preflight does not enter Scales before Nature activation; startup repairs
   the historical token-only pre-activation seed but fails closed if behavioral observations are also
-  present. The only outage exception is read-only inspection of
-  existing lifecycle state; if it finds already-binding `Absorb` or `Shutdown` work, the runtime
-  opens solely to drain it during a Base outage. `Spawn`, survival `Spend`, and new token-dependent
-  decisions wait for fresh bound economics. Child/spawn/lineage lifecycle state has no fixed
+  present. Unabsorbed legacy Death/Shutdown state migrates locally during startup; completed external
+  absorption remains terminal. `Spawn` and new token-dependent decisions wait for fresh bound
+  economics. Child/spawn/lineage lifecycle state has no fixed
   file-size cap and validates records/provenance individually.
 - Judgment history is a canonical, unkeyed consistency journal, not cryptographic tamper evidence.
   It accepts only deterministic final records evaluated exactly at period end and rejects duplicate
@@ -679,11 +668,12 @@ and canonical provenance are complete. A production Global group and real produc
 exercise remain open.
 
 The local Evolution milestone adds Nature and signed awakening epochs, Scales and logically
-append-only judgment history, binding death/spawn state, lineage, durable execution intents/receipts,
-and a persisted Hermes anti-entropy core. Final Death gates admission and starts a 24-hour
-absorption/shutdown grace period; final PropagationRights plus stake can auto-spawn when `Nature.growth`
-exceeds 70. Live XMTP awakening remains a release exercise, Hermes has no network transport or
-peer-key provisioning, and external effects require configured receipt-producing executors.
+append-only judgment history, recoverable dormancy, spawn state, lineage, durable execution
+intents/receipts, and a persisted Hermes anti-entropy core. Final low scores keep XMTP online in
+Dormant and periodically ask for resources; final PropagationRights plus stake can auto-spawn when
+`Nature.growth` exceeds 70. Live XMTP dormancy/wake remains a release exercise, Hermes has no network
+transport or peer-key provisioning, and external effects require configured receipt-producing
+executors.
 
 The live-token/local-observer UWU milestone adds SDK-authenticated EVM sender metadata, strict Base/ERC-20
 observation, per-Tentacle percentile tiers, public/entity and treasury/node role separation, active
