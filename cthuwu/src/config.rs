@@ -1,4 +1,4 @@
-use crate::token_eye::{Address, ReputationTier, TierPolicy, TokenEye, U256};
+use crate::token_eye::{Address, ReputationTier, RpcEndpointHandle, TierPolicy, TokenEye, U256};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::{fmt, str::FromStr, sync::Arc, time::Duration};
@@ -32,6 +32,7 @@ pub struct BlockchainConfigInput<'a> {
 pub struct BlockchainConfig {
     pub observe_tokens: bool,
     pub rpc_endpoint: String,
+    pub rpc_endpoint_handle: Option<RpcEndpointHandle>,
     pub token_contract: Option<Address>,
     /// The XMTP identity wallet whose holdings drive this Tentacle's Wealth and starvation state.
     pub xmtp_wallet: Option<Address>,
@@ -52,6 +53,7 @@ impl fmt::Debug for BlockchainConfig {
             .debug_struct("BlockchainConfig")
             .field("observe_tokens", &self.observe_tokens)
             .field("rpc_endpoint", &"<redacted>")
+            .field("rpc_endpoint_handle", &self.rpc_endpoint_handle)
             .field("token_contract", &self.token_contract)
             .field("xmtp_wallet", &self.xmtp_wallet)
             .field("stake_contract", &self.stake_contract)
@@ -71,6 +73,7 @@ impl Default for BlockchainConfig {
             // Library consumers remain inert until they provide that identity binding explicitly.
             observe_tokens: false,
             rpc_endpoint: DEFAULT_BASE_RPC_ENDPOINT.to_owned(),
+            rpc_endpoint_handle: None,
             token_contract: Some(DEFAULT_UWU_TOKEN_CONTRACT_ADDRESS),
             xmtp_wallet: None,
             stake_contract: None,
@@ -84,6 +87,13 @@ impl Default for BlockchainConfig {
 }
 
 impl BlockchainConfig {
+    pub fn current_rpc_endpoint(&self) -> Result<String> {
+        match &self.rpc_endpoint_handle {
+            Some(handle) => handle.current().map_err(anyhow::Error::new),
+            None => Ok(self.rpc_endpoint.clone()),
+        }
+    }
+
     pub fn from_values(input: BlockchainConfigInput<'_>) -> Result<Self> {
         let BlockchainConfigInput {
             observe_tokens,
@@ -155,6 +165,7 @@ impl BlockchainConfig {
         Ok(Self {
             observe_tokens,
             rpc_endpoint,
+            rpc_endpoint_handle: None,
             token_contract,
             xmtp_wallet,
             stake_contract,
@@ -177,13 +188,23 @@ impl BlockchainConfig {
         let acolyte_minimum = U256::power_of_ten(self.token_decimals)
             .context("configured token decimals exceed the ERC-20 numeric range")?;
         let tier_policy = TierPolicy::new(100, 1_000, acolyte_minimum)?;
-        Ok(Some(Arc::new(TokenEye::json_rpc_for_chain_with_policy(
-            &self.rpc_endpoint,
-            token_contract,
-            self.observe_interval,
-            BASE_MAINNET_CHAIN_ID,
-            tier_policy,
-        )?)))
+        let eye = match self.rpc_endpoint_handle.clone() {
+            Some(endpoint) => TokenEye::json_rpc_for_chain_with_handle_and_policy(
+                endpoint,
+                token_contract,
+                self.observe_interval,
+                BASE_MAINNET_CHAIN_ID,
+                tier_policy,
+            )?,
+            None => TokenEye::json_rpc_for_chain_with_policy(
+                &self.rpc_endpoint,
+                token_contract,
+                self.observe_interval,
+                BASE_MAINNET_CHAIN_ID,
+                tier_policy,
+            )?,
+        };
+        Ok(Some(Arc::new(eye)))
     }
 
     /// Builds a separate observer for an ERC-20-compatible staking receipt contract. A missing
@@ -199,13 +220,23 @@ impl BlockchainConfig {
         let acolyte_minimum = U256::power_of_ten(self.token_decimals)
             .context("configured token decimals exceed the ERC-20 numeric range")?;
         let tier_policy = TierPolicy::new(100, 1_000, acolyte_minimum)?;
-        Ok(Some(Arc::new(TokenEye::json_rpc_for_chain_with_policy(
-            &self.rpc_endpoint,
-            stake_contract,
-            self.observe_interval,
-            BASE_MAINNET_CHAIN_ID,
-            tier_policy,
-        )?)))
+        let eye = match self.rpc_endpoint_handle.clone() {
+            Some(endpoint) => TokenEye::json_rpc_for_chain_with_handle_and_policy(
+                endpoint,
+                stake_contract,
+                self.observe_interval,
+                BASE_MAINNET_CHAIN_ID,
+                tier_policy,
+            )?,
+            None => TokenEye::json_rpc_for_chain_with_policy(
+                &self.rpc_endpoint,
+                stake_contract,
+                self.observe_interval,
+                BASE_MAINNET_CHAIN_ID,
+                tier_policy,
+            )?,
+        };
+        Ok(Some(Arc::new(eye)))
     }
 
     pub fn normalize_balance_basis_points(&self, balance: U256) -> u16 {

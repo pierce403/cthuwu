@@ -1,4 +1,5 @@
 use crate::{
+    base_rpc::{BASE_RPC_HELP, BaseRpcControl, VENICE_KEY_HELP},
     config::BlockchainConfig,
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
@@ -22,14 +23,13 @@ use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
-const BASE_RPC_HELP: &str = "get a Base RPC key from a provider console such as Infura, Alchemy, or QuickNode, then tell an active operator to update CTHUWU_RPC_ENDPOINT and restart so the node uses it.";
-const VENICE_KEY_HELP: &str = "the Venice API key should come from your Venice account settings or admin API page; this Tentacle never echoes it back.";
 
 pub struct UwUBot {
     contacts: ContactStore,
     processed: ProcessedMessages,
     model: Arc<dyn Model>,
     model_control: Option<Arc<dyn ModelControl>>,
+    base_rpc_control: Option<Arc<dyn BaseRpcControl>>,
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
@@ -89,6 +89,7 @@ impl UwUBot {
             processed,
             model,
             model_control: None,
+            base_rpc_control: None,
             operators,
             operator_harness,
             evolution,
@@ -111,6 +112,11 @@ impl UwUBot {
 
     pub fn with_model_control(mut self, model_control: Arc<dyn ModelControl>) -> Self {
         self.model_control = Some(model_control);
+        self
+    }
+
+    pub fn with_base_rpc_control(mut self, control: Arc<dyn BaseRpcControl>) -> Self {
+        self.base_rpc_control = Some(control);
         self
     }
 
@@ -382,17 +388,17 @@ impl UwUBot {
                 .split_once(char::is_whitespace)
                 .unwrap_or((command, ""));
             if name.eq_ignore_ascii_case("base-rpc-key") {
-                let arguments = arguments.trim();
-                if arguments.is_empty() || arguments.eq_ignore_ascii_case("status") {
+                let Some(control) = &self.base_rpc_control else {
                     return Ok(format!(
-                        "this Tentacle can keep a Base RPC key only for operator-guided updates. if ur node keeps losing Base economics state, send `/base-rpc-key <api-key>` here first so the operator knows it was offered. {}",
-                        BASE_RPC_HELP
+                        "this Tentacle cannot safely store a Base RPC endpoint in its current runtime. {BASE_RPC_HELP}"
                     ));
-                }
-                return Ok(format!(
-                    "thanks, fwiend. i heard `/base-rpc-key <api-key>` but Base RPC keys are applied by operator action during a restart. {}",
-                    BASE_RPC_HELP
-                ));
+                };
+                return Ok(match control.provision(arguments, false).await {
+                    Ok(reply) => reply.response,
+                    Err(_) => format!(
+                        "i could not validate or safely store that endpoint, so i discarded it and changed nothing. make sure it is the full Base Mainnet HTTPS endpoint, fwiend. {BASE_RPC_HELP}"
+                    ),
+                });
             }
             if name.eq_ignore_ascii_case("venice-key") {
                 let Some(control) = &self.model_control else {
@@ -480,7 +486,7 @@ impl UwUBot {
             Err(error) => {
                 warn!(%error, "required UWU balance observation is unavailable");
                 return Ok(format!(
-                    "economic verification is unavailable, so this Tentacle refuses to operate until a current Base UWU balance can be confirmed. if this is a Base RPC key outage, reply `/base-rpc-key <api-key>` with a provider key and tell the operator to set CTHUWU_RPC_ENDPOINT, then restart. {}",
+                    "economic verification is unavailable, so this Tentacle refuses token-dependent work until a current Base UWU balance can be confirmed. u can feed me a provider endpoint directly over XMTP with `/base-rpc-key <https-endpoint>`; i'll validate, store, and use it myself. {}",
                     BASE_RPC_HELP
                 ));
             }
@@ -1707,7 +1713,7 @@ mod tests {
 
         let asked = send(&bot, 0, OPERATOR_ID, "hello").await;
         assert!(asked.contains("/venice-key <api-key>"));
-        assert!(asked.contains("VENICE ACCOUNT SETTINGS"));
+        assert!(asked.contains("HTTPS://VENICE.AI/SETTINGS/API"));
         assert!(model.messages.lock().unwrap().is_empty());
     }
 

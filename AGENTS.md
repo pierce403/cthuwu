@@ -476,9 +476,10 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
   executors are available.
 - A missing Venice credential is solicited from public acolytes with `/venice-key <api-key>`.
-  A missing Base RPC credential is solicited from public acolytes with `/base-rpc-key <api-key>`.
+  A missing Base RPC credential is solicited from public acolytes with `/base-rpc-key <https-endpoint>`.
   Candidates persist owner-only, must pass live catalog authentication and fresh TEE attestation,
   and invalid candidates are removed. A valid first Venice candidate selects Venice and can enqueue
   the configured authenticated acolyte UWU reward through the lifecycle executor. A valid first Base
-  RPC candidate updates operator RPC configuration only. Operators may replace a loaded key with the
-  same command.
+  RPC candidate must validate as Base mainnet chain 8453, persist owner-only, and hot-load for token
+  observation and ERC-8004 without asking anyone to edit an environment variable or restart.
+  Operators may replace a loaded key with the same command.

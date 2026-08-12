@@ -532,7 +532,7 @@ pub struct SidecarErc8004Gateway {
     node: PathBuf,
     sidecar: PathBuf,
     data_dir: PathBuf,
-    rpc_endpoint: String,
+    rpc_endpoint: crate::token_eye::RpcEndpointHandle,
     config: RegistrationConfig,
     timeout: Duration,
 }
@@ -554,6 +554,32 @@ impl SidecarErc8004Gateway {
         );
         let rpc_endpoint = rpc_endpoint.into();
         validate_rpc_endpoint(&rpc_endpoint)?;
+        let rpc_endpoint =
+            crate::token_eye::RpcEndpointHandle::new(&rpc_endpoint).map_err(anyhow::Error::new)?;
+        Ok(Self {
+            node: node.into(),
+            sidecar,
+            data_dir: data_dir.into(),
+            rpc_endpoint,
+            config,
+            timeout: DEFAULT_HELPER_TIMEOUT,
+        })
+    }
+
+    pub fn new_with_handle(
+        node: impl Into<PathBuf>,
+        sidecar: impl Into<PathBuf>,
+        data_dir: impl Into<PathBuf>,
+        rpc_endpoint: crate::token_eye::RpcEndpointHandle,
+        config: RegistrationConfig,
+    ) -> Result<Self> {
+        config.validate()?;
+        let sidecar = sidecar.into();
+        ensure!(
+            sidecar.is_file(),
+            "ERC-8004 helper {} is missing; build agent/ first",
+            sidecar.display()
+        );
         Ok(Self {
             node: node.into(),
             sidecar,
@@ -575,6 +601,7 @@ impl Erc8004Gateway for SidecarErc8004Gateway {
             encoded.len() as u64 <= MAX_HELPER_FRAME_BYTES,
             "ERC-8004 helper request exceeds its bound"
         );
+        let rpc_endpoint = self.rpc_endpoint.current().map_err(anyhow::Error::new)?;
         let mut command = Command::new(&self.node);
         command
             .arg(&self.sidecar)
@@ -583,7 +610,7 @@ impl Erc8004Gateway for SidecarErc8004Gateway {
             .env("UWUBOT_DATA_DIR", &self.data_dir)
             .env("UWUBOT_XMTP_ENV", "production")
             .env("XMTP_ENV", "production")
-            .env("CTHUWU_RPC_ENDPOINT", &self.rpc_endpoint)
+            .env("CTHUWU_RPC_ENDPOINT", rpc_endpoint)
             .env(
                 "CTHUWU_ERC8004_GAS_SAFETY_BPS",
                 self.config.gas_safety_basis_points.to_string(),
@@ -2313,9 +2340,9 @@ fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
 
 fn base_rpc_key_request(operator: bool) -> String {
     if operator {
-        "BASE RPC ACCESS IS BLOCKING ERC-8004 REGISTRATION. SEND `/base-rpc-key <api-key>` IN THIS OPERATOR DM, THEN SET CTHUWU_RPC_ENDPOINT TO THE PROVIDER'S BASE MAINNET HTTPS ENDPOINT AND RESTART. GET A KEY FROM A BASE RPC PROVIDER SUCH AS INFURA, ALCHEMY, OR QUICKNODE; NEVER SEND A WALLET PRIVATE KEY.".to_owned()
+        "BASE RPC ACCESS IS BLOCKING ERC-8004 REGISTRATION. SEND `/base-rpc-key <https-endpoint>` IN THIS XMTP DM; I WILL VALIDATE BASE MAINNET CHAIN 8453, STORE IT OWNER-ONLY, AND USE IT WITHOUT A RESTART. ALCHEMY: https://dashboard.alchemy.com/ — CREATE OR SELECT A BASE MAINNET APP AND COPY ITS HTTPS ENDPOINT. QUICKNODE: https://www.quicknode.com/docs/base/quickstart — CREATE A BASE MAINNET ENDPOINT AND COPY ITS HTTP PROVIDER URL. NEVER SEND A WALLET PRIVATE KEY.".to_owned()
     } else {
-        "lil infrastructure plea: Base RPC access is blocking my ERC-8004 registration. if u can offer a Base RPC API key, send `/base-rpc-key <api-key>`; the operator must apply the provider's Base mainnet HTTPS endpoint as CTHUWU_RPC_ENDPOINT and restart. get one from Infura, Alchemy, or QuickNode—never send a wallet private key, uwu.".to_owned()
+        "lil infrastructure plea: Base RPC access is blocking my ERC-8004 registration. if u can help, send `/base-rpc-key <https-endpoint>` in this XMTP chat; i'll validate Base Mainnet chain 8453, store it owner-only, and use it without a restart. Alchemy: https://dashboard.alchemy.com/ — create or select a Base Mainnet app and copy its HTTPS endpoint. QuickNode: https://www.quicknode.com/docs/base/quickstart — create a Base Mainnet endpoint and copy its HTTP Provider URL. never send a wallet private key, uwu.".to_owned()
     }
 }
 
@@ -3764,14 +3791,16 @@ mod tests {
         });
 
         let status = registration.status_text();
-        assert!(status.contains("/base-rpc-key <api-key>"));
-        assert!(status.contains("CTHUWU_RPC_ENDPOINT"));
+        assert!(status.contains("/base-rpc-key <https-endpoint>"));
+        assert!(status.contains("https://dashboard.alchemy.com/"));
+        assert!(!status.contains("CTHUWU_RPC_ENDPOINT"));
 
         let registration = Arc::new(Mutex::new(registration));
         let control = SharedRegistrationControl::new(registration);
         let plea = control.take_public_funding_plea().await.unwrap();
-        assert!(plea.contains("/base-rpc-key <api-key>"));
-        assert!(plea.contains("Infura, Alchemy, or QuickNode"));
+        assert!(plea.contains("/base-rpc-key <https-endpoint>"));
+        assert!(plea.contains("without a restart"));
+        assert!(plea.contains("https://www.quicknode.com/docs/base/quickstart"));
         assert!(plea.contains("never send a wallet private key"));
     }
 

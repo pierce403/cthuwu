@@ -1,6 +1,7 @@
 mod agent_context;
 mod autonomy;
 pub mod awakening;
+mod base_rpc;
 mod bot;
 mod config;
 mod contact;
@@ -27,6 +28,7 @@ mod web_search;
 use agent_context::AgentContext;
 use anyhow::{Context, Result, bail, ensure};
 use autonomy::LifecycleExecutor;
+use base_rpc::{BaseRpcControl, BaseRpcStore};
 use bot::UwUBot;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use config::{
@@ -602,6 +604,7 @@ async fn main() -> Result<()> {
     }
     let mut economic_dependencies = None;
     let mut lifecycle_executor = None;
+    let mut base_rpc_control: Option<Arc<BaseRpcStore>> = None;
     if starts_normal_runtime {
         if mandatory_recovery == MandatoryRecoveryKind::None
             && cli.stdin_inbox.is_some()
@@ -634,6 +637,9 @@ async fn main() -> Result<()> {
             MandatoryRecoveryKind::CompletedShutdown
                 | MandatoryRecoveryKind::AbsorptionProjectionRequired
         ) {
+            let control = Arc::new(BaseRpcStore::open(&cli.data_dir, &cli.rpc_endpoint)?);
+            cli.rpc_endpoint = control.startup_endpoint()?;
+            base_rpc_control = Some(control.clone());
             if env::var_os("CTHUWU_ECONOMICS_PRIVATE_KEY").is_some() {
                 if mandatory_recovery == MandatoryRecoveryKind::None {
                     bail!(
@@ -647,6 +653,7 @@ async fn main() -> Result<()> {
             match build_economic_dependencies(
                 &cli,
                 mandatory_recovery == MandatoryRecoveryKind::None,
+                Some(control.endpoint_handle()),
             )
             .await
             {
@@ -792,6 +799,8 @@ async fn main() -> Result<()> {
     }
     let economic_dependencies = economic_dependencies
         .context("normal runtime economics are unavailable after startup recovery")?;
+    let base_rpc_control =
+        base_rpc_control.context("normal runtime Base RPC provisioning control is unavailable")?;
     if lifecycle_executor.is_none() {
         info!(
             "no lifecycle executor configured; external spend, spawn, and absorption intents will remain pending"
@@ -812,11 +821,11 @@ async fn main() -> Result<()> {
         .local_tentacle_id()
         .to_owned();
     let registration_config = registration_config_from_cli(&cli)?;
-    let registration_gateway = Arc::new(SidecarErc8004Gateway::new(
+    let registration_gateway = Arc::new(SidecarErc8004Gateway::new_with_handle(
         &cli.node,
         &cli.sidecar,
         &cli.data_dir,
-        cli.rpc_endpoint.clone(),
+        base_rpc_control.endpoint_handle(),
         registration_config.clone(),
     )?);
     let registration = Arc::new(tokio::sync::Mutex::new(TentacleRegistration::open(
@@ -869,7 +878,8 @@ async fn main() -> Result<()> {
     );
     let operator_harness = Arc::new(
         OperatorHarness::new(operator_model, operator_tools, operator_context)
-            .with_model_control(router.clone()),
+            .with_model_control(router.clone())
+            .with_base_rpc_control(base_rpc_control.clone()),
     );
     let bot = UwUBot::new(
         contacts,
@@ -880,6 +890,7 @@ async fn main() -> Result<()> {
         evolution.clone(),
     )
     .with_model_control(router.clone())
+    .with_base_rpc_control(base_rpc_control)
     .with_venice_key_reward(cli.venice_key_reward_whole)
     .with_registry_control(registry_control)
     .with_token_observance(token_eye.clone(), blockchain.clone());
@@ -948,6 +959,7 @@ async fn main() -> Result<()> {
 async fn build_economic_dependencies(
     cli: &Cli,
     require_initial_observation: bool,
+    rpc_endpoint_handle: Option<token_eye::RpcEndpointHandle>,
 ) -> Result<EconomicDependencies> {
     let xmtp_wallet = resolve_xmtp_wallet_address(
         &cli.node,
@@ -957,7 +969,8 @@ async fn build_economic_dependencies(
     )
     .await
     .context("deriving the UWU wallet from the persistent XMTP identity")?;
-    let blockchain = blockchain_config_from_cli(cli, Some(xmtp_wallet))?;
+    let mut blockchain = blockchain_config_from_cli(cli, Some(xmtp_wallet))?;
+    blockchain.rpc_endpoint_handle = rpc_endpoint_handle;
     let token_eye = blockchain.build_token_eye()?;
     let stake_eye = blockchain.build_stake_eye()?;
     let initial_node_economics = match observe_node_economics(
@@ -1059,10 +1072,13 @@ async fn drain_startup_recovery(
             {
                 continue;
             }
+            let rpc_endpoint = economics
+                .map(|dependencies| dependencies.blockchain.current_rpc_endpoint())
+                .transpose()?;
             match execute_with_death_preemption(
                 &evolution,
                 executor,
-                economics.map(|dependencies| dependencies.blockchain.rpc_endpoint.as_str()),
+                rpc_endpoint.as_deref(),
                 &intent,
             )
             .await?
@@ -1562,13 +1578,10 @@ async fn run_autonomy_supervisor(
                 continue;
             };
 
-            let execution = execute_with_death_preemption(
-                &evolution,
-                executor,
-                Some(&blockchain.rpc_endpoint),
-                &intent,
-            )
-            .await?;
+            let rpc_endpoint = blockchain.current_rpc_endpoint()?;
+            let execution =
+                execute_with_death_preemption(&evolution, executor, Some(&rpc_endpoint), &intent)
+                    .await?;
             match execution {
                 None => {
                     // Dropping `execute` kills its process group. Re-select immediately so the

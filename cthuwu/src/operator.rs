@@ -1,5 +1,6 @@
 use crate::{
     agent_context::{AgentContext, AgentLocations},
+    base_rpc::{BaseRpcControl, VENICE_KEY_HELP},
     contact::{Contact, ContactStore, normalize_inbox_id},
     deadline::{
         DEFAULT_OPERATOR_CONTINUATION_RESERVE, DETERMINISTIC_FALLBACK_RESERVE, InferenceDeadline,
@@ -170,6 +171,7 @@ pub trait OperatorToolRuntime: Send + Sync {
 pub struct OperatorHarness {
     model: Arc<dyn OperatorModel>,
     model_control: Option<Arc<dyn ModelControl>>,
+    base_rpc_control: Option<Arc<dyn BaseRpcControl>>,
     tools: Arc<dyn OperatorToolRuntime>,
     context: AgentContext,
     history: Mutex<HashMap<String, VecDeque<Value>>>,
@@ -184,6 +186,7 @@ impl OperatorHarness {
         Self {
             model,
             model_control: None,
+            base_rpc_control: None,
             tools,
             context,
             history: Mutex::new(HashMap::new()),
@@ -192,6 +195,11 @@ impl OperatorHarness {
 
     pub fn with_model_control(mut self, model_control: Arc<dyn ModelControl>) -> Self {
         self.model_control = Some(model_control);
+        self
+    }
+
+    pub fn with_base_rpc_control(mut self, control: Arc<dyn BaseRpcControl>) -> Self {
+        self.base_rpc_control = Some(control);
         self
     }
 
@@ -231,8 +239,10 @@ impl OperatorHarness {
         if let Some(control) = &self.model_control
             && matches!(control.venice_key_configured(), Ok(false))
         {
-            return Ok("THIS TENTACLE NEEDS A VENICE KEY BEFORE I CAN THINK REMOTELY, OPERATOR. SEND `/venice-key <api-key>` HERE; I WILL STORE IT OWNER-ONLY, NEVER ECHO IT, AND VALIDATE IT BEFORE USE. THE COMMAND WILL REMAIN IN YOUR XMTP CONVERSATION HISTORY. GET THE KEY FROM YOUR VENICE ACCOUNT SETTINGS OR ADMIN API PAGE, UWU."
-                .to_owned());
+            return Ok(format!(
+                "THIS TENTACLE NEEDS A VENICE KEY BEFORE I CAN THINK REMOTELY, OPERATOR. SEND `/venice-key <api-key>` HERE; I WILL STORE IT OWNER-ONLY, NEVER ECHO IT, AND VALIDATE IT BEFORE USE. {}, UWU.",
+                VENICE_KEY_HELP.to_uppercase()
+            ));
         }
 
         let inference_deadline = InferenceDeadline::current(InferenceLane::Operator)?;
@@ -473,7 +483,14 @@ impl OperatorHarness {
             return Ok(operator_help());
         }
         if name == "base-rpc-key" {
-            return Ok(base_rpc_key_command(arguments));
+            let control = self
+                .base_rpc_control
+                .as_ref()
+                .context("runtime Base RPC control is not configured")?;
+            return Ok(match control.provision(arguments, true).await {
+                Ok(reply) => reply.response.to_uppercase(),
+                Err(_) => "I COULD NOT VALIDATE OR SAFELY STORE THAT ENDPOINT, SO I DISCARDED IT AND CHANGED NOTHING. SEND THE FULL BASE MAINNET HTTPS RPC ENDPOINT, OPERATOR.".to_owned(),
+            });
         }
         if matches!(name, "provider" | "model" | "venice-key") {
             let control = self
@@ -562,16 +579,6 @@ fn direct_json(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
-fn base_rpc_key_command(arguments: &str) -> String {
-    let arguments = arguments.trim();
-    if arguments.is_empty() || arguments.eq_ignore_ascii_case("status") {
-        "no raw key is loaded here. this lane only records that Base RPC key collection is needed and points the operator to CTHUWU_RPC_ENDPOINT sourcing guidance (`/base-rpc-key <api-key>` and restart)."
-            .to_owned()
-    } else {
-        "thanks fwiend. i heard a Base RPC key token for operator-side update. the operator still needs to set CTHUWU_RPC_ENDPOINT and restart for it to apply.".to_owned()
-    }
-}
-
 fn direct_command(text: &str) -> Option<(&str, &str)> {
     let command = text.trim_start().strip_prefix('/')?;
     let Some(separator) = command.find(char::is_whitespace) else {
@@ -595,7 +602,7 @@ fn operator_help() -> String {
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
         "`/venice-key [status|<api-key>]` — SHOW WHETHER A VENICE KEY IS LOADED OR STORE/REPLACE IT WITHOUT ECHOING IT.",
-        "`/base-rpc-key [status|<api-key>]` — GUIDE BASE RPC KEY HANDLING FOR OPERATOR-SIDE CTHUWU_RPC_ENDPOINT UPDATES.",
+        "`/base-rpc-key [status|<https-endpoint>]` — VALIDATE, STORE, AND HOT-LOAD A BASE MAINNET RPC ENDPOINT WITHOUT ECHOING IT.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
         "`/nature` AND `/adjust <trait> <value>` — INSPECT OR SIGNED-AUDIT THE LOCAL NATURE.",
@@ -3080,7 +3087,7 @@ mod tests {
         }
 
         fn venice_key_configured(&self) -> Result<bool> {
-            Ok(false)
+            Ok(true)
         }
 
         fn venice_key_command(

@@ -50,8 +50,12 @@ CTHUWU_OBSERVE_INTERVAL
 
 The built-in RPC fallback is `https://mainnet.base.org`; [Base documents that public
 endpoint](https://docs.base.org/base-chain/quickstart/connecting-to-base) as rate limited and
-unsuitable for production systems, so production operators should set `CTHUWU_RPC_ENDPOINT` to a
-dedicated Base mainnet provider. The contract defaults to the live address above, decimals default
+unsuitable for production systems. An acolyte may donate a full dedicated Base Mainnet HTTPS
+endpoint over XMTP with `/base-rpc-key <https-endpoint>`; the Tentacle validates chain 8453,
+stores the first candidate owner-only under its data directory, and hot-loads it. The active
+operator may replace it with the same XMTP command. The startup flag/environment value remains a
+bootstrap fallback, not an instruction the Tentacle gives chat participants. The contract defaults
+to the live address above, decimals default
 to `18`, and supply defaults to `100000000000`. The XMTP identity wallet is not a configuration
 value: it is derived automatically from the same persistent key used by the Agent SDK. A transient
 refresh failure retries every second and retains a prior verified treasury observation only until

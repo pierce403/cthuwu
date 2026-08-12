@@ -495,9 +495,79 @@ pub trait TokenBalanceTransport: Send + Sync {
 /// An Ethereum JSON-RPC implementation of [`TokenBalanceTransport`].
 pub struct JsonRpcTokenTransport {
     client: Client,
-    endpoint: Url,
+    endpoint: RpcEndpointHandle,
     next_request_id: AtomicU64,
     expected_chain_id: Option<u64>,
+}
+
+#[derive(Clone)]
+pub struct RpcEndpointHandle(Arc<std::sync::RwLock<Url>>);
+
+impl fmt::Debug for RpcEndpointHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RpcEndpointHandle(<redacted>)")
+    }
+}
+
+impl RpcEndpointHandle {
+    pub fn new(endpoint: &str) -> Result<Self, TokenEyeError> {
+        Ok(Self(Arc::new(std::sync::RwLock::new(parse_rpc_endpoint(
+            endpoint,
+        )?))))
+    }
+
+    pub fn replace(&self, endpoint: &str) -> Result<(), TokenEyeError> {
+        let endpoint = parse_rpc_endpoint(endpoint)?;
+        *self
+            .0
+            .write()
+            .map_err(|_| TokenEyeError::Transport("RPC endpoint lock is poisoned".to_owned()))? =
+            endpoint;
+        Ok(())
+    }
+
+    pub fn current(&self) -> Result<String, TokenEyeError> {
+        Ok(self
+            .0
+            .read()
+            .map_err(|_| TokenEyeError::Transport("RPC endpoint lock is poisoned".to_owned()))?
+            .as_str()
+            .to_owned())
+    }
+
+    fn url(&self) -> Result<Url, TokenEyeError> {
+        Ok(self
+            .0
+            .read()
+            .map_err(|_| TokenEyeError::Transport("RPC endpoint lock is poisoned".to_owned()))?
+            .clone())
+    }
+}
+
+fn parse_rpc_endpoint(endpoint: &str) -> Result<Url, TokenEyeError> {
+    if endpoint.len() > 4_096 {
+        return Err(TokenEyeError::InvalidEndpoint(
+            "endpoint exceeds the size limit",
+        ));
+    }
+    let endpoint = Url::parse(endpoint)
+        .map_err(|_| TokenEyeError::InvalidEndpoint("endpoint is not a valid URL"))?;
+    if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
+        return Err(TokenEyeError::InvalidEndpoint(
+            "endpoint must be an HTTP or HTTPS URL with a host",
+        ));
+    }
+    if !endpoint.username().is_empty() || endpoint.password().is_some() {
+        return Err(TokenEyeError::InvalidEndpoint(
+            "endpoint must not contain embedded credentials",
+        ));
+    }
+    if endpoint.scheme() != "https" && !endpoint.host_str().is_some_and(is_loopback_host) {
+        return Err(TokenEyeError::InvalidEndpoint(
+            "endpoint must use HTTPS except for loopback development",
+        ));
+    }
+    Ok(endpoint)
 }
 
 impl JsonRpcTokenTransport {
@@ -518,24 +588,6 @@ impl JsonRpcTokenTransport {
         timeout: Duration,
         expected_chain_id: Option<u64>,
     ) -> Result<Self, TokenEyeError> {
-        let endpoint = Url::parse(endpoint)
-            .map_err(|_| TokenEyeError::InvalidEndpoint("endpoint is not a valid URL"))?;
-        if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
-            return Err(TokenEyeError::InvalidEndpoint(
-                "endpoint must be an HTTP or HTTPS URL with a host",
-            ));
-        }
-        if !endpoint.username().is_empty() || endpoint.password().is_some() {
-            return Err(TokenEyeError::InvalidEndpoint(
-                "endpoint must not contain embedded credentials",
-            ));
-        }
-        if endpoint.scheme() != "https" && !endpoint.host_str().is_some_and(is_loopback_host) {
-            return Err(TokenEyeError::InvalidEndpoint(
-                "endpoint must use HTTPS except for loopback development",
-            ));
-        }
-
         let client = Client::builder()
             .timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -543,16 +595,37 @@ impl JsonRpcTokenTransport {
             .map_err(|_| TokenEyeError::Http("could not build HTTP client"))?;
         Ok(Self {
             client,
-            endpoint,
+            endpoint: RpcEndpointHandle::new(endpoint)?,
             next_request_id: AtomicU64::new(1),
             expected_chain_id,
         })
     }
 
+    pub fn for_chain_with_handle(
+        endpoint: RpcEndpointHandle,
+        expected_chain_id: u64,
+    ) -> Result<Self, TokenEyeError> {
+        let client = Client::builder()
+            .timeout(DEFAULT_RPC_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| TokenEyeError::Http("could not build HTTP client"))?;
+        Ok(Self {
+            client,
+            endpoint,
+            next_request_id: AtomicU64::new(1),
+            expected_chain_id: Some(expected_chain_id),
+        })
+    }
+
+    pub async fn validate_chain(&self) -> Result<(), TokenEyeError> {
+        self.verify_chain().await
+    }
+
     async fn post_json(&self, request: Value) -> Result<Value, TokenEyeError> {
         let mut response = self
             .client
-            .post(self.endpoint.clone())
+            .post(self.endpoint.url()?)
             .header("Accept", "application/json")
             .json(&request)
             .send()
@@ -1091,6 +1164,26 @@ impl TokenEye {
         let mut eye = Self::new_with_policy(
             token_contract,
             Arc::new(JsonRpcTokenTransport::for_chain(
+                endpoint,
+                expected_chain_id,
+            )?),
+            observation_interval,
+            tier_policy,
+        );
+        eye.expected_chain_id = Some(expected_chain_id);
+        Ok(eye)
+    }
+
+    pub fn json_rpc_for_chain_with_handle_and_policy(
+        endpoint: RpcEndpointHandle,
+        token_contract: Address,
+        observation_interval: Duration,
+        expected_chain_id: u64,
+        tier_policy: TierPolicy,
+    ) -> Result<Self, TokenEyeError> {
+        let mut eye = Self::new_with_policy(
+            token_contract,
+            Arc::new(JsonRpcTokenTransport::for_chain_with_handle(
                 endpoint,
                 expected_chain_id,
             )?),
