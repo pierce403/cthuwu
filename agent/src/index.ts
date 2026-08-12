@@ -18,6 +18,7 @@ import {
   type GroupDirectory,
   type GroupLike,
 } from "./chat-control.js";
+import { catchUpDirectMessages, type CatchUpDm, type CatchUpMessage } from "./catch-up.js";
 import { runErc8004Stdio } from "./erc8004.js";
 import { loadAgentIdentity } from "./identity.js";
 import { resolveOperatorIdentity } from "./operator-identity.js";
@@ -281,50 +282,61 @@ async function main(): Promise<void> {
     },
   });
 
+  const processDirectText = async (
+    message: CatchUpMessage,
+    conversation: CatchUpDm,
+    senderAddress: string | undefined,
+  ): Promise<void> => {
+    if (typeof message.content !== "string") {
+      return;
+    }
+    let text: string | undefined;
+    dispatchPersonalText(true, message.contentType, message.content, (value) => {
+      text = value;
+    });
+    if (text === undefined) {
+      return;
+    }
+    try {
+      const metadata = {
+        messageId: message.id,
+        senderInboxId: message.senderInboxId,
+        ...(senderAddress === undefined ? {} : { senderAddress }),
+        sentAtNs: message.sentAtNs.toString(),
+        conversationId: message.conversationId,
+      };
+      const inboundBytes = Buffer.byteLength(text, "utf8");
+      diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
+      const result = await (inboundBytes > MAX_INBOUND_TEXT_BYTES
+        ? bridge.rejectOversized(metadata)
+        : bridge.request({ ...metadata, text }));
+      if (result.type === "reply") {
+        diagnostic("uwubot finished; delivering XMTP reply");
+        await conversation.sendText(result.text);
+        diagnostic("delivered XMTP reply");
+      } else {
+        diagnostic("uwubot ignored the XMTP message");
+      }
+    } catch (_error: unknown) {
+      diagnostic("failed to process an inbound XMTP text message");
+    }
+  };
+
   agent.on("text", (context) => {
-    dispatchPersonalText(
-      context.isDm(),
-      context.message.contentType,
-      context.message.content,
-      (text) => {
-        void (async () => {
-          // This identifier is resolved from the SDK-authenticated sender inbox. It is optional
-          // because XMTP inboxes may use identifier types that are not EVM addresses. A resolver
-          // failure must not drop an otherwise valid, transport-authenticated XMTP message.
-          let senderAddress: string | undefined;
-          try {
-            senderAddress = await context.getSenderAddress();
-          } catch (_error: unknown) {
-            senderAddress = undefined;
-          }
-          const metadata = {
-            messageId: context.message.id,
-            senderInboxId: context.message.senderInboxId,
-            ...(senderAddress === undefined ? {} : { senderAddress }),
-            // DecodedMessage metadata comes from the SDK-authenticated XMTP envelope.
-            // Rust still owns role classification; the sidecar never accepts or emits a role.
-            sentAtNs: context.message.sentAtNs.toString(),
-            conversationId: context.message.conversationId,
-          };
-          const inboundBytes = Buffer.byteLength(text, "utf8");
-          diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
-          const response =
-            inboundBytes > MAX_INBOUND_TEXT_BYTES
-              ? bridge.rejectOversized(metadata)
-              : bridge.request({ ...metadata, text });
-          const result = await response;
-          if (result.type === "reply") {
-            diagnostic("uwubot finished; delivering XMTP reply");
-            await context.conversation.sendText(result.text);
-            diagnostic("delivered XMTP reply");
-          } else {
-            diagnostic("uwubot ignored the XMTP message");
-          }
-        })().catch((_error: unknown) => {
-          diagnostic("failed to process an inbound XMTP text message");
-        });
-      },
-    );
+    if (context.isDm()) {
+      void (async () => {
+        // This identifier is resolved from the SDK-authenticated sender inbox. It is optional
+        // because XMTP inboxes may use identifier types that are not EVM addresses. A resolver
+        // failure must not drop an otherwise valid, transport-authenticated XMTP message.
+        let senderAddress: string | undefined;
+        try {
+          senderAddress = await context.getSenderAddress();
+        } catch (_error: unknown) {
+          senderAddress = undefined;
+        }
+        await processDirectText(context.message, context.conversation, senderAddress);
+      })().catch(() => diagnostic("failed to prepare an inbound XMTP text message"));
+    }
   });
   const pruneMovedAssignments = (): void => {
     void chatControl?.pruneMovedAssignments().catch(() => {
@@ -337,6 +349,23 @@ async function main(): Promise<void> {
   agent.on("start", () => {
     diagnostic(`connected to XMTP ${identity.environment} as ${agent.address ?? "unknown"}`);
     pruneMovedAssignments();
+    void catchUpDirectMessages({
+      conversations: agent.client.conversations,
+      selfInboxId: agent.client.inboxId,
+      handle: async (message, conversation) => {
+        const senderAddress = await resolveFreshSenderAddress(
+          agent.client.preferences,
+          message.senderInboxId,
+        ).catch(() => undefined);
+        await processDirectText(message, conversation, senderAddress);
+      },
+    })
+      .then((result) => {
+        diagnostic(
+          `startup DM catch-up checked ${result.conversations} conversations and ${result.messages} inbound messages${result.truncated ? "; bounded history was truncated" : ""}`,
+        );
+      })
+      .catch(() => diagnostic("startup DM catch-up failed; live streaming remains active"));
   });
 
   let stopping = false;

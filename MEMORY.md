@@ -68,6 +68,10 @@ Last reviewed: 2026-08-12
   and delivered XMTP-message events, while Rust emits authenticated routing, inference “thinking”
   provider phases/fallback, and tool lifecycle events. These records omit message bodies, identity
   IDs, credentials, contact notes, tool arguments, paths, commands, and output.
+- After Agent SDK live streams are established, the sidecar runs `syncAll()` and scans up to 256
+  most-recently-active DMs with up to 512 recent messages each. Inbound text is replayed oldest-first
+  through the ordinary Rust bridge. Durable processed-message claims suppress prior replies and
+  stream/catch-up overlap; bounded truncation is logged without message bodies.
 - Browser identities are generated and connected automatically, then persisted in local storage.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
   and local XMTP modes remain explicit backend/test concerns only. Both `uwu.sh` and `uwubot`

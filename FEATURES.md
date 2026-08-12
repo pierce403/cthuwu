@@ -242,6 +242,11 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     inference start/completion and fallback, and public/operator tool start/completion. It never
     prints DM bodies, credentials, contact notes, tool arguments, filesystem paths, commands, or
     tool output.
+  - Once live XMTP streams are established, the sidecar performs a network `syncAll()` and scans a
+    bounded set of recently active direct conversations and messages. It replays inbound text
+    oldest-first through the normal authenticated Rust path; durable processed-message claims ignore
+    messages handled before shutdown and make live-stream overlap safe. Bounded truncation is
+    reported without message text.
   - A Docker image packages Rust, Node, and the XMTP native binding behind the same `uwubot` entrypoint.
   - A hidden stdin harness exercises contact behavior without a network.
 - **Test Criteria**:
