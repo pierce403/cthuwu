@@ -12,6 +12,36 @@ contract CthuwuAcolyteBrandingLifecycleTest is BrandingTestBase {
         assertEq(branding.weeklyUpkeepForPrice(1_000), 1);
         assertEq(branding.weeklyUpkeepForPrice(1_001), 2);
         assertEq(branding.weeklyUpkeepForPrice(type(uint256).max), type(uint256).max / 1_000 + 1);
+        assertEq(branding.upkeepReferralForAmount(9), 0);
+        assertEq(branding.upkeepReferralForAmount(10), 1);
+    }
+
+    function testEveryUpkeepPaymentSplitsTenPercentToImmutableReferrer() public {
+        uint256 tokenId = _mint(acolyte, ACOLYTE_KEY, seller, SELLER_AGENT, referrer, 1_000_000);
+        assertEq(uwu.balanceOf(referrer), 100);
+        assertEq(uwu.balanceOf(acolyte), 900);
+
+        uint256 referrerBefore = uwu.balanceOf(referrer);
+        uint256 acolyteBefore = uwu.balanceOf(acolyte);
+        vm.prank(seller);
+        branding.renew(tokenId);
+        assertEq(uwu.balanceOf(referrer) - referrerBefore, 100);
+        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, 900);
+
+        referrerBefore = uwu.balanceOf(referrer);
+        acolyteBefore = uwu.balanceOf(acolyte);
+        vm.prank(buyer);
+        branding.buy(tokenId, seller, SELLER_AGENT, 1_000_000, BUYER_AGENT, 2_000_000, block.timestamp + 1);
+        assertEq(uwu.balanceOf(referrer) - referrerBefore, 100_200);
+        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, 1_800);
+
+        vm.warp(branding.brandingOf(acolyte).paidThrough);
+        referrerBefore = uwu.balanceOf(referrer);
+        acolyteBefore = uwu.balanceOf(acolyte);
+        vm.prank(other);
+        branding.claimUnserved(tokenId, buyer, BUYER_AGENT, OTHER_AGENT, 3_000_000, block.timestamp + 1);
+        assertEq(uwu.balanceOf(referrer) - referrerBefore, 300);
+        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, 2_700);
     }
 
     function testRenewalCanPayOneWeekEarlyButCannotExceedTwoWeekWindow() public {
@@ -96,6 +126,7 @@ contract CthuwuAcolyteBrandingLifecycleTest is BrandingTestBase {
         vm.prank(seller);
         branding.setDeclaredPrice(tokenId, 1_000_000);
         uint256 acolyteBefore = uwu.balanceOf(acolyte);
+        uint256 referrerBefore = uwu.balanceOf(referrer);
 
         vm.prank(seller);
         branding.renew(tokenId);
@@ -105,7 +136,8 @@ contract CthuwuAcolyteBrandingLifecycleTest is BrandingTestBase {
         assertEq(renewed.pendingDeclaredPrice, 1_000_000);
         assertEq(renewed.pendingPriceActivation, START_TIME + 7 days);
         assertEq(renewed.paidThrough, START_TIME + 14 days);
-        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, 1_000);
+        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, 900);
+        assertEq(uwu.balanceOf(referrer) - referrerBefore, 100);
 
         vm.warp(renewed.pendingPriceActivation);
         assertEq(branding.declaredPriceOf(tokenId), 1_000_000);

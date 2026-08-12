@@ -1215,7 +1215,8 @@ phase.
     `RegistryUnavailable` freezes assignment and remains retryable; it never becomes the fallback
     status used for unminted, expired, or positively ineligible subjects.
   - Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and is paid directly
-    from the controlling Tentacle to the acolyte. Each payment adds seven days from the later of
+    from the controlling Tentacle: floor-rounded 10% to the immutable referrer and the remainder to
+    the acolyte. Each payment adds seven days from the later of
     `paidThrough` and now; renewal opens only within one week of expiry.
   - Price decreases are immediate. Increases wait until the already-paid interval ends, and their
     first queued activation timestamp cannot be extended by renewal or later repricing. A renewal
@@ -1225,17 +1226,20 @@ phase.
   - Any eligible Tentacle may compulsorily purchase an active Branding subject to expected-owner,
     expected-controller, maximum-price, buyer-agent, buyer-price, and deadline checks. Ten percent
     of gross goes to the immutable referrer, the remainder to the seller, and the buyer separately
-    pays the first week of upkeep at its new price. Indivisible units use the 1,000-basis-point
-    floor for referral and send the exact gross remainder to the seller. The acquiring wallet must
+    pays the first week of upkeep at its new price using the same referrer/acolyte split. Indivisible
+    units use the 1,000-basis-point floor and exact seller or acolyte remainder. The acquiring wallet must
     differ from the current owner so self-purchase cannot reset delayed price state.
   - `claimUnserved` requires expiry or positively verified controller ineligibility, pays the old
-    owner and referrer nothing, and atomically installs an exact eligible claimant after direct
+    owner no sale proceeds, and atomically installs an exact eligible claimant after split
     first-week upkeep. The claimant wallet must differ from the old owner, preventing same-address
     self-rebinding through a second agent ID; expected old owner/controller and deadline reject a
     changed tuple, but are not a unique epoch nonce if that same tuple later recurs. Callers should
     use short deadlines. The chain cannot detect common control of distinct wallets.
   - ERC-2981 exposes the immutable referrer and 1,000-basis-point royalty for discovery only; the
     native purchase path enforces settlement. Version 1 has no ERC-8034 or generic marketplace path.
+  - The current owner may set a bounded avatar URI and manage up to 32 bounded custom string traits.
+    Metadata follows the NFT; only the new owner can mutate it after purchase or claim. Owner input
+    is public, JSON-escaped hostile data and never represents acolyte consent or private profile state.
   - The contract stores no XMTP inbox ID, message, contact note, credential, profile, or private
     memory. `activeControllerOf` returns zero unless the Branding is positively `Active`.
 - **Test Criteria and release gates**:
@@ -1245,7 +1249,8 @@ phase.
     fields, exact eligibility, shared wallets, registry outage, upkeep rounding/windows, expiry,
     repricing, slippage/races, referral and claim settlement, transfer bypasses, ERC-2981,
     reentrancy/failing tokens, no unintended intermediary UWU, the explicitly stranded
-    contract-as-referrer case, and `uint256` edges.
+    contract-as-referrer case, upkeep referral rounding across mint/renew/purchase/claim, bounded
+    metadata ownership and escaping, and `uint256` edges.
   - [x] A Base fork pinned to block `49768180`, hash
     `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`, exercises the real
     canonical registry and UWU contracts; the older ERC-8004-only block `41663800` is not reused.

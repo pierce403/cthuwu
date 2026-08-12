@@ -532,7 +532,8 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   do not broaden that fact into a claim that external registry governance is powerless.
 - EIP-712 acolyte consent binds the exact minter/controller, immutable referrer, positive initial
   price, one-use nonce, and deadline. `SignatureChecker` supports EOAs and ERC-1271 subjects.
-- Weekly upkeep is `ceil(price * 10 / 10_000)` UWU and moves directly from controller to acolyte.
+- Weekly upkeep is `ceil(price * 10 / 10_000)` UWU; floor-rounded 10% goes directly to the
+  immutable referrer and the remainder directly to the acolyte.
   Payment adds seven days from `max(paidThrough, now)` and opens only when at most seven days
   remain; exact `paidThrough` is expired.
 - Price decreases are immediate. The first queued increase fixes activation at the end of the
@@ -542,8 +543,8 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   decrease until activation; raising it would underpay upkeep. A compulsory buyer binds
   expected owner/controller, maximum price, exact buyer agent/new price, and deadline.
 - Paid purchase sends `floor(gross * 1_000 / 10_000)` to the immutable referrer, the exact
-  remainder to the seller, and separate first upkeep to the acolyte. An expired or positively
-  ineligible claim pays neither the old owner nor referrer and pays only new upkeep. ERC-2981
+  remainder to the seller, and separate first upkeep split between referrer and acolyte. An expired
+  or positively ineligible claim pays no sale proceeds and pays only split new upkeep. ERC-2981
   exposes the same 1,000-basis-point referrer but does not enforce generic marketplace payment.
 - Paid purchase and zero-consideration claim both reject an acquiring wallet equal to the current
   owner, preventing same-address price reset or self-rebinding through another eligible agent ID.
@@ -561,7 +562,7 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 - The Foundry workspace pins Foundry `1.7.1` and audited OpenZeppelin Contracts `v5.3.0` commit
   `e4f70216d759d8e6a64144a9e1f7bbeed78e7079`. Its Base fork is pinned to block `49768180`,
   hash `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`. The exact Foundry
-  `1.7.1` run passed 58/58, including live real-registry and real-UWU fork paths. This is test
+  `1.7.1` run passed 63/63, including live real-registry and real-UWU fork paths. This is test
   evidence, not a deployment claim.
 - The in-progress frontend assignment path reads the actual browser participant address, accepts
   only a positively active Branding, resolves the exact controller's current ERC-8004 production
@@ -658,8 +659,9 @@ configuration; only a funded live registration still requires external credentia
 repository source alone.
 
 The Acolyte Branding milestone adds an in-progress non-upgradeable Foundry ERC-721, consented
-address-bound identity, exact ERC-8004 controller verification, direct weekly upkeep, compulsory
-UWU purchase, immutable referral, unserved claims, funding-aware deployment tooling, and the
+address-bound identity, exact ERC-8004 controller verification, weekly upkeep split 10% to the
+immutable referrer and the remainder to the acolyte, compulsory UWU purchase, bounded owner-managed
+avatar/traits, unserved claims, funding-aware deployment tooling, and the
 three-channel assignment/enrollment boundary. Local source and tests do not imply a Base deployment,
 production Global group, or live cross-Tentacle interoperability. Funded deployment, independent
 verification, canonical provenance, explicit Global bootstrap, and a real production XMTP routing

@@ -218,9 +218,10 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   expected owner/controller tuple, price, deadline, settlement, and first-upkeep checks. Document
   that the same tuple can recur before a long caller-selected deadline; recommend short deadlines
   rather than claiming these fields are a unique on-chain epoch nonce.
-- Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and moves directly from
-  controller to acolyte. Paid sales send 10% to the immutable referrer and the remainder to the
-  seller, with buyer upkeep separate. Zero-consideration claims pay neither old owner nor referrer.
+- Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price. Every upkeep payment
+  sends a floor-rounded 10% to the immutable referrer and the remainder directly to the acolyte.
+  Paid sales separately send 10% to the referrer and the remainder to the seller. Zero-consideration
+  claims pay no sale proceeds, but their required first-week upkeep uses the same referral split.
   Do not add mutable rates, an upgrade/admin confiscation path, retained intermediary balances, or a
   generic marketplace/ERC-8034 bypass. Preserve the signed ANY-address referrer rule: when the
   contract itself is selected, it is the intentional final 10% recipient and those funds remain
@@ -233,6 +234,10 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   checks so a seller cannot escape a pending buy through mempool repricing. Reject purchases and
   claims whose acquiring wallet is the current owner; a distinct wallet's common control cannot be
   proven on-chain and must not be misrepresented as Sybil resistance.
+- Only the current NFT owner may set the bounded avatar URI and up to 32 bounded custom string
+  traits. Metadata follows the token across lifecycle transfers; the new owner may replace or remove
+  it. Treat owner-supplied metadata as hostile public input, JSON-escape it on-chain, and never
+  present it as acolyte-authored or suitable for private data.
 - Deployment must refuse non-Base chains and verify registry code/version plus UWU code/decimals
   before broadcast. After confirmation, the TypeScript finalizer must bind the exact creation
   transaction to the durable intent and compiled artifact, compare deployed runtime against the
@@ -449,8 +454,8 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   implemented and locally tested, with a read-only deployment verifier. A funded live
   registration/recovery exercise remains an external release gate; the restricted Graph key is public client configuration.
 - The Acolyte Branding Foundry workspace is in progress. Its canonical design binds an immutable
-  acolyte address, exact eligible controller agent ID, direct weekly upkeep, compulsory UWU sale,
-  immutable 10% referrer, and fail-closed claim status. No Base Branding deployment or frontend
+  acolyte address, exact eligible controller agent ID, referral-split weekly upkeep, compulsory UWU
+  sale, immutable 10% referrer, and fail-closed claim status. No Base Branding deployment or frontend
   Branding routing is currently claimed.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening

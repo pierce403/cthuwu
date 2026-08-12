@@ -20,14 +20,15 @@ Every Branding has four distinct roles:
 | Acolyte / subject | The immutable, nonzero Ethereum address represented by the token. |
 | Controller | The exact eligible ERC-8004 Tentacle agent ID recorded for this Branding. |
 | NFT owner | The current controlling Tentacle wallet; it must be the verified wallet for the exact controller agent ID. |
-| Referrer | The immutable, nonzero address chosen at mint and signed by the acolyte; it receives 10% of every paid native sale. |
+| Referrer | The immutable, nonzero address chosen at mint and signed by the acolyte; it receives 10% of every paid sale and weekly upkeep payment. |
 
 Several ERC-8004 agents may share one wallet, so the contract stores the exact controller agent ID.
 Wallet ownership alone does not select an agent. The subject never becomes an operator, never gains
 control of the Tentacle, and cannot be replaced by transferring or repricing the token.
 
 The contract may expose the acolyte address, owner, exact controller agent ID, immutable referrer,
-declared price, pending-price state, and paid-through time. It must not store or emit XMTP inbox IDs,
+declared price, pending-price state, paid-through time, and owner-selected public avatar and traits.
+It must not store or emit XMTP inbox IDs,
 DMs, message hashes intended to identify conversations, contact notes, profile prose, credentials,
 operator ACLs, model state, or other personal data. Local contact memory remains under the existing
 XMTP and data-directory privacy model.
@@ -127,8 +128,8 @@ nonzero and may otherwise be any address, including the minter, acolyte, or Bran
 itself. It is immutable after mint.
 
 Mint atomically mints the token, records the exact controller and positive declared price, consumes
-the consent nonce, and transfers the first weekly UWU upkeep directly from the minter to the
-acolyte. A failed signature, registry check, or token transfer reverts the entire operation.
+the consent nonce, and transfers the first weekly UWU upkeep using the referral split below. A
+failed signature, registry check, or token transfer reverts the entire operation.
 
 ## Weekly upkeep
 
@@ -141,9 +142,12 @@ weeklyUpkeep = ceil(declaredPrice * 10 / 10_000)
 The Solidity implementation uses `Math.mulDiv` with upward rounding so every positive declared
 price has positive upkeep without overflowing an intermediate multiplication.
 
-The exact eligible controlling wallet pays upkeep directly to the acolyte in UWU. The Branding
-contract must not retain the payment. Each successful payment adds exactly seven days from
-`max(paidThrough, block.timestamp)`.
+The exact eligible controlling wallet pays upkeep in UWU. A floor-rounded 10% goes directly to the
+immutable referrer and the remainder goes directly to the acolyte. For indivisible base units this
+means `floor(upkeep * 1_000 / 10_000)` to the referrer and the exact remainder to the acolyte; a
+payment below 10 base units therefore has a zero referral share. The Branding contract must not
+retain the payment unless it was itself intentionally selected as referrer. Each successful payment
+adds exactly seven days from `max(paidThrough, block.timestamp)`.
 
 Renewal is permitted only while `paidThrough <= block.timestamp + 7 days`. This permits payment
 one week early and caps prepaid service at approximately fourteen days. At
@@ -183,8 +187,8 @@ The purchase then completes atomically:
 
 1. 10% of the gross sale price goes to the immutable referrer;
 2. the remaining 90% goes to the seller;
-3. separately, the buyer pays the first weekly upkeep at the buyer's new declared price directly to
-   the acolyte;
+3. separately, the buyer pays the first weekly upkeep at the buyer's new declared price, split 10%
+   to the immutable referrer and the remainder to the acolyte;
 4. the NFT transfers to the buyer;
 5. the exact controller becomes `buyerAgentId`;
 6. the buyer's positive declared price takes effect immediately;
@@ -218,6 +222,19 @@ not implement ERC-8034, OpenSea-specific mechanics, or generic marketplace trans
 `tokenURI` metadata includes the referrer and `1000` referral basis points. Metadata does not
 weaken the immutable on-chain referrer or authorize an alternate transfer path.
 
+## Owner-managed public metadata
+
+The current NFT owner may set or clear one avatar URI and manage up to 32 custom string traits.
+Trait names are unique per token and may be added, replaced, enumerated, or removed. Trait names are
+limited to 64 bytes, values to 256 bytes, and the avatar URI to 2,048 bytes. These bounds keep
+on-chain metadata enumeration and `tokenURI` construction finite while allowing arbitrary
+owner-defined trait semantics.
+
+The avatar and traits follow the NFT when ownership changes. The previous owner loses mutation
+authority immediately, and the new owner may preserve, replace, or remove them. Every value is
+public, owner-authored hostile input—not an acolyte attestation or safe place for private data.
+`tokenURI` JSON-escapes owner input and exposes the avatar through the standard `image` field.
+
 ## Expiry and unserved claims
 
 A Branding becomes eligible for `claimUnserved` when either:
@@ -240,7 +257,7 @@ A successful claim:
 
 1. pays no consideration to the old owner;
 2. pays no referral because the gross consideration is zero;
-3. transfers the first weekly upkeep at the claimant's new price directly to the acolyte;
+3. transfers the first weekly upkeep at the claimant's new price using the same referrer/acolyte split;
 4. transfers the NFT to the claimant;
 5. records the exact claimant agent ID and new price;
 6. clears pending-price state; and
@@ -262,8 +279,10 @@ The public interface exposes bounded, composable views including:
 - `statusOf(tokenId)`: the fail-closed status enum, including registry unavailability;
 - `activeControllerOf(address)`: exact agent ID and wallet only while truly active;
 - `declaredPriceOf(tokenId)`: the currently executable price after any due pending activation;
-- `weeklyUpkeepForPrice(price)`: upward-rounded 10-basis-point weekly upkeep; and
-- `referrerOf(tokenId)`: immutable referral receiver.
+- `weeklyUpkeepForPrice(price)`: upward-rounded 10-basis-point weekly upkeep;
+- `upkeepReferralForAmount(upkeep)`: floor-rounded referrer portion;
+- `referrerOf(tokenId)`: immutable referral receiver; and
+- bounded avatar and custom-trait setters, removers, and enumerable views.
 
 Consumers must use the status enum and current registry verification, not infer service eligibility
 from NFT ownership, historical events, Agent0 indexing, or a nonzero controller field alone.
@@ -362,7 +381,7 @@ forge test -vvv
 
 The Base-mainnet fork pin is block `49768180`, hash
 `0xcb6c8ff16f2b240137013b793b06f3d2ac1133b192f36920062c1b8c6e307c0e`. The exact Foundry
-`1.7.1` suite passed 58/58 tests, including three live fork tests that bind this hash and exercise
+`1.7.1` suite passed 63/63 tests, including three live fork tests that bind this hash and exercise
 the real registry eligibility and UWU transfer paths. The pin is after UWU's earliest verified code
 block `49768171` and must not be replaced with the older ERC-8004-only block `41663800`. Passing
 fork evidence does not imply that Branding was deployed.
@@ -449,10 +468,11 @@ The version-1 contract test plan covers:
 - upward-rounded 0.1% upkeep, early-payment window, prepaid cap, and exact expiry boundary;
 - immediate decreases, delayed increases, fixed activation time, and no mempool repricing escape;
 - expected-owner/controller, maximum-price, buyer deadline, and other purchase races;
-- exact 10% referral, seller remainder, separate buyer upkeep, and zero-consideration claim;
+- exact sale referral, floor-rounded 10% referral from every upkeep, seller/acolyte remainders,
+  separate buyer upkeep, and zero-consideration claim;
 - expired and positively ineligible claims;
 - rejection of every ordinary ERC-721 approval and transfer path;
-- ERC-2981 and token metadata;
+- ERC-2981 plus bounded owner-managed avatar/trait metadata, ownership handoff, and JSON escaping;
 - no transient/intermediary UWU residue for external referrers, the explicit stranded
   contract-as-referrer case, reentrancy, failing ERC-20 behavior, and `uint256` edges;
 - fuzz and invariant coverage for identity, accounting, state transitions, and conservation; and

@@ -32,6 +32,10 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
 
     uint256 private constant REGISTRY_READ_GAS = 200_000;
     uint256 private constant MAX_REGISTRY_DYNAMIC_RETURN_BYTES = 1_024;
+    uint256 public constant MAX_TRAITS = 32;
+    uint256 public constant MAX_TRAIT_TYPE_BYTES = 64;
+    uint256 public constant MAX_TRAIT_VALUE_BYTES = 256;
+    uint256 public constant MAX_AVATAR_URI_BYTES = 2_048;
 
     string public constant REGISTRY_VERSION = "2.0.0";
     bytes32 public constant REGISTRY_VERSION_HASH = keccak256(bytes(REGISTRY_VERSION));
@@ -97,8 +101,16 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         uint256 pendingPriceActivation;
     }
 
+    struct CustomTrait {
+        string traitType;
+        string value;
+    }
+
     mapping(address acolyte => uint256 nonce) public nonces;
     mapping(uint256 tokenId => BrandingData branding) private _brandings;
+    mapping(uint256 tokenId => string avatarUri) private _avatarUris;
+    mapping(uint256 tokenId => CustomTrait[] traits) private _customTraits;
+    mapping(uint256 tokenId => mapping(bytes32 traitHash => uint256 indexPlusOne)) private _customTraitIndexes;
 
     error WrongChain(uint256 actualChainId);
     error CanonicalDependencyUnavailable(address dependency);
@@ -129,6 +141,12 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
     error BrandingNotActive(uint256 tokenId, BrandingStatus status);
     error BrandingNotClaimable(uint256 tokenId, BrandingStatus status);
     error ClaimExpired(uint256 deadline);
+    error EmptyTraitType();
+    error TraitTypeTooLong(uint256 length);
+    error TraitValueTooLong(uint256 length);
+    error TooManyTraits(uint256 maximum);
+    error TraitNotFound(bytes32 traitHash);
+    error AvatarUriTooLong(uint256 length);
 
     event BrandingMinted(
         uint256 indexed tokenId,
@@ -145,8 +163,13 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         address indexed controller,
         address indexed acolyte,
         uint256 upkeep,
+        uint256 referral,
+        uint256 acolyteProceeds,
         uint256 paidThrough
     );
+    event AvatarURIUpdated(uint256 indexed tokenId, string avatarURI);
+    event CustomTraitUpdated(uint256 indexed tokenId, string traitType, string value);
+    event CustomTraitRemoved(uint256 indexed tokenId, string traitType);
     event DeclaredPriceUpdated(uint256 indexed tokenId, uint256 previousPrice, uint256 newPrice);
     event DeclaredPriceIncreaseScheduled(
         uint256 indexed tokenId, uint256 currentPrice, uint256 pendingPrice, uint256 activation
@@ -214,6 +237,11 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         return Math.mulDiv(price, UPKEEP_BPS, BPS_DENOMINATOR, Math.Rounding.Ceil);
     }
 
+    /// @notice Returns the referrer's floor-rounded 10% share of an upkeep payment.
+    function upkeepReferralForAmount(uint256 upkeep) public pure returns (uint256) {
+        return Math.mulDiv(upkeep, REFERRAL_BPS, BPS_DENOMINATOR);
+    }
+
     /// @notice Returns the current executable declared gross price, including an activated queued increase.
     function declaredPriceOf(uint256 tokenId) public view returns (uint256) {
         _requireOwned(tokenId);
@@ -268,7 +296,7 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         });
         _setTokenRoyalty(tokenId, consent.referrer, REFERRAL_BPS);
         _safeMint(msg.sender, tokenId);
-        IERC20(UWU).safeTransferFrom(msg.sender, consent.acolyte, firstUpkeep);
+        _payUpkeep(tokenId, msg.sender, consent.acolyte, consent.referrer, firstUpkeep, paidThrough);
 
         emit BrandingMinted(
             tokenId,
@@ -280,7 +308,6 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
             paidThrough,
             firstUpkeep
         );
-        emit UpkeepPaid(tokenId, msg.sender, consent.acolyte, firstUpkeep, paidThrough);
     }
 
     /// @notice Pays exactly one more week of upkeep, no earlier than one week before the current expiry.
@@ -304,8 +331,7 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         uint256 upkeep = weeklyUpkeepForPrice(renewalPrice);
         branding.paidThrough = newPaidThrough;
 
-        IERC20(UWU).safeTransferFrom(msg.sender, branding.acolyte, upkeep);
-        emit UpkeepPaid(tokenId, msg.sender, branding.acolyte, upkeep, newPaidThrough);
+        _payUpkeep(tokenId, msg.sender, branding.acolyte, branding.referrer, upkeep, newPaidThrough);
     }
 
     /// @notice Decreases immediately or queues an increase until the already-paid interval ends.
@@ -406,7 +432,7 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         branding.pendingDeclaredPrice = 0;
         branding.pendingPriceActivation = 0;
         _safeTransfer(previousOwner, msg.sender, tokenId);
-        IERC20(UWU).safeTransferFrom(msg.sender, acolyte, firstUpkeep);
+        _payUpkeep(tokenId, msg.sender, acolyte, branding.referrer, firstUpkeep, newPaidThrough);
 
         emit BrandingClaimed(
             tokenId,
@@ -418,7 +444,81 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
             newDeclaredPrice,
             newPaidThrough
         );
-        emit UpkeepPaid(tokenId, msg.sender, acolyte, firstUpkeep, newPaidThrough);
+    }
+
+    /// @notice Sets or clears the owner-selected avatar URI included in token metadata.
+    function setAvatarURI(uint256 tokenId, string calldata avatarURI) external {
+        address owner = _requireOwned(tokenId);
+        if (owner != msg.sender) revert NotTokenOwner(tokenId, owner, msg.sender);
+        uint256 length = bytes(avatarURI).length;
+        if (length > MAX_AVATAR_URI_BYTES) revert AvatarUriTooLong(length);
+        _avatarUris[tokenId] = avatarURI;
+        emit AvatarURIUpdated(tokenId, avatarURI);
+    }
+
+    function avatarURIOf(uint256 tokenId) external view returns (string memory) {
+        _requireOwned(tokenId);
+        return _avatarUris[tokenId];
+    }
+
+    /// @notice Adds or replaces an owner-selected string trait. Trait names are unique per token.
+    function setCustomTrait(uint256 tokenId, string calldata traitType, string calldata value) external {
+        address owner = _requireOwned(tokenId);
+        if (owner != msg.sender) revert NotTokenOwner(tokenId, owner, msg.sender);
+        uint256 typeLength = bytes(traitType).length;
+        uint256 valueLength = bytes(value).length;
+        if (typeLength == 0) revert EmptyTraitType();
+        if (typeLength > MAX_TRAIT_TYPE_BYTES) revert TraitTypeTooLong(typeLength);
+        if (valueLength > MAX_TRAIT_VALUE_BYTES) revert TraitValueTooLong(valueLength);
+
+        bytes32 traitHash = keccak256(bytes(traitType));
+        uint256 indexPlusOne = _customTraitIndexes[tokenId][traitHash];
+        if (indexPlusOne == 0) {
+            if (_customTraits[tokenId].length >= MAX_TRAITS) revert TooManyTraits(MAX_TRAITS);
+            _customTraits[tokenId].push(CustomTrait({ traitType: traitType, value: value }));
+            _customTraitIndexes[tokenId][traitHash] = _customTraits[tokenId].length;
+        } else {
+            CustomTrait storage existing = _customTraits[tokenId][indexPlusOne - 1];
+            // A hash collision must not silently replace a differently named trait.
+            if (keccak256(bytes(existing.traitType)) != traitHash) revert TraitNotFound(traitHash);
+            existing.value = value;
+        }
+        emit CustomTraitUpdated(tokenId, traitType, value);
+    }
+
+    function removeCustomTrait(uint256 tokenId, string calldata traitType) external {
+        address owner = _requireOwned(tokenId);
+        if (owner != msg.sender) revert NotTokenOwner(tokenId, owner, msg.sender);
+        bytes32 traitHash = keccak256(bytes(traitType));
+        uint256 indexPlusOne = _customTraitIndexes[tokenId][traitHash];
+        if (indexPlusOne == 0) revert TraitNotFound(traitHash);
+
+        uint256 index = indexPlusOne - 1;
+        uint256 lastIndex = _customTraits[tokenId].length - 1;
+        string memory removedType = _customTraits[tokenId][index].traitType;
+        if (index != lastIndex) {
+            CustomTrait storage moved = _customTraits[tokenId][lastIndex];
+            _customTraits[tokenId][index] = moved;
+            _customTraitIndexes[tokenId][keccak256(bytes(moved.traitType))] = index + 1;
+        }
+        _customTraits[tokenId].pop();
+        delete _customTraitIndexes[tokenId][traitHash];
+        emit CustomTraitRemoved(tokenId, removedType);
+    }
+
+    function customTraitCount(uint256 tokenId) external view returns (uint256) {
+        _requireOwned(tokenId);
+        return _customTraits[tokenId].length;
+    }
+
+    function customTraitAt(uint256 tokenId, uint256 index)
+        external
+        view
+        returns (string memory traitType, string memory value)
+    {
+        _requireOwned(tokenId);
+        CustomTrait storage trait = _customTraits[tokenId][index];
+        return (trait.traitType, trait.value);
     }
 
     /// @notice Returns the current state for an acolyte, including status and effective price.
@@ -488,14 +588,32 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
         );
         string memory statusAttribute =
             string.concat(',{"trait_type":"Status","value":"', _statusName(_statusOf(tokenId, owner, branding)), '"}');
+        string memory customAttributes;
+        CustomTrait[] storage traits = _customTraits[tokenId];
+        for (uint256 i; i < traits.length; ++i) {
+            customAttributes = string.concat(
+                customAttributes,
+                ',{"trait_type":"',
+                _escapeJson(traits[i].traitType),
+                '","value":"',
+                _escapeJson(traits[i].value),
+                '"}'
+            );
+        }
+        string memory imageField;
+        if (bytes(_avatarUris[tokenId]).length != 0) {
+            imageField = string.concat('"image":"', _escapeJson(_avatarUris[tokenId]), '",');
+        }
         string memory json = string.concat(
             '{"name":"Cthuwu Acolyte Branding #',
             tokenId.toString(),
             '","description":"Canonical service and chat routing right for one acolyte; not ownership of a person.",',
+            imageField,
             '"attributes":[',
             identityAttributes,
             economicAttributes,
             statusAttribute,
+            customAttributes,
             "]}"
         );
         return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));
@@ -574,12 +692,53 @@ contract CthuwuAcolyteBranding is ERC721, ERC2981, EIP712, ReentrancyGuard {
 
         IERC20(UWU).safeTransferFrom(msg.sender, referrer, referral);
         IERC20(UWU).safeTransferFrom(msg.sender, seller, sellerProceeds);
-        IERC20(UWU).safeTransferFrom(msg.sender, acolyte, firstUpkeep);
+        _payUpkeep(tokenId, msg.sender, acolyte, referrer, firstUpkeep, newPaidThrough);
 
         emit BrandingPurchased(
             tokenId, seller, msg.sender, sellerAgentId, buyerAgentId, grossPrice, referral, sellerProceeds
         );
-        emit UpkeepPaid(tokenId, msg.sender, acolyte, firstUpkeep, newPaidThrough);
+    }
+
+    function _payUpkeep(
+        uint256 tokenId,
+        address payer,
+        address acolyte,
+        address referrer,
+        uint256 upkeep,
+        uint256 paidThrough
+    ) private {
+        uint256 referral = upkeepReferralForAmount(upkeep);
+        uint256 acolyteProceeds = upkeep - referral;
+        if (referral != 0) IERC20(UWU).safeTransferFrom(payer, referrer, referral);
+        IERC20(UWU).safeTransferFrom(payer, acolyte, acolyteProceeds);
+        emit UpkeepPaid(tokenId, payer, acolyte, upkeep, referral, acolyteProceeds, paidThrough);
+    }
+
+    function _escapeJson(string memory input) private pure returns (string memory) {
+        bytes memory source = bytes(input);
+        bytes memory escaped = new bytes(source.length * 6);
+        bytes16 hexSymbols = "0123456789abcdef";
+        uint256 length;
+        for (uint256 i; i < source.length; ++i) {
+            uint8 character = uint8(source[i]);
+            if (character == 0x22 || character == 0x5c) {
+                escaped[length++] = "\\";
+                escaped[length++] = source[i];
+            } else if (character < 0x20) {
+                escaped[length++] = "\\";
+                escaped[length++] = "u";
+                escaped[length++] = "0";
+                escaped[length++] = "0";
+                escaped[length++] = hexSymbols[character >> 4];
+                escaped[length++] = hexSymbols[character & 0x0f];
+            } else {
+                escaped[length++] = source[i];
+            }
+        }
+        assembly ("memory-safe") {
+            mstore(escaped, length)
+        }
+        return string(escaped);
     }
 
     function _statusOf(uint256, address owner, BrandingData storage branding) private view returns (BrandingStatus) {

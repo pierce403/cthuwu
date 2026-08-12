@@ -44,13 +44,14 @@ contract CthuwuAcolyteBrandingFuzzTest is BrandingTestBase {
         uint256 acolyteBefore = uwu.balanceOf(acolyte);
         uint256 expectedReferral = gross / 10;
         uint256 expectedUpkeep = buyerPrice / 1_000 + (buyerPrice % 1_000 == 0 ? 0 : 1);
+        uint256 expectedUpkeepReferral = expectedUpkeep / 10;
 
         vm.prank(buyer);
         branding.buy(tokenId, seller, SELLER_AGENT, gross, BUYER_AGENT, buyerPrice, block.timestamp + 1);
 
-        assertEq(uwu.balanceOf(referrer) - referralBefore, expectedReferral);
+        assertEq(uwu.balanceOf(referrer) - referralBefore, expectedReferral + expectedUpkeepReferral);
         assertEq(uwu.balanceOf(seller) - sellerBefore, gross - expectedReferral);
-        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, expectedUpkeep);
+        assertEq(uwu.balanceOf(acolyte) - acolyteBefore, expectedUpkeep - expectedUpkeepReferral);
         assertEq(buyerBefore - uwu.balanceOf(buyer), gross + expectedUpkeep);
         assertEq(uwu.balanceOf(address(branding)), 0);
     }
