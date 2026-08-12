@@ -220,7 +220,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - Cargo exposes one application binary named `uwubot`.
   - The launcher and Rust runtime default to XMTP `production`, matching the deployed browser.
     `dev` and `local` remain explicit test-only overrides and never activate implicitly.
-  - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle.
+  - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle. When no
+    Venice credential is loaded, both public acolytes and the authenticated operator receive the
+    out-of-band `/venice-key <api-key>` provisioning request before deterministic inference can
+    mask the missing dependency.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.

@@ -228,6 +228,13 @@ impl OperatorHarness {
             ));
         }
 
+        if let Some(control) = &self.model_control
+            && matches!(control.venice_key_configured(), Ok(false))
+        {
+            return Ok("THIS TENTACLE NEEDS A VENICE KEY BEFORE I CAN THINK REMOTELY, OPERATOR. SEND `/venice-key <api-key>` HERE; I WILL STORE IT OWNER-ONLY, NEVER ECHO IT, AND VALIDATE IT BEFORE USE. THE COMMAND WILL REMAIN IN YOUR XMTP CONVERSATION HISTORY. GET THE KEY FROM YOUR VENICE ACCOUNT SETTINGS OR ADMIN API PAGE, UWU."
+                .to_owned());
+        }
+
         let inference_deadline = InferenceDeadline::current(InferenceLane::Operator)?;
         let schemas = operator_tool_schemas(text);
         let active_model_tools = schemas

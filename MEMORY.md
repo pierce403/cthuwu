@@ -39,7 +39,8 @@ Last reviewed: 2026-08-12
   explicitly disables Venice-native search and supplemental system prompting. It then falls back to
   proxy-bypassing loopback Ollama and deterministic behavior on any failure. It does not implement or
   claim full E2EE or independent quote verification.
-- With no Venice credential, public acolytes are asked for `/venice-key <api-key>`. The first
+- With no Venice credential, public acolytes and the authenticated operator are asked for
+  `/venice-key <api-key>` before inference fallback can mask the missing dependency. The first
   candidate persists owner-only in `state/venice.key`, is never echoed, and must authenticate to the
   live catalog and pass fresh TEE attestation; invalid candidates are removed and only operators may
   replace a loaded key. A funded treasury queues the configured whole-UWU reward to the

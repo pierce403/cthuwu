@@ -22,10 +22,8 @@ use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
-const BASE_RPC_HELP: &str =
-    "get a Base RPC key from a provider console such as Infura, Alchemy, or QuickNode, then tell an active operator to update CTHUWU_RPC_ENDPOINT and restart so the node uses it.";
-const VENICE_KEY_HELP: &str =
-    "the Venice API key should come from your Venice account settings or admin API page; this Tentacle never echoes it back.";
+const BASE_RPC_HELP: &str = "get a Base RPC key from a provider console such as Infura, Alchemy, or QuickNode, then tell an active operator to update CTHUWU_RPC_ENDPOINT and restart so the node uses it.";
+const VENICE_KEY_HELP: &str = "the Venice API key should come from your Venice account settings or admin API page; this Tentacle never echoes it back.";
 
 pub struct UwUBot {
     contacts: ContactStore,
@@ -1622,6 +1620,55 @@ mod tests {
 
         let answered = send(&bot, 2, "aabbcc", "hello after loading").await;
         assert!(answered.contains("answered: hello after loading"));
+    }
+
+    #[tokio::test]
+    async fn operator_is_prompted_for_a_missing_venice_key_before_inference() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let control = Arc::new(TestVeniceControl {
+            configured: AtomicBool::new(false),
+            valid: true,
+        });
+        let mut operators = OperatorStore::new(root.path(), "production").unwrap();
+        operators
+            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
+            .unwrap();
+        let harness = OperatorHarness::new(
+            Arc::new(DeterministicOperatorModel),
+            tools,
+            AgentContext::new(root.path(), root.path()).unwrap(),
+        )
+        .with_model_control(control.clone());
+        let bot = UwUBot::new(
+            ContactStore::new(root.path()).unwrap(),
+            ProcessedMessages::new(root.path()).unwrap(),
+            model.clone(),
+            Arc::new(Mutex::new(operators)),
+            Arc::new(harness),
+            Arc::new(Mutex::new(
+                EvolutionRuntime::open(
+                    root.path(),
+                    root.path(),
+                    EvolutionStartupOptions {
+                        auto_accept_nature: true,
+                        ..EvolutionStartupOptions::default()
+                    },
+                )
+                .unwrap(),
+            )),
+        )
+        .with_model_control(control);
+
+        let asked = send(&bot, 0, OPERATOR_ID, "hello").await;
+        assert!(asked.contains("/venice-key <api-key>"));
+        assert!(asked.contains("VENICE ACCOUNT SETTINGS"));
+        assert!(model.messages.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
