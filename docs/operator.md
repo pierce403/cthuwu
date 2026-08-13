@@ -70,6 +70,17 @@ directory. Its intro node normally uses:
 # or: ./uwu.sh operator add 0x0123...abcd --label Dean
 ```
 
+If older or manually edited state contains more than one active operator, an interactive
+`./uwu.sh` startup displays the candidates and asks which one to retain. For a non-interactive
+service, inspect and repair the state explicitly:
+
+```bash
+./uwu.sh operator list
+./uwu.sh operator select <full-xmtp-inbox-id>
+```
+
+Selection revokes every other active candidate; it never authorizes a new inbox.
+
 The command does not start the XMTP message transport. It resolves an ENS `.eth` name on Ethereum
 mainnet when needed, looks up the address's canonical inbox on XMTP production, then writes that
 inbox to an `active` ACL record with the local authorization time. A missing ENS address or missing

@@ -66,7 +66,7 @@ use std::{
     collections::BTreeSet,
     env,
     fs::{self, OpenOptions},
-    io::{self, BufRead, Write},
+    io::{self, BufRead, IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -467,6 +467,8 @@ enum OperatorCommand {
     /// Revoke an operator inbox. Revocation remains as a blocking tombstone.
     #[command(visible_alias = "remove")]
     Revoke { inbox_id: String },
+    /// Retain one of several active operator records and revoke the others.
+    Select { inbox_id: String },
     /// List operator inbox IDs, labels, states, and generations.
     List,
 }
@@ -852,6 +854,7 @@ async fn main() -> Result<()> {
     }
     let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()));
     let mut operator_store = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
+    repair_operator_conflict(&mut operator_store)?;
     if let Some(identity) = cli.operator.as_deref() {
         let (address, inbox_id) =
             resolve_operator_inbox(&cli.node, &cli.sidecar, identity, cli.xmtp_env.as_str())
@@ -1856,6 +1859,11 @@ async fn run_management_command(
                     println!("operator {inbox_id} was already revoked or was not configured");
                 }
             }
+            OperatorCommand::Select { inbox_id } => {
+                operators.retain_sole_active(&inbox_id)?;
+                println!("retained sole active operator {inbox_id}");
+                println!("all other active candidates are now revoked tombstones");
+            }
             OperatorCommand::List => {
                 let mut any = false;
                 for (inbox_id, label, status, generation) in operators.list() {
@@ -1949,6 +1957,41 @@ async fn run_management_command(
             }
         },
     }
+    Ok(())
+}
+
+fn repair_operator_conflict(operators: &mut OperatorStore) -> Result<()> {
+    if !operators.has_active_conflict() {
+        return Ok(());
+    }
+    let candidates = operators
+        .active_operators()
+        .map(|(inbox_id, label)| (inbox_id.to_owned(), label.to_owned()))
+        .collect::<Vec<_>>();
+    eprintln!("This Tentacle found more than one active operator in its saved state.");
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        eprintln!("It will not guess which inbox should receive operator authority.");
+        eprintln!("Inspect them with `./uwu.sh operator list`, then retain exactly one with:");
+        eprintln!("  ./uwu.sh operator select <full-xmtp-inbox-id>");
+        bail!("operator selection is required before non-interactive startup");
+    }
+    eprintln!("Which operator is the correct one? The others will be revoked:");
+    for (index, (inbox_id, label)) in candidates.iter().enumerate() {
+        eprintln!("  {}) {}  ({})", index + 1, label, inbox_id);
+    }
+    eprint!("Select 1-{}: ", candidates.len());
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let selected = answer
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|value| (1..=candidates.len()).contains(value))
+        .context("no valid operator was selected; saved state was not changed")?;
+    let (inbox_id, label) = &candidates[selected - 1];
+    operators.retain_sole_active(inbox_id)?;
+    eprintln!("Tentacle retained operator {label} ({inbox_id}) and revoked the others.");
     Ok(())
 }
 

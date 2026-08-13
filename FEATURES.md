@@ -232,6 +232,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.
+  - If legacy or manually corrupted state contains several active operators, normal interactive
+    startup lists the exact candidates and asks which sole operator to retain; every other active
+    candidate becomes a revoked tombstone. Non-interactive startup fails closed with exact
+    `operator list` and `operator select <full-xmtp-inbox-id>` recovery commands.
   - `operator add` accepts an ENS `.eth` name or full Ethereum address, resolves ENS on Ethereum
     mainnet, and uses the pinned Node SDK to resolve the canonical inbox on the explicitly selected
     XMTP network before the Rust ACL persists it.

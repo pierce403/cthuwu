@@ -139,6 +139,7 @@ impl OperatorStore {
     /// Classify the authenticated XMTP sender before any message content is parsed.
     #[cfg(test)]
     pub fn role_for(&self, authenticated_sender_inbox_id: &str) -> Result<PrincipalRole> {
+        self.ensure_unambiguous()?;
         let inbox_id = normalize_inbox_id(authenticated_sender_inbox_id)?;
         Ok(
             match self
@@ -162,6 +163,7 @@ impl OperatorStore {
         authenticated_sender_inbox_id: &str,
         authenticated_sent_at_ns: &str,
     ) -> Result<PrincipalRole> {
+        self.ensure_unambiguous()?;
         let inbox_id = normalize_inbox_id(authenticated_sender_inbox_id)?;
         let sent_at_ns = parse_sent_at_ns(authenticated_sent_at_ns)?;
         let Some(operator) = self
@@ -224,6 +226,7 @@ impl OperatorStore {
     }
 
     pub fn ensure_sole_operator(&mut self, inbox_id: &str, label: &str) -> Result<bool> {
+        self.ensure_unambiguous()?;
         let inbox_id = normalize_operator_inbox_id(inbox_id)?;
         if let Some(active) = self
             .operators
@@ -338,6 +341,48 @@ impl OperatorStore {
         })
     }
 
+    pub fn active_operators(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.operators
+            .iter()
+            .filter(|operator| operator.status == OperatorStatus::Active)
+            .map(|operator| (operator.inbox_id.as_str(), operator.label.as_str()))
+    }
+
+    pub fn has_active_conflict(&self) -> bool {
+        self.active_operators().count() > 1
+    }
+
+    /// Resolve legacy/corrupt multi-active state by retaining one exact inbox and tombstoning the
+    /// other active records. No previously unknown inbox can be selected through this repair path.
+    pub fn retain_sole_active(&mut self, inbox_id: &str) -> Result<()> {
+        let inbox_id = normalize_operator_inbox_id(inbox_id)?;
+        if !self.has_active_conflict() {
+            bail!("operator configuration does not contain an active conflict");
+        }
+        if !self.operators.iter().any(|operator| {
+            operator.status == OperatorStatus::Active && operator.inbox_id == inbox_id
+        }) {
+            bail!("selected inbox is not one of the active operator candidates");
+        }
+        let now = unix_seconds();
+        let mut operators = self.operators.clone();
+        for operator in &mut operators {
+            if operator.status == OperatorStatus::Active && operator.inbox_id != inbox_id {
+                operator.status = OperatorStatus::Revoked;
+                operator.activation_token_hash = None;
+                operator.revoked_at_unix = Some(now);
+            }
+        }
+        self.commit(operators)
+    }
+
+    fn ensure_unambiguous(&self) -> Result<()> {
+        if self.has_active_conflict() {
+            bail!("operator configuration contains more than one active operator");
+        }
+        Ok(())
+    }
+
     fn commit(&mut self, operators: Vec<OperatorRecord>) -> Result<()> {
         self.save_records(&operators)?;
         self.operators = operators;
@@ -375,14 +420,6 @@ impl OperatorStore {
 
 fn validate_records(records: Vec<OperatorRecord>) -> Result<Vec<OperatorRecord>> {
     validate_common_records(&records)?;
-    if records
-        .iter()
-        .filter(|operator| operator.status == OperatorStatus::Active)
-        .count()
-        > 1
-    {
-        bail!("operator configuration contains more than one active operator");
-    }
     for operator in &records {
         if operator.status == OperatorStatus::Pending {
             bail!("operator configuration version 3 does not permit pending roles");
@@ -737,7 +774,21 @@ mod tests {
         .unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-        assert!(OperatorStore::new(root.path(), "production").is_err());
+        let mut store = OperatorStore::new(root.path(), "production").unwrap();
+        assert!(store.has_active_conflict());
+        assert!(store.role_for(OPERATOR_ID).is_err());
+        store.retain_sole_active(OTHER_OPERATOR_ID).unwrap();
+        assert!(!store.has_active_conflict());
+        assert_eq!(
+            store.role_for(OPERATOR_ID).unwrap(),
+            PrincipalRole::RevokedOperator
+        );
+        assert_eq!(
+            store.role_for(OTHER_OPERATOR_ID).unwrap(),
+            PrincipalRole::Operator
+        );
+        let reloaded = OperatorStore::new(root.path(), "production").unwrap();
+        assert!(!reloaded.has_active_conflict());
     }
 
     #[cfg(unix)]
