@@ -46,6 +46,10 @@ Last reviewed: 2026-08-12
   replace a loaded key. A funded treasury queues the configured whole-UWU reward to the
   SDK-authenticated sender, but only an exact confirmed lifecycle-executor transfer receipt is
   payment.
+- Newly accepted voluntary onboarding facts can enqueue a separate treasury contribution reward:
+  name 1%, hopes 0.8%, offered resources 0.6%, and needs 0.4%, floored to whole UWU from a fresh
+  treasury observation and capped at 1% per event. The exact authenticated event and confirmed
+  transfer receipt are required; free-form model-rated ideas do not authorize spending.
 - The bridge's default end-to-end envelope is 300 seconds. Rust preserves one second for the XMTP
   response, then applies role-specific inference budgets only after authenticating the sender: public
   work is capped at 120 seconds and public remote inference at 30 seconds, while operator work can
@@ -757,3 +761,6 @@ The original manual milestone was:
 3. Send a text message.
 4. Receive one Tentacle reply.
 5. Restart both sides and verify identity/history persistence.
+- Branding offer pricing defaults to 10% of the Tentacle's freshly verified current UWU treasury,
+  permits only disclosed 5%-20% adjustments, and binds the exact price and first upkeep into the
+  acolyte's EIP-712 consent. Never derive it from UWU total supply.

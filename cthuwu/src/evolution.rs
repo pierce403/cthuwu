@@ -119,6 +119,16 @@ pub struct WholeTokenAmount {
     pub raw_amount: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcolyteContributionKind {
+    Name,
+    Hopes,
+    Resources,
+    Needs,
+    MissionIdea,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAction {
@@ -138,6 +148,18 @@ pub enum LifecycleAction {
     RewardVeniceKey {
         tentacle_id: String,
         provision_event_id_sha256: String,
+        chain_id: u64,
+        token_contract: [u8; 20],
+        treasury_address: [u8; 20],
+        acolyte_address: [u8; 20],
+        configuration_identity: [u8; 32],
+        exact_amount: WholeTokenAmount,
+    },
+    RewardAcolyteContribution {
+        tentacle_id: String,
+        contribution_event_id_sha256: String,
+        contribution_kind: AcolyteContributionKind,
+        information_hunger_basis_points: u16,
         chain_id: u64,
         token_contract: [u8; 20],
         treasury_address: [u8; 20],
@@ -1083,7 +1105,11 @@ impl LifecycleState {
                 }
             }
             if receipt.status == LifecycleReceiptStatus::Succeeded
-                && matches!(intent.action, LifecycleAction::RewardVeniceKey { .. })
+                && matches!(
+                    intent.action,
+                    LifecycleAction::RewardVeniceKey { .. }
+                        | LifecycleAction::RewardAcolyteContribution { .. }
+                )
             {
                 let transaction_hash = &receipt
                     .confirmed_transfer_receipt
@@ -1235,6 +1261,19 @@ impl LifecycleState {
         if !matches!(action, LifecycleAction::RewardVeniceKey { .. }) {
             return Err(EvolutionError::Invalid(
                 "Venice-key reward enqueue requires its exact action type".to_owned(),
+            ));
+        }
+        Ok(self.insert_intent(created_at_ms, action)?.clone())
+    }
+
+    pub fn enqueue_acolyte_contribution_reward(
+        &mut self,
+        created_at_ms: u64,
+        action: LifecycleAction,
+    ) -> Result<LifecycleIntent, EvolutionError> {
+        if !matches!(action, LifecycleAction::RewardAcolyteContribution { .. }) {
+            return Err(EvolutionError::Invalid(
+                "acolyte contribution reward enqueue requires its exact action type".to_owned(),
             ));
         }
         Ok(self.insert_intent(created_at_ms, action)?.clone())
@@ -1587,7 +1626,10 @@ impl LifecycleState {
                 }
                 match &intent.action {
                     LifecycleAction::Spawn { .. } if self.pending_death.is_some() => false,
-                    LifecycleAction::RewardVeniceKey { .. } if self.pending_death.is_some() => {
+                    LifecycleAction::RewardVeniceKey { .. }
+                    | LifecycleAction::RewardAcolyteContribution { .. }
+                        if self.pending_death.is_some() =>
+                    {
                         false
                     }
                     LifecycleAction::Shutdown {
@@ -1606,7 +1648,8 @@ impl LifecycleState {
                         LifecycleAction::Absorb { .. } => 0_u8,
                         LifecycleAction::Shutdown { .. } => 1,
                         LifecycleAction::SpendForSurvival { .. } => 2,
-                        LifecycleAction::RewardVeniceKey { .. } => 3,
+                        LifecycleAction::RewardVeniceKey { .. }
+                        | LifecycleAction::RewardAcolyteContribution { .. } => 3,
                         LifecycleAction::Spawn { .. } => 4,
                     },
                     intent.created_at_ms,
@@ -1862,7 +1905,8 @@ impl LifecycleState {
                                 })
                         }
                         LifecycleAction::Spawn { .. } => false,
-                        LifecycleAction::RewardVeniceKey { .. } => false,
+                        LifecycleAction::RewardVeniceKey { .. }
+                        | LifecycleAction::RewardAcolyteContribution { .. } => false,
                     };
                     (same_death
                         && related.action_id != intent.action_id
@@ -2021,6 +2065,39 @@ fn validate_lifecycle_action(action: &LifecycleAction) -> Result<(), EvolutionEr
             }
             validate_whole_token_amount(exact_amount)?;
         }
+        LifecycleAction::RewardAcolyteContribution {
+            tentacle_id,
+            contribution_event_id_sha256,
+            information_hunger_basis_points,
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+            ..
+        } => {
+            validate_id(tentacle_id, "contribution reward Tentacle ID")?;
+            validate_sha256(contribution_event_id_sha256, "contribution event ID digest")?;
+            if *information_hunger_basis_points < 10 || *information_hunger_basis_points > 100 {
+                return Err(EvolutionError::Invalid(
+                    "contribution reward hunger must be between 0.1% and 1%".to_owned(),
+                ));
+            }
+            if *chain_id != 8_453
+                || *token_contract == [0; 20]
+                || *treasury_address == [0; 20]
+                || *acolyte_address == [0; 20]
+                || treasury_address == acolyte_address
+                || *configuration_identity == [0; 32]
+            {
+                return Err(EvolutionError::Invalid(
+                    "contribution reward is missing its exact Base token, treasury, acolyte, or configuration binding"
+                        .to_owned(),
+                ));
+            }
+            validate_whole_token_amount(exact_amount)?;
+        }
         LifecycleAction::Absorb {
             source_id,
             target_id,
@@ -2156,6 +2233,35 @@ fn validate_lifecycle_receipt(
             {
                 return Err(EvolutionError::Invalid(
                     "Venice-key reward receipt does not match the exact transfer action".to_owned(),
+                ));
+            }
+        }
+        LifecycleAction::RewardAcolyteContribution {
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+            ..
+        } => {
+            let confirmed = receipt.confirmed_transfer_receipt.as_ref().ok_or_else(|| {
+                EvolutionError::Invalid(
+                    "successful contribution reward lacks confirmed transfer evidence".to_owned(),
+                )
+            })?;
+            if confirmed.chain_id != *chain_id
+                || confirmed.token_contract != *token_contract
+                || confirmed.from_address != *treasury_address
+                || confirmed.to_address != *acolyte_address
+                || confirmed.configuration_identity != *configuration_identity
+                || confirmed.exact_amount != *exact_amount
+                || confirmed.block_timestamp_unix_seconds.saturating_mul(1_000)
+                    < intent.created_at_ms
+            {
+                return Err(EvolutionError::Invalid(
+                    "contribution reward receipt does not match the exact transfer action"
+                        .to_owned(),
                 ));
             }
         }

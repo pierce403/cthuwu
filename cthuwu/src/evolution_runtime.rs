@@ -12,10 +12,10 @@ use crate::{
         NORMALIZED_ECONOMIC_MAX, TokenEconomicEffects, TokenEconomicPolicy, TokenEconomicSnapshot,
     },
     evolution::{
-        LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent, LifecycleReceipt,
-        LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage, LineageStore,
-        SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle, WholeTokenAmount,
-        exact_raw_token_amount, exact_whole_token_amount,
+        AcolyteContributionKind, LIFECYCLE_RECEIPT_CLOCK_SKEW_MS, LifecycleAction, LifecycleIntent,
+        LifecycleReceipt, LifecycleReceiptStatus, LifecycleState, LifecycleStore, Lineage,
+        LineageStore, SpawnAuthorization, SurvivalSpendBinding, TentacleLifecycle,
+        WholeTokenAmount, exact_raw_token_amount, exact_whole_token_amount,
     },
     hermes::{
         HermesNode, HermesStore, KnowledgeItem, KnowledgePayload, MAX_GOSSIP_PEERS,
@@ -1406,7 +1406,8 @@ impl EvolutionRuntime {
                         effective_exclusions.insert(intent.action_id.clone());
                     }
                 }
-                LifecycleAction::RewardVeniceKey { .. } => {
+                LifecycleAction::RewardVeniceKey { .. }
+                | LifecycleAction::RewardAcolyteContribution { .. } => {
                     if self.lifecycle.pending_death.is_some()
                         || !self.node_economics_is_current(now_unix_seconds)
                     {
@@ -1529,7 +1530,9 @@ impl EvolutionRuntime {
         if receipt.status == LifecycleReceiptStatus::Succeeded
             && matches!(
                 action,
-                LifecycleAction::SpendForSurvival { .. } | LifecycleAction::RewardVeniceKey { .. }
+                LifecycleAction::SpendForSurvival { .. }
+                    | LifecycleAction::RewardVeniceKey { .. }
+                    | LifecycleAction::RewardAcolyteContribution { .. }
             )
         {
             self.node_economics_available = false;
@@ -1799,6 +1802,67 @@ impl EvolutionRuntime {
         Ok(Some(intent))
     }
 
+    pub fn enqueue_acolyte_contribution_reward(
+        &mut self,
+        contribution_event_id: &str,
+        contribution_kind: AcolyteContributionKind,
+        acolyte_address: [u8; 20],
+        whole_tokens: u64,
+        information_hunger_basis_points: u16,
+        now_unix_seconds: u64,
+    ) -> Result<Option<LifecycleIntent>> {
+        if !self.node_economics_is_current(now_unix_seconds) || whole_tokens == 0 {
+            return Ok(None);
+        }
+        ensure!(
+            (10..=100).contains(&information_hunger_basis_points),
+            "information hunger must remain between 0.1% and 1%"
+        );
+        let economics = self
+            .metrics
+            .token_economics
+            .context("current node economics are missing")?;
+        let provenance = economics
+            .provenance
+            .context("current node economics lack treasury provenance")?;
+        ensure!(
+            provenance.holder_role == EconomicHolderRole::TentacleTreasury,
+            "contribution rewards must spend from the Tentacle treasury"
+        );
+        ensure!(
+            acolyte_address != [0; 20] && provenance.holder_address != acolyte_address,
+            "contribution reward recipient is invalid"
+        );
+        let mut event_digest = Sha256::new();
+        event_digest.update(b"cthuwu-acolyte-contribution-v1\0");
+        event_digest.update(contribution_event_id.as_bytes());
+        let action = LifecycleAction::RewardAcolyteContribution {
+            tentacle_id: self.lifecycle.tentacle_id.clone(),
+            contribution_event_id_sha256: format!("{:x}", event_digest.finalize()),
+            contribution_kind,
+            information_hunger_basis_points,
+            chain_id: provenance.chain_id,
+            token_contract: provenance.token_contract,
+            treasury_address: provenance.holder_address,
+            acolyte_address,
+            configuration_identity: provenance.configuration_identity,
+            exact_amount: WholeTokenAmount {
+                whole_tokens,
+                token_decimals: self.survival_token_decimals,
+                raw_amount: exact_whole_token_amount(whole_tokens, self.survival_token_decimals)?,
+            },
+        };
+        let action_id = crate::evolution::lifecycle_action_id(&action)?;
+        let existed = self.lifecycle.intents.contains_key(&action_id);
+        let intent = self
+            .lifecycle
+            .enqueue_acolyte_contribution_reward(now_unix_seconds.saturating_mul(1_000), action)?;
+        if !existed {
+            self.lifecycle_store.save(&self.lifecycle)?;
+        }
+        Ok(Some(intent))
+    }
+
     pub fn mark_node_economics_unavailable_if_stale(&mut self, now_unix_seconds: u64) -> bool {
         if self.node_economics_is_current(now_unix_seconds) {
             return false;
@@ -1838,7 +1902,8 @@ impl EvolutionRuntime {
                         .confirmed_chain_receipt
                         .as_ref()
                         .map(|chain| (chain.block_timestamp_unix_seconds, chain.block_number)),
-                    LifecycleAction::RewardVeniceKey { .. } => receipt
+                    LifecycleAction::RewardVeniceKey { .. }
+                    | LifecycleAction::RewardAcolyteContribution { .. } => receipt
                         .confirmed_transfer_receipt
                         .as_ref()
                         .map(|chain| (chain.block_timestamp_unix_seconds, chain.block_number)),
@@ -3272,6 +3337,29 @@ fn validate_pending_lifecycle_intents(
                         && *configuration_identity == provenance.configuration_identity
                         && exact_amount.token_decimals == survival_token_decimals,
                     "pending Venice-key reward does not match current bound Tentacle economics"
+                );
+            }
+            LifecycleAction::RewardAcolyteContribution {
+                tentacle_id,
+                chain_id,
+                token_contract,
+                treasury_address,
+                configuration_identity,
+                exact_amount,
+                ..
+            } => {
+                let provenance = current_metrics
+                    .token_economics
+                    .and_then(|economics| economics.provenance)
+                    .context("pending contribution reward requires bound node economics")?;
+                ensure!(
+                    tentacle_id == local_id
+                        && *chain_id == provenance.chain_id
+                        && *token_contract == provenance.token_contract
+                        && *treasury_address == provenance.holder_address
+                        && *configuration_identity == provenance.configuration_identity
+                        && exact_amount.token_decimals == survival_token_decimals,
+                    "pending contribution reward does not match current bound Tentacle economics"
                 );
             }
             LifecycleAction::Spawn {
@@ -6829,6 +6917,89 @@ mod tests {
         let resumed =
             EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
         assert!(resumed.lifecycle.receipt(&intent.action_id).is_some());
+    }
+
+    #[test]
+    fn voluntary_information_reward_is_durable_and_requires_exact_transfer_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut runtime =
+            EvolutionRuntime::open_confirmed_for_test(root.path(), workspace.path()).unwrap();
+        let now = now_unix_seconds().unwrap();
+        runtime
+            .record_node_economic_observation(
+                TokenEconomicSnapshot {
+                    balance_basis_points: 1,
+                    stake_basis_points: 0,
+                    reward_basis_points: 0,
+                    trustworthy: true,
+                },
+                EconomicObservationProvenance::base(
+                    [1; 20],
+                    EconomicHolderRole::TentacleTreasury,
+                    [2; 20],
+                    now,
+                    Some(10),
+                    [3; 32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let intent = runtime
+            .enqueue_acolyte_contribution_reward(
+                "xmtp-profile-answer-1",
+                AcolyteContributionKind::Hopes,
+                [4; 20],
+                8,
+                80,
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        let LifecycleAction::RewardAcolyteContribution {
+            chain_id,
+            token_contract,
+            treasury_address,
+            acolyte_address,
+            configuration_identity,
+            exact_amount,
+            information_hunger_basis_points,
+            ..
+        } = intent.action.clone()
+        else {
+            panic!("expected contribution reward action");
+        };
+        assert_eq!(information_hunger_basis_points, 80);
+        assert_eq!(exact_amount.whole_tokens, 8);
+        assert_eq!(exact_amount.raw_amount, "8000000000000000000");
+
+        let transfer = crate::evolution::ConfirmedTransferReceipt {
+            chain_id,
+            transaction_hash: format!("0x{}", "b".repeat(64)),
+            block_number: 11,
+            block_timestamp_unix_seconds: now,
+            token_contract,
+            from_address: treasury_address,
+            to_address: acolyte_address,
+            configuration_identity,
+            exact_amount,
+        };
+        assert!(
+            runtime
+                .ack_lifecycle_action(LifecycleReceipt {
+                    action_id: intent.action_id.clone(),
+                    completed_at_ms: now.saturating_mul(1_000),
+                    status: LifecycleReceiptStatus::Succeeded,
+                    external_reference: None,
+                    detail: None,
+                    confirmed_chain_receipt: None,
+                    confirmed_transfer_receipt: Some(transfer),
+                    provision_receipt: None,
+                })
+                .unwrap()
+        );
+        assert!(!runtime.node_economics_available);
     }
 
     #[cfg(unix)]

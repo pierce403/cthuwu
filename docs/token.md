@@ -283,6 +283,14 @@ economic configuration, and exact whole-token amount. The default is 1 UWU throu
 `CTHUWU_VENICE_KEY_REWARD_WHOLE`. A matching confirmed transfer receipt is consumed once; a queued
 intent is not payment, and no raw signing key enters uwubot.
 
+Voluntary onboarding contributions use the same confirmed-transfer boundary but a distinct action
+type. A newly retained name, hope, occupation or offered resource, or need can receive a whole-UWU floor derived
+from 0.1%–1% of a fresh Tentacle-treasury observation. The exact authenticated source message,
+category, hunger basis points, treasury, recipient, token, configuration identity, and amount are
+bound into the durable intent. A result below one whole UWU queues nothing, and no response calls
+the reward paid until the executor returns a matching confirmed Base transfer receipt. Secrets,
+credentials, third-party personal data, and model-only judgments never qualify.
+
 The revenue-split core calculates these default shares:
 
 | Recipient | Default share |

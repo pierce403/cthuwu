@@ -950,6 +950,15 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     `CTHUWU_*` environment variables. RPC endpoint values are hidden/sanitized because provider URLs
     may contain credentials. The RPC, contract, decimals, and supply default to the live deployment.
     `CTHUWU_VENICE_KEY_REWARD_WHOLE` sets the whole-token key reward and defaults to 1.
+  - A newly accepted voluntary onboarding fact may enqueue a contribution reward to the
+    SDK-authenticated acolyte address. The reward is a whole-token floor of 0.1%–1% of the
+    Tentacle's freshly observed treasury, never more than 1% for one contribution; a sub-token
+    result queues nothing. Name, hopes, occupation or offered resources, and needs use declining information
+    hunger as the local profile fills. The source message/category and exact treasury-bound
+    transfer are durable and idempotent, and only a matching confirmed Base receipt is payment.
+  - Free-form mission or money-making ideas are not yet auto-paid: model prose is untrusted and
+    cannot authorize treasury spending. A future bounded contribution assessor must persist an
+    explainable category/score without giving public prompt text direct payout authority.
   - The contract must be a nonzero valid address. The RPC adapter revalidates Base chain ID before
     each balance call and may use a per-holder outage backoff. Backoff cannot convert missing
     evidence into permission or add a delay once required economic evidence is fresh. It currently
@@ -1307,6 +1316,11 @@ phase.
     the contract itself. There is no burn or generic ERC-721 approval or transfer path.
   - EIP-712 plus `SignatureChecker` binds acolyte consent to the exact minter, controller agent ID,
     referrer, positive initial price, nonce, and deadline, including ERC-1271 subjects.
+  - A Tentacle's default initial declared price is exactly 10% of its freshly verified current UWU
+    holdings, not total supply. Explicitly disclosed adjustments are compiled to a 5%-20% range.
+    The exact treasury observation, percentage, declared price, and upward-rounded first weekly
+    upkeep are shown before and bound by acolyte EIP-712 consent; stale/unknown/zero observations
+    block an offer.
   - Eligibility binds the exact stored agent ID to the current wallet using `getAgentWallet`,
     `isAuthorizedOrOwner`, byte-exact `cthuwu.allegiance = uwu-tentacle-v1`, and byte-exact
     `cthuwu.protocol = 1`. Shared wallets do not collapse distinct controller agent IDs.

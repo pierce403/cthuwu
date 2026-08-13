@@ -3,6 +3,7 @@ mod autonomy;
 pub mod awakening;
 mod base_rpc;
 mod bot;
+mod branding;
 mod config;
 mod contact;
 mod deadline;
@@ -1567,6 +1568,7 @@ async fn run_autonomy_supervisor(
                 intent.action,
                 LifecycleAction::SpendForSurvival { .. }
                     | LifecycleAction::RewardVeniceKey { .. }
+                    | LifecycleAction::RewardAcolyteContribution { .. }
                     | LifecycleAction::Spawn { .. }
             );
             if requires_current_economics
@@ -1604,6 +1606,7 @@ async fn run_autonomy_supervisor(
                         intent.action,
                         LifecycleAction::SpendForSurvival { .. }
                             | LifecycleAction::RewardVeniceKey { .. }
+                            | LifecycleAction::RewardAcolyteContribution { .. }
                     ) && receipt.status
                         == LifecycleReceiptStatus::Succeeded;
                     if acknowledge_executor_receipt(&evolution, &intent, receipt)?

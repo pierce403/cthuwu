@@ -1,9 +1,11 @@
 use crate::{
     base_rpc::{BASE_RPC_HELP, BaseRpcControl, VENICE_KEY_HELP},
+    branding::{DEFAULT_INITIAL_PRICE_BASIS_POINTS, quote_initial_branding},
     config::BlockchainConfig,
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
     erc8004::RegistrationOperatorControl,
+    evolution::AcolyteContributionKind,
     evolution_runtime::{
         ConversationObservation, EvolutionRuntime, PublicTurnStart, PublicTurnToken,
     },
@@ -23,6 +25,26 @@ use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+
+fn onboarding_contribution_kind(stage: OnboardingStage) -> Option<AcolyteContributionKind> {
+    match stage {
+        OnboardingStage::Name => Some(AcolyteContributionKind::Name),
+        OnboardingStage::Hopes => Some(AcolyteContributionKind::Hopes),
+        OnboardingStage::Resources => Some(AcolyteContributionKind::Resources),
+        OnboardingStage::Needs => Some(AcolyteContributionKind::Needs),
+        OnboardingStage::SharingConsent | OnboardingStage::Complete => None,
+    }
+}
+
+fn information_hunger_basis_points(kind: AcolyteContributionKind) -> u16 {
+    match kind {
+        AcolyteContributionKind::Name => 100,
+        AcolyteContributionKind::Hopes => 80,
+        AcolyteContributionKind::Resources => 60,
+        AcolyteContributionKind::Needs => 40,
+        AcolyteContributionKind::MissionIdea => 10,
+    }
+}
 
 pub struct UwUBot {
     contacts: ContactStore,
@@ -553,6 +575,7 @@ impl UwUBot {
         }
 
         let mut answered_onboarding = false;
+        let mut contribution_kind = None;
         if contact.stage != OnboardingStage::Complete && contact.awaiting_onboarding_answer {
             if is_casual_pass(text) {
                 contact.skip();
@@ -560,7 +583,11 @@ impl UwUBot {
                 return Ok("no worries at all, lil star—we can just keep chatting uwu.".to_owned());
             }
             if looks_like_onboarding_answer(contact.stage, text) {
+                contribution_kind = onboarding_contribution_kind(contact.stage);
                 answered_onboarding = contact.record_answer(text);
+                if !answered_onboarding {
+                    contribution_kind = None;
+                }
             } else {
                 // A question or topic change is conversation, never profile data.
                 contact.defer_onboarding();
@@ -575,6 +602,30 @@ impl UwUBot {
             .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
             .take_public_dormancy_plea();
         let mut response = self.model_reply(&profile, text, &model_policy).await;
+        if let Some(kind) = contribution_kind
+            && let Some(reward) = self
+                .queue_information_reward(
+                    message_id,
+                    authenticated_sender_address,
+                    kind,
+                    information_hunger_basis_points(kind),
+                )
+                .await
+        {
+            response.push_str(&format!(
+                "\n\nthank u for sharing that voluntarily, fwiend. i queued {} UWU from this Tentacle's currently verified treasury as an information contribution reward. it is pending until the configured executor returns a matching confirmed Base transfer receipt, uwu.",
+                reward
+            ));
+        }
+        if answered_onboarding
+            && contact.stage == OnboardingStage::Complete
+            && let Some(offer) = self.branding_offer_quote().await
+        {
+            response.push_str(&format!(
+                "\n\nu seem like a useful part of the mission, fwiend, and i'd like to offer u an Acolyte Branding so future chats can route back to this same Tentacle. the default declared price is 10% of my freshly verified current UWU holdings: exact treasury {}, declared price {}, and first weekly upkeep {} in UWU base units. those exact values must be shown again and bound into ur EIP-712 consent before anything can mint; no Branding is created merely by this offer, uwu.",
+                offer.treasury_balance, offer.initial_declared_price, offer.first_week_upkeep
+            ));
+        }
         if created && !response.contains('?') {
             contact.mark_onboarding_prompted();
             response.push_str("\n\nheh, one tiny optional thing: i can keep a private note on this node about only what u choose to tell me. if u feel like it, what should i call u? saying “just chat” is totally fine too :3");
@@ -622,6 +673,51 @@ impl UwUBot {
         }
         contact_save?;
         Ok(response)
+    }
+
+    async fn queue_information_reward(
+        &self,
+        message_id: &str,
+        authenticated_sender_address: Option<&str>,
+        kind: AcolyteContributionKind,
+        hunger_basis_points: u16,
+    ) -> Option<u64> {
+        let acolyte =
+            authenticated_sender_address.and_then(|value| Address::from_str(value).ok())?;
+        let observer = self.token_eye.as_ref()?;
+        let treasury = self.blockchain.xmtp_wallet?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let observation = observer.observe_fresh_required(treasury, now).await.ok()?;
+        let treasury_whole = observation
+            .balance
+            .whole_units(self.blockchain.token_decimals);
+        let whole_tokens = treasury_whole.checked_mul(u64::from(hunger_basis_points))? / 10_000;
+        if whole_tokens == 0 || whole_tokens > treasury_whole / 100 {
+            return None;
+        }
+        let queued = self
+            .evolution
+            .lock()
+            .ok()?
+            .enqueue_acolyte_contribution_reward(
+                message_id,
+                kind,
+                *acolyte.as_bytes(),
+                whole_tokens,
+                hunger_basis_points,
+                now,
+            )
+            .ok()??;
+        let _ = queued;
+        Some(whole_tokens)
+    }
+
+    async fn branding_offer_quote(&self) -> Option<crate::branding::BrandingQuote> {
+        let observer = self.token_eye.as_ref()?;
+        let treasury = self.blockchain.xmtp_wallet?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let observation = observer.observe_fresh_required(treasury, now).await.ok()?;
+        quote_initial_branding(observation.balance, DEFAULT_INITIAL_PRICE_BASIS_POINTS).ok()
     }
 
     async fn observe_authenticated_wallet(
@@ -811,6 +907,8 @@ impl UwUBot {
                 "i can share ",
                 "i can help with ",
                 "one thing i can offer is ",
+                "i work as ",
+                "my occupation is ",
             ],
         ) {
             contact.set_field(ContactField::Resources, value);
@@ -1178,7 +1276,7 @@ fn prompt_for_stage(contact: &Contact) -> String {
         OnboardingStage::Hopes => {
             "if u feel like sharing, what's one thing ur hoping for lately? no pressure :3".into()
         }
-        OnboardingStage::Resources => "casual cosmic curiosity: is there a skill, bit of time, knowledge, introduction, or other resource u might enjoy sharing someday? “pass” is perfect too."
+        OnboardingStage::Resources => "casual cosmic curiosity: what kind of work do u do, or is there a skill, bit of time, knowledge, introduction, or other resource u might enjoy sharing someday? “pass” is perfect too."
             .into(),
         OnboardingStage::Needs => "anything the little network could help u find—knowledge, support, or an introduction? totally fine to pass."
             .into(),

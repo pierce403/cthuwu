@@ -131,6 +131,14 @@ Mint atomically mints the token, records the exact controller and positive decla
 the consent nonce, and transfers the first weekly UWU upkeep using the referral split below. A
 failed signature, registry check, or token transfer reverts the entire operation.
 
+The Tentacle's ordinary initial-price policy starts at exactly 10% (1,000 basis points) of its own
+freshly verified current UWU treasury balance, never 10% of UWU total supply. A reasoned adjustment
+may range from 5% through 20%; values outside that compiled band are rejected. The exact treasury
+observation, applied percentage, resulting base-unit declared price, and first weekly upkeep must be
+shown to the acolyte before signing. The EIP-712 consent then binds that exact price, so the
+Tentacle cannot adjust it after consent. An unavailable or stale balance, an arithmetic failure, or
+a result of zero blocks the offer rather than inventing a price.
+
 ## Weekly upkeep
 
 Weekly upkeep is exactly 10 basis points (0.1%) of the executable declared price, rounded upward:

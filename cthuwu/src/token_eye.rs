@@ -255,15 +255,24 @@ impl U256 {
         (carry == 0).then_some(Self(product))
     }
 
+    /// Multiplies by `basis_points` and divides by 10,000, rounding down.
+    ///
+    /// This deliberately rejects an intermediate `uint256` overflow instead of
+    /// silently wrapping a treasury-derived economic amount.
+    pub fn checked_mul_basis_points(self, basis_points: u16) -> Option<Self> {
+        self.checked_mul_u64(u64::from(basis_points))
+            .map(|product| product.div_small(10_000))
+    }
+
     fn div_small(self, divisor: u16) -> Self {
         debug_assert!(divisor != 0);
         let mut quotient = [0_u8; 32];
-        let mut remainder = 0_u16;
+        let mut remainder = 0_u32;
         for (index, byte) in self.0.into_iter().enumerate() {
-            let dividend = (remainder << 8) | u16::from(byte);
-            quotient[index] =
-                u8::try_from(dividend / divisor).expect("a byte-wise quotient always fits in u8");
-            remainder = dividend % divisor;
+            let dividend = (remainder << 8) | u32::from(byte);
+            quotient[index] = u8::try_from(dividend / u32::from(divisor))
+                .expect("a byte-wise quotient always fits in u8");
+            remainder = dividend % u32::from(divisor);
         }
         Self(quotient)
     }
