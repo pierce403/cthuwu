@@ -118,11 +118,15 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   not hot-reloaded: stop the node, update locally, and restart it.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
   web search. Build the operator schema and authoritative prompt inventory from the current
-  authenticated message: bounded file/search/QMD inspection plus sanitized `base_rpc_status`,
+  authenticated message: bounded workspace list/read/create/write/edit/delete, literal search,
+  directory-scoped QMD retrieval, public HTTPS reading, plus sanitized `base_rpc_status`,
   `erc8004_status`, and `erc8004_refresh` remain the base set. The runtime-state tools may reveal
   the public Tentacle wallet, chain, registration phase/ID, funding estimates, and whether an RPC
   credential is configured, but never the endpoint, API key, private key, or XMTP database material.
-  `erc8004_refresh` may resume the already-enabled automatic registration state machine. One `exec` schema
+  Public HTTPS reads must reject credentials, redirects, non-text bodies, IP literals and DNS results
+  that are local or non-public. File effects require explicit current-message intent, remain confined
+  below the workspace, reject symlinks/traversal, and allow at most one effect per turn; deletion is
+  regular-file-only. `erc8004_refresh` may resume the already-enabled automatic registration state machine. One `exec` schema
   may appear only when that message explicitly names the exact command, and one create-only
   `create_skill` schema may appear only when it explicitly requests a new reusable skill. Bind natural
   `exec` to that exact command, permit at most one effectful model call, and never treat workspace

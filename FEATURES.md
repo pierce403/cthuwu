@@ -250,6 +250,11 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     sanitized RPC configuration, registration state, and current funding result while withholding
     endpoints, credentials, private keys, and XMTP database material. Live refresh may resume the
     existing automatic registration state machine; slash commands remain deterministic controls.
+  - Operator inference has bounded workspace list/read/create/write/edit/delete tools, exact-command
+    `exec`, literal search, public HTTPS text retrieval, and QMD retrieval from a selected workspace
+    directory. File effects require explicit current-turn intent and one effect maximum; paths remain
+    workspace-confined and symlink-safe, deletion never removes directories, and website reads reject
+    credentials, redirects, non-text bodies, and local/non-public network targets.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.
