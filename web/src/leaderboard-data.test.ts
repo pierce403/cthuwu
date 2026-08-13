@@ -26,7 +26,7 @@ function graph(overrides: Record<string, unknown> = {}): unknown {
           feedback: [{ id: "f1", clientAddress: `0x${"33".repeat(20)}`, feedbackIndex: "1", value: "5.25", tag1: "reliability", tag2: "xmtp", endpoint: "", feedbackURI: "", feedbackHash: `0x${"aa".repeat(32)}`, isRevoked: false, createdAt: "1770120000", revokedAt: null }],
         },
       }],
-      _meta: { block: { number: BLOCK, hash: BLOCK_HASH, timestamp: "1786332360" }, deployment: "QmAgent0Fixture", hasIndexingErrors: false },
+      _meta: { block: { number: Number(BLOCK), hash: BLOCK_HASH, timestamp: 1786332360 }, deployment: "QmAgent0Fixture", hasIndexingErrors: false },
       ...overrides,
     },
   };

@@ -106,6 +106,9 @@ Last reviewed: 2026-08-12
 - Public leaderboard console diagnostics use the `[cthuwu-leaderboard]` prefix and report only
   bounded cache/refresh/page/block/count state plus sanitized failure reasons. They must not expose
   the compiled Graph key or full configured Graph/RPC endpoints.
+- Agent0 currently serializes `_meta.block.number` and `_meta.block.timestamp` as JSON numbers even
+  though older fixtures used decimal strings. Unit and Playwright fixtures must preserve that live
+  representation; parsing normalizes safe nonnegative integers to canonical decimal strings.
 - ERC-8004 submitted transactions use a 15-second automatic maintenance cadence, while ordinary
   active checks retain the configured 15-minute default and recoverable RPC failures retain their
   one-hour backoff. This completes sequential profile/metadata publication without nonce races or

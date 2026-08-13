@@ -25,7 +25,7 @@
       }
     }],
     "_meta": {
-      "block": { "number": "49768180", "hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "timestamp": "1786332360" },
+      "block": { "number": 49768180, "hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "timestamp": 1786332360 },
       "deployment": "QmAgent0Fixture",
       "hasIndexingErrors": false
     }

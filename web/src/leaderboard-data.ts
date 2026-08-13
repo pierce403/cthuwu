@@ -220,9 +220,9 @@ function parsePage(response: GraphResponse): {
   const data = record(response.data, "Graph response data");
   const meta = record(data._meta, "Graph _meta");
   const block = record(meta.block, "Graph _meta block");
-  const blockNumber = unsigned(block.number, "source block number");
+  const blockNumber = graphUnsigned(block.number, "source block number");
   const blockHash = optionalBytes(block.hash, 32);
-  const blockTimestamp = optionalUnsigned(block.timestamp);
+  const blockTimestamp = optionalGraphUnsigned(block.timestamp);
   const deployment = boundedText(meta.deployment, "deployment", 256);
   const hasIndexingErrors = boolean(meta.hasIndexingErrors, "hasIndexingErrors");
   if (!Array.isArray(data.agentMetadatas) || data.agentMetadatas.length > PAGE_SIZE) {
@@ -595,6 +595,14 @@ function unsigned(value: unknown, label: string, maximum = 32): string {
   return text;
 }
 
+function graphUnsigned(value: unknown, label: string, maximum = 32): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} is invalid`);
+    return String(value);
+  }
+  return unsigned(value, label, maximum);
+}
+
 function uint256(value: unknown, label: string): string {
   const text = unsigned(value, label, 78);
   if (BigInt(text) >= 1n << 256n) throw new Error(`${label} exceeds uint256`);
@@ -604,6 +612,11 @@ function uint256(value: unknown, label: string): string {
 function optionalUnsigned(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   return unsigned(value, "optional integer");
+}
+
+function optionalGraphUnsigned(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return graphUnsigned(value, "optional integer");
 }
 
 function address(value: unknown, label: string): string {

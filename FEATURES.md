@@ -1256,6 +1256,9 @@ phase.
   - The browser console emits bounded `[cthuwu-leaderboard]` diagnostics for validated-cache state,
     refresh lifecycle, Agent0 page counts and source block, Base balance verification, renderable
     identity counts, and sanitized failures. It never logs Graph keys or full configured endpoints.
+  - Agent0 `_meta.block.number` and `_meta.block.timestamp` accept either the schema's live JSON
+    number representation or a canonical decimal string, normalize to decimal strings internally,
+    and reject negative, fractional, unsafe, or otherwise malformed numeric values.
   - The browser queries The Graph directly. There is no SSR, API route, worker, database, browser
     wallet connection, or private backend.
   - A Tentacle with a submitted ERC-8004 transaction polls its receipt on a short bounded cadence,
