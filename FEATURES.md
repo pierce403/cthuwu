@@ -230,6 +230,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     bounded Infura key is converted locally to its Base Mainnet endpoint. The runtime validates chain
     8453, persists the first acolyte donation owner-only, and hot-loads it for UWU observation and
     ERC-8004 work; only the active operator may replace it.
+  - Credential provisioning replies are terminal for their XMTP turn: stale ERC-8004 funding or
+    RPC pleas are never appended to a successful or rejected `/base-rpc-key` or `/venice-key`
+    response. The registration supervisor independently retries and refreshes its persisted status.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.

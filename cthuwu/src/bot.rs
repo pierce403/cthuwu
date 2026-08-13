@@ -324,7 +324,8 @@ impl UwUBot {
                     response.push_str("\n\n");
                     response.push_str(&plea);
                 }
-                if let Some(control) = &self.registry_control
+                if !is_resource_provision_command(message.text)
+                    && let Some(control) = &self.registry_control
                     && let Some(plea) = control.take_public_funding_plea().await
                 {
                     response.push_str("\n\n");
@@ -347,7 +348,8 @@ impl UwUBot {
                     message.text,
                 )
                 .await?;
-                if let Some(control) = &self.registry_control
+                if !is_resource_provision_command(message.text)
+                    && let Some(control) = &self.registry_control
                     && let Some(plea) = control.take_public_funding_plea().await
                 {
                     response.push_str("\n\n");
@@ -1169,6 +1171,16 @@ fn natural_help() -> String {
         .into()
 }
 
+fn is_resource_provision_command(text: &str) -> bool {
+    let Some(command) = text.trim_start().strip_prefix('/') else {
+        return false;
+    };
+    let name = command
+        .split_once(char::is_whitespace)
+        .map_or(command, |(name, _)| name);
+    name.eq_ignore_ascii_case("base-rpc-key") || name.eq_ignore_ascii_case("venice-key")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,6 +1200,14 @@ mod tests {
     };
 
     const OPERATOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn resource_commands_suppress_unrelated_same_turn_pleas() {
+        assert!(is_resource_provision_command("/base-rpc-key candidate"));
+        assert!(is_resource_provision_command("  /VENICE-KEY candidate"));
+        assert!(!is_resource_provision_command("please use /base-rpc-key"));
+        assert!(!is_resource_provision_command("/registry-status"));
+    }
 
     struct FailingModel;
 
