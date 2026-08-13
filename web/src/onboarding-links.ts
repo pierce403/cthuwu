@@ -8,8 +8,8 @@ export interface OnboardingLink {
   referrer?: string;
 }
 
-export function parseOnboardingLink(search: string): OnboardingLink {
-  const params = new URLSearchParams(search);
+export function parseOnboardingLink(hash: string): OnboardingLink {
+  const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
   return {
     ...(params.has("t") ? { tentacle: addressParam(params, "t") } : {}),
     ...(params.has("r") ? { referrer: addressParam(params, "r") } : {}),

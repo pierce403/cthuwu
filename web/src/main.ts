@@ -59,7 +59,8 @@ function bootstrap(): void {
     // Preserve the backup-critical boundary: create/recover the browser identity before config or I/O.
     identity = loadOrCreateIdentity(environment);
     addressElement.textContent = identity.address;
-    const link = parseOnboardingLink(location.search);
+    // URL fragments stay in the browser and are never included in the HTTP request.
+    const link = parseOnboardingLink(location.hash);
     const referrer = pinReferrer(environment, identity.address, link.referrer);
     chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer }, identity);
   } catch (error) {

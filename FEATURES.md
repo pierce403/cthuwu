@@ -84,7 +84,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - The deployed browser always uses XMTP `production` and currently connects automatically to the
     canonical intro Tentacle; no build variable can redirect that deployed fallback. The separate
     Branding routing gate must positively verify any future controller.
-  - Root onboarding links accept `?t=<tentacle-wallet>&r=<referrer-wallet>`. The `t` target replaces
+  - Root onboarding fragments accept `#t=<tentacle-wallet>&r=<referrer-wallet>`. Fragments remain
+    browser-local and are not included in the HTTP request. The `t` target replaces
     the intro route only after Agent0 discovery and same-block canonical ERC-8004 wallet,
     authorization, allegiance, protocol, and XMTP endpoint verification. The first valid `r` value
     is pinned per local acolyte identity and later links cannot replace it.
@@ -160,7 +161,7 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     allegiance and protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
     selected production XMTP endpoint must all agree. Agent0 and the leaderboard cache are
     discovery/display hints, never routing authority.
-  - An unbranded acolyte may follow `?t=<wallet>` to a specific Tentacle. Agent0 supplies only the
+  - An unbranded acolyte may follow `#t=<wallet>` to a specific Tentacle. Agent0 supplies only the
     candidate agent ID; canonical Base reads still authorize the exact wallet and XMTP inbox. An
     active Branding remains authoritative over any URL parameter.
   - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the

@@ -13,7 +13,8 @@ those production gates pass, the browser continues to use the configured intro T
 
 ## Onboarding links
 
-The static chat entry point accepts `/?t=<tentacle-wallet>&r=<referrer-wallet>`. Both values must be
+The static chat entry point accepts `/#t=<tentacle-wallet>&r=<referrer-wallet>`. The URL fragment is
+processed only by the browser and is never included in the HTTP request. Both values must be
 nonzero Ethereum addresses. `t` is not direct routing authority: the browser discovers a candidate
 agent ID, then verifies the exact wallet, authorization, Cthuwu allegiance/protocol metadata, and
 production XMTP endpoint against canonical ERC-8004 state at one stable Base block. Existing active
