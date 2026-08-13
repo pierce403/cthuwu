@@ -11,7 +11,9 @@ Last reviewed: 2026-08-12
 - Leaderboard wallet addresses are Direct-chat links. The root UI copies social recruitment URLs
   using the currently assigned Tentacle for `t` and the local browser identity for `r`.
 - New Unminted browser identities without explicit `#t=` use a stable address-hash rotation across
-  eligible single-agent Tentacle wallets and retain the verified choice locally. Active Branding
+  eligible single-agent Tentacle wallets from the validated leaderboard cache or a complete pinned,
+  indexing-error-free Agent0 directory and retain the choice locally. After Branding proves Unminted, candidate selection makes
+  no redundant live Base calls. Active Branding
   remains absolute. This is eligibility, not runtime liveness; planned shutdown requires confirmed
   `/registry-allegiance off` until authenticated live heartbeats ship.
 

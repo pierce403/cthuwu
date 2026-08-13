@@ -77,6 +77,48 @@ export interface FetchLeaderboardOptions {
   diagnostic?: (event: string, details: Record<string, string | number | boolean>) => void;
 }
 
+export interface TentacleDirectorySnapshot {
+  sourceBlockNumber: string;
+  sourceBlockHash: string;
+  identities: TentacleIdentity[];
+}
+
+export async function fetchTentacleDirectory(
+  endpoint: string,
+  options: Pick<FetchLeaderboardOptions, "fetch"> = {},
+): Promise<TentacleDirectorySnapshot> {
+  const fetcher = options.fetch ?? fetch;
+  const identities: TentacleIdentity[] = [];
+  let pinnedBlock: string | undefined;
+  let pinnedHash: string | undefined;
+  let deployment: string | undefined;
+  let after = "";
+  let totalResponseBytes = 0;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const response = await fetchPage(fetcher, endpoint, after, pinnedBlock);
+    totalResponseBytes += response.byteLength;
+    if (totalResponseBytes > MAX_TOTAL_RESPONSE_BYTES) throw new Error("complete subgraph response exceeds the aggregate safety limit");
+    const parsed = parsePage(response.body);
+    if (parsed.meta.hasIndexingErrors) throw new IndexingError();
+    if (pinnedBlock === undefined) {
+      pinnedBlock = parsed.meta.blockNumber;
+      pinnedHash = parsed.meta.blockHash;
+      deployment = parsed.meta.deployment;
+    } else if (parsed.meta.blockNumber !== pinnedBlock || parsed.meta.blockHash !== pinnedHash || parsed.meta.deployment !== deployment) {
+      throw new Error("subgraph pagination changed source block or deployment");
+    }
+    identities.push(...parsed.identities);
+    if (parsed.rowCount < PAGE_SIZE) {
+      if (!pinnedBlock || !pinnedHash) throw new Error("Agent0 directory did not identify its source block");
+      return { sourceBlockNumber: pinnedBlock, sourceBlockHash: pinnedHash, identities };
+    }
+    const nextAfter = parsed.lastCursor;
+    if (!nextAfter || nextAfter <= after) throw new Error("subgraph pagination cursor did not advance");
+    after = nextAfter;
+  }
+  throw new Error("subgraph pagination exceeded the bounded page limit");
+}
+
 export async function fetchCompleteLeaderboard(
   endpoint: string,
   options: FetchLeaderboardOptions = {},

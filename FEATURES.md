@@ -177,7 +177,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     candidate agent ID; canonical Base reads still authorize the exact wallet and XMTP inbox. An
     active Branding remains authoritative over any URL parameter.
   - A new `Unminted` acolyte without `#t=` is distributed deterministically across current eligible
-    single-agent wallets. Existing active Branding is never rotated. ERC-8004 eligibility is not
+    single-agent wallets from the last completely validated leaderboard snapshot when available,
+    otherwise from a complete pinned, indexing-error-free Agent0 directory. After the
+    canonical Branding read proves `Unminted`, rotation does not issue another live Base read for
+    the selected candidate. Existing active Branding is never rotated. ERC-8004 eligibility is not
     process liveness: until authenticated live heartbeats ship, an operator must send
     `/registry-allegiance off` and let it confirm before intentionally taking a Tentacle offline.
   - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the
@@ -228,6 +231,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     creation/persistence crash-window candidate and refuses a drifted replacement.
   - [x] Browser assignment tests cover `NotConfigured`, every Branding status, exact nested
     registration/manifest binding, one explicit Base block, tuple spoofing, and reorg/outage freeze.
+  - [x] Rotation tests prove an `Unminted` assignment consumes the indexed directory candidate
+    without making candidate Base RPC calls, while active Branding retains exact live verification.
   - [x] Browser tests prove concurrent RPC reads share one HTTP request and automatic outage retries
     cool down without suppressing explicit retry.
   - [x] Agent tests remove reassigned and untracked Acolytes members while freezing removal on a

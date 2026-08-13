@@ -71,8 +71,11 @@ Assignment outcomes are intentionally asymmetric:
 - `NotConfigured` means no Branding deployment was explicitly configured. It preserves continuity
   by assigning the configured intro Tentacle.
 - `Unminted` without an explicit verified `#t=` uses stable address-hash distribution across
-  Agent0-discovered, profile-active, protocol-1, single-agent wallets, then re-verifies the selected
-  candidate completely at the assignment block. The verified wallet is retained locally.
+  profile-active, protocol-1, single-agent wallets in the last completely validated leaderboard
+  snapshot. On a new device without that cache, it uses a complete pinned, indexing-error-free
+  Agent0 directory. Once the live Branding read proves `Unminted`, the selected candidate is not
+  redundantly reread from Base. XMTP still verifies that the resolved inbox belongs to the indexed
+  wallet, and the choice is retained locally.
 - `Expired` or positively verified `Ineligible` continues to assign the intro Tentacle.
 - `RegistryUnavailable`, a malformed canonical response, a block-consistency failure, or an
   unverifiable endpoint freezes Branding-based routing and presents a retryable state. It is never

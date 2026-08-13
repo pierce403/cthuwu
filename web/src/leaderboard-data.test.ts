@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchCompleteLeaderboard, IndexingError } from "./leaderboard-data";
+import { fetchCompleteLeaderboard, fetchTentacleDirectory, IndexingError } from "./leaderboard-data";
 import { ALLEGIANCE_HEX, UWU_CONTRACT } from "./leaderboard-types";
 
 const BLOCK = "49768180";
@@ -65,6 +65,18 @@ describe("Agent0 leaderboard + direct Base UWU reads", () => {
     expect(calls[0]).toContain(ALLEGIANCE_HEX);
     expect(calls.at(-1)).toContain(UWU_CONTRACT);
     expect(calls.at(-1)).toContain(`0x${BigInt(BLOCK).toString(16)}`);
+  });
+
+  it("loads the unbranded rotation directory without a Base RPC request", async () => {
+    const calls: string[] = [];
+    const fetcher = (async (input, init) => {
+      calls.push(String(input));
+      return response(graph());
+    }) as typeof fetch;
+    const directory = await fetchTentacleDirectory("https://graph.fixture.invalid", { fetch: fetcher });
+    expect(directory).toMatchObject({ sourceBlockNumber: BLOCK, sourceBlockHash: BLOCK_HASH });
+    expect(directory.identities[0]).toMatchObject({ agentId: "7", agentWallet: WALLET });
+    expect(calls).toEqual(["https://graph.fixture.invalid"]);
   });
 
   it("keeps exact opt-ins with a missing agentWallet suspended and performs no balance call", async () => {

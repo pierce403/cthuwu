@@ -93,8 +93,10 @@ function canonicalRpc(options: {
   const firstHash = `0x${"a".repeat(64)}`;
   let blockReads = 0;
   const brandingCalls: string[] = [];
+  const registryCalls: string[] = [];
   return {
     brandingCalls,
+    registryCalls,
     request: async (method: string, params: unknown[]): Promise<unknown> => {
       if (method === "eth_chainId") return "0x2105";
       if (method === "eth_blockNumber") return "0x7b";
@@ -129,6 +131,7 @@ function canonicalRpc(options: {
         throw new Error("unexpected Branding call");
       }
       const selector = call.data.slice(0, 10);
+      registryCalls.push(call.data);
       if (selector === registryInterface.getFunction("getVersion")!.selector) {
         return registryInterface.encodeFunctionResult("getVersion", ["2.0.0"]);
       }
@@ -243,15 +246,25 @@ describe("canonical Tentacle assignment", () => {
   it("assigns an unminted identity through the eligible Tentacle rotation", async () => {
     const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
     const wallet = "0x3333333333333333333333333333333333333333";
+    const rpc = canonicalRpc({ status: 0 });
     await expect(resolveTentacleAssignment(config, identity, {
-      rpc: canonicalRpc({ status: 0, registryWallet: wallet }),
-      discoverRotation: async () => [{ wallet, agentIds: ["42"] }],
+      rpc,
+      discoverRotation: async () => [{
+        wallet,
+        agentId: "42",
+        inboxId: inbox,
+        blockNumber: "122",
+        blockHash: `0x${"b".repeat(64)}`,
+      }],
     })).resolves.toMatchObject({
       source: "rotation-verified",
       address: wallet,
       agentId: "42",
       inboxId: inbox,
+      blockNumber: 122n,
+      blockHash: `0x${"b".repeat(64)}`,
     });
+    expect(rpc.registryCalls).toEqual([]);
   });
 
   it("routes an unbranded deep link only after exact ERC-8004 verification", async () => {
