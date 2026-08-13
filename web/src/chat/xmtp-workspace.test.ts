@@ -7,7 +7,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
-import type { TentacleAssignment } from "./assignment";
+import { RegistryUnavailableError, type TentacleAssignment } from "./assignment";
 import {
   ASSIGNMENT_CONTENT_TYPE,
   isJoinControl,
@@ -383,6 +383,23 @@ describe("multi-channel XMTP workspace", () => {
     expect(value.streamHistory.messages).toHaveLength(2);
     expect(value.streamHistory.groups).toHaveLength(2);
     expect(value.streamHistory.deleted).toHaveLength(2);
+    await workspace.close();
+  });
+
+  it("backs off automatic registry retries after an outage while preserving explicit retry", async () => {
+    const value = fixture();
+    const resolver = vi.fn(async () => { throw new RegistryUnavailableError("Base RPC rate limited"); });
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: resolver,
+      storage: localStorage,
+    });
+    await workspace.start();
+    expect(resolver).toHaveBeenCalledTimes(1);
+    await workspace.revalidateAssignment("resume");
+    await workspace.revalidateAssignment("periodic");
+    expect(resolver).toHaveBeenCalledTimes(1);
+    await workspace.revalidateAssignment("retry");
+    expect(resolver).toHaveBeenCalledTimes(2);
     await workspace.close();
   });
 

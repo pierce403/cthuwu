@@ -145,6 +145,8 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private restartingStreams?: Promise<void>;
   private needsStreamRestart = false;
   private streamGeneration = 0;
+  private registryFailureCount = 0;
+  private nextAutomaticRegistryAttemptAt = 0;
 
   constructor(
     private readonly client: XmtpClient,
@@ -281,6 +283,10 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     reason: "connect" | "resume" | "periodic" | "retry",
   ): Promise<void> {
     if (this.revalidation) return this.revalidation;
+    if (
+      (reason === "resume" || reason === "periodic") &&
+      Date.now() < this.nextAutomaticRegistryAttemptAt
+    ) return;
     this.revalidation = this.runRevalidation(reason).finally(() => {
       this.revalidation = undefined;
     });
@@ -312,6 +318,8 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         await this.restartStreams();
       }
       const assignment = await this.resolveAssignment(this.config, this.identity);
+      this.registryFailureCount = 0;
+      this.nextAutomaticRegistryAttemptAt = 0;
       const changed = routeKey(assignment) !== routeKey(this.currentAssignment);
       if (changed || !this.direct) {
         await this.handoffDirect(assignment);
@@ -339,6 +347,11 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.emit();
     } catch (error) {
       if (error instanceof RegistryUnavailableError || error instanceof DirectVerificationUnavailableError) {
+        if (error instanceof RegistryUnavailableError) {
+          this.registryFailureCount += 1;
+          const delay = Math.min(15 * 60_000, 30_000 * 2 ** Math.min(5, this.registryFailureCount - 1));
+          this.nextAutomaticRegistryAttemptAt = Date.now() + delay;
+        }
         this.assignmentState = error instanceof DirectVerificationUnavailableError
           ? "direct-verification-unavailable"
           : "registry-unavailable";

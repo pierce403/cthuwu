@@ -185,10 +185,27 @@ describe("canonical Tentacle assignment", () => {
 
   it("rejects a mismatched JSON-RPC response ID", async () => {
     const client = createJsonRpcClient("https://rpc.example/", vi.fn(async () => new Response(
-      JSON.stringify({ jsonrpc: "2.0", id: 999, result: "0x2105" }),
+      JSON.stringify([{ jsonrpc: "2.0", id: 999, result: "0x2105" }]),
       { status: 200, headers: { "content-type": "application/json" } },
     )) as typeof fetch);
     await expect(client.request("eth_chainId", [])).rejects.toThrow(/invalid response/u);
+  });
+
+  it("micro-batches concurrent Base reads into one HTTP request", async () => {
+    const fetcher = vi.fn(async (_input, init) => {
+      const requests = JSON.parse(String(init?.body)) as Array<{ id: number; method: string }>;
+      return new Response(JSON.stringify(requests.map((request) => ({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: request.method === "eth_chainId" ? "0x2105" : "0x7b",
+      }))));
+    }) as typeof fetch;
+    const client = createJsonRpcClient("https://rpc.example/", fetcher);
+    await expect(Promise.all([
+      client.request("eth_chainId", []),
+      client.request("eth_blockNumber", []),
+    ])).resolves.toEqual(["0x2105", "0x7b"]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("resolves an Active Branding controller from one stable explicit Base block", async () => {

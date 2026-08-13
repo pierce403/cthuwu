@@ -401,13 +401,27 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
 
 export function createJsonRpcClient(endpoint: string, fetcher: typeof fetch): RpcClient {
   let id = 0;
-  return {
-    request: async (method, params) => {
-      const requestId = ++id;
+  type Pending = {
+    id: number;
+    method: string;
+    params: unknown[];
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+  };
+  let pending: Pending[] = [];
+  let scheduled = false;
+
+  const flush = async (): Promise<void> => {
+    scheduled = false;
+    const batch = pending;
+    pending = [];
+    try {
       const response = await fetcher(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }),
+        body: JSON.stringify(batch.map(({ id: requestId, method, params }) => ({
+          jsonrpc: "2.0", id: requestId, method, params,
+        }))),
       });
       const length = Number(response.headers.get("content-length"));
       if (!response.ok || (Number.isFinite(length) && length > 128 * 1024)) {
@@ -416,14 +430,30 @@ export function createJsonRpcClient(endpoint: string, fetcher: typeof fetch): Rp
       const body = await response.text();
       if (body.length > 128 * 1024) throw new Error("Base RPC response is too large");
       const parsed = JSON.parse(body) as unknown;
-      if (
-        !isRecord(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== requestId ||
-        "error" in parsed || !("result" in parsed)
-      ) {
-        throw new Error("Base RPC returned an invalid response");
+      if (!Array.isArray(parsed) || parsed.length !== batch.length) {
+        throw new Error("Base RPC returned an invalid batch response");
       }
-      return parsed.result;
-    },
+      const byId = new Map(parsed.filter(isRecord).map((item) => [item.id, item]));
+      for (const request of batch) {
+        const item = byId.get(request.id);
+        if (!item || item.jsonrpc !== "2.0" || "error" in item || !("result" in item)) {
+          request.reject(new Error("Base RPC returned an invalid response"));
+        } else {
+          request.resolve(item.result);
+        }
+      }
+    } catch (error) {
+      for (const request of batch) request.reject(error);
+    }
+  };
+  return {
+    request: (method, params) => new Promise((resolve, reject) => {
+      pending.push({ id: ++id, method, params, resolve, reject });
+      if (!scheduled) {
+        scheduled = true;
+        queueMicrotask(() => void flush());
+      }
+    }),
   };
 }
 

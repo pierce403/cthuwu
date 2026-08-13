@@ -141,6 +141,9 @@ Last reviewed: 2026-08-12
   composer controls; workspace snapshots remain the sole conversation-render trigger.
 - Assignment is revalidated on connect, PWA resume, and a bounded interval. Controller change hands
   off Direct/Acolytes and retains Global; old conversation IDs immediately stop being trusted routes.
+- Browser assignment micro-batches concurrent canonical Base calls. Registry failures exponentially
+  cool down automatic focus/periodic retries from 30 seconds up to 15 minutes; explicit Retry bypasses
+  that cooldown so public-RPC 429 responses cannot become a focus-driven request storm.
 - Versioned `cthuwu.join.v1` / `cthuwu.assignment.v1` control uses registered
   `cthuwu.app/join:1.0` / `cthuwu.app/assignment:1.0` custom content types with no text fallback. It
   is authenticated from the XMTP envelope and intercepted by the sidecar before Rust, inference,

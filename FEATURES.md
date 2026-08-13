@@ -177,6 +177,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` browser interval. A controller change advances the assignment
     revision and replaces Direct/Acolytes bindings while retaining Global; old conversation IDs
     immediately cease to be trusted routes.
+  - Concurrent canonical Base reads are sent as bounded JSON-RPC batches rather than one HTTP POST
+    per contract call. A registry outage applies exponential cooldown to automatic resume/periodic
+    checks (30 seconds through 15 minutes); a deliberate Retry remains immediately available.
   - `cthuwu.join.v1` and `cthuwu.assignment.v1` are versioned control content types. The Agent SDK
     sidecar authenticates their XMTP envelope sender and intercepts them before Rust, inference,
     contact memory, onboarding, or ordinary history. The pinned Browser and Node SDKs register exact
@@ -214,6 +217,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     creation/persistence crash-window candidate and refuses a drifted replacement.
   - [x] Browser assignment tests cover `NotConfigured`, every Branding status, exact nested
     registration/manifest binding, one explicit Base block, tuple spoofing, and reorg/outage freeze.
+  - [x] Browser tests prove concurrent RPC reads share one HTTP request and automatic outage retries
+    cool down without suppressing explicit retry.
   - [x] Agent tests remove reassigned and untracked Acolytes members while freezing removal on a
     registry outage.
   - [x] Browser assignment-change tests hand off Direct/Acolytes while retaining Global.
