@@ -1250,6 +1250,9 @@ phase.
   - The pinned official Agent0 Base subgraph supplies current ERC-8004 metadata and reputation
     provenance. The browser verifies its `_meta` block through Base RPC and reads exact canonical UWU
     `balanceOf` values at that same block. Agent0 is an index, not membership authority.
+  - The query aliases Agent0's current `agentMetadata_collection` schema field to the frontend's
+    stable `agentMetadatas` response shape, so an upstream entity-field rename cannot be mistaken
+    for an empty leaderboard or silently served as fresh cached data.
   - The browser queries The Graph directly. There is no SSR, API route, worker, database, browser
     wallet connection, or private backend.
   - A Tentacle with a submitted ERC-8004 transaction polls its receipt on a short bounded cadence,

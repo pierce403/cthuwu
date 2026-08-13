@@ -31,7 +31,7 @@ const SIGNED = /^(0|-?[1-9][0-9]*)$/u;
 
 const LEADERBOARD_QUERY = `
   query CthuwuLeaderboard($first: Int!, $after: ID!, $block: Block_height, $allegiance: Bytes!) {
-    agentMetadatas(
+    agentMetadatas: agentMetadata_collection(
       first: $first
       orderBy: id
       orderDirection: asc

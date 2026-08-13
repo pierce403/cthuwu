@@ -100,6 +100,9 @@ Last reviewed: 2026-08-12
 - The production-origin-restricted Agent0 Graph key resolves the Base subgraph without indexing
   errors. Agent 61608 appears by ID with its wallet and registration profile, but the leaderboard
   intentionally excludes it until its exact allegiance/protocol discovery metadata is indexed.
+- Agent0's live Base schema names the allegiance collection `agentMetadata_collection`, not the
+  former `agentMetadatas`. The browser aliases the live field to its stable response key; testing
+  only fixture response bodies does not detect an upstream GraphQL query-field rename.
 - ERC-8004 submitted transactions use a 15-second automatic maintenance cadence, while ordinary
   active checks retain the configured 15-minute default and recoverable RPC failures retain their
   one-hour backoff. This completes sequential profile/metadata publication without nonce races or

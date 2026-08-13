@@ -61,7 +61,7 @@ describe("Agent0 leaderboard + direct Base UWU reads", () => {
     expect(snapshot.rankedWallets[0].rawBalance).toBe("1000000000000000000000");
     expect(snapshot.rankedWallets[0].identities[0].tentacleId).toBe("tentacle_fixture");
     expect(snapshot.rankedWallets[0].identities[0].reputation[0]).toMatchObject({ value: "525", valueDecimals: 2 });
-    expect(calls[0]).toContain("agentMetadatas");
+    expect(calls[0]).toContain("agentMetadatas: agentMetadata_collection");
     expect(calls[0]).toContain(ALLEGIANCE_HEX);
     expect(calls.at(-1)).toContain(UWU_CONTRACT);
     expect(calls.at(-1)).toContain(`0x${BigInt(BLOCK).toString(16)}`);
