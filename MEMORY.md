@@ -103,6 +103,9 @@ Last reviewed: 2026-08-12
 - Agent0's live Base schema names the allegiance collection `agentMetadata_collection`, not the
   former `agentMetadatas`. The browser aliases the live field to its stable response key; testing
   only fixture response bodies does not detect an upstream GraphQL query-field rename.
+- Public leaderboard console diagnostics use the `[cthuwu-leaderboard]` prefix and report only
+  bounded cache/refresh/page/block/count state plus sanitized failure reasons. They must not expose
+  the compiled Graph key or full configured Graph/RPC endpoints.
 - ERC-8004 submitted transactions use a 15-second automatic maintenance cadence, while ordinary
   active checks retain the configured 15-minute default and recoverable RPC failures retain their
   one-hour backoff. This completes sequential profile/metadata publication without nonce races or

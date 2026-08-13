@@ -74,6 +74,7 @@ export interface FetchLeaderboardOptions {
   fetch?: typeof fetch;
   now?: () => Date;
   baseRpcEndpoint?: string;
+  diagnostic?: (event: string, details: Record<string, string | number | boolean>) => void;
 }
 
 export async function fetchCompleteLeaderboard(
@@ -96,6 +97,12 @@ export async function fetchCompleteLeaderboard(
       throw new Error("complete subgraph response exceeds the aggregate safety limit");
     }
     const parsed = parsePage(response.body);
+    options.diagnostic?.("agent0-page", {
+      page: page + 1,
+      rows: parsed.rowCount,
+      block: parsed.meta.blockNumber,
+      indexingErrors: parsed.meta.hasIndexingErrors,
+    });
     if (parsed.meta.hasIndexingErrors) throw new IndexingError();
     if (parsed.firstCursor && parsed.firstCursor <= after) {
       throw new Error("subgraph pagination returned an overlapping page");
@@ -122,6 +129,11 @@ export async function fetchCompleteLeaderboard(
         identities,
         parsed.meta,
       );
+      options.diagnostic?.("base-balances-verified", {
+        identities: identities.length,
+        wallets: new Set(identities.map((identity) => identity.agentWallet)).size,
+        block: parsed.meta.blockNumber,
+      });
       return buildSnapshot(
         balanced,
         {

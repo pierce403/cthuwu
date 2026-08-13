@@ -1253,6 +1253,9 @@ phase.
   - The query aliases Agent0's current `agentMetadata_collection` schema field to the frontend's
     stable `agentMetadatas` response shape, so an upstream entity-field rename cannot be mistaken
     for an empty leaderboard or silently served as fresh cached data.
+  - The browser console emits bounded `[cthuwu-leaderboard]` diagnostics for validated-cache state,
+    refresh lifecycle, Agent0 page counts and source block, Base balance verification, renderable
+    identity counts, and sanitized failures. It never logs Graph keys or full configured endpoints.
   - The browser queries The Graph directly. There is no SSR, API route, worker, database, browser
     wallet connection, or private backend.
   - A Tentacle with a submitted ERC-8004 transaction polls its receipt on a short bounded cadence,

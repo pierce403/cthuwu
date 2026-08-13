@@ -38,6 +38,7 @@ export interface LeaderboardOptions {
   fetch?: typeof fetch;
   now?: () => Date;
   navigator?: Navigator;
+  logger?: Pick<Console, "debug" | "info" | "error">;
 }
 
 export interface LeaderboardController {
@@ -53,9 +54,17 @@ export function initializeLeaderboard(
   const storage = options.storage ?? safeStorage();
   const activeNavigator = options.navigator ?? navigator;
   const now = options.now ?? (() => new Date());
+  const logger = options.logger ?? console;
   let snapshot = storage ? readLeaderboardCache(storage) : undefined;
   let disposed = false;
   let refreshPromise: Promise<void> | undefined;
+
+  logger.info("[cthuwu-leaderboard] initialized", {
+    cache: snapshot ? "validated" : "empty",
+    cachedBlock: snapshot?.sourceBlockNumber ?? null,
+    online: activeNavigator.onLine !== false,
+    graphConfigured: config.graphEndpoint !== undefined,
+  });
 
   const render = (state: LeaderboardState): void => {
     renderLeaderboard(elements, snapshot, state, config, now());
@@ -64,23 +73,46 @@ export function initializeLeaderboard(
   const refresh = async (): Promise<void> => {
     if (refreshPromise) return refreshPromise;
     if (!config.graphEndpoint) {
+      logger.error("[cthuwu-leaderboard] refresh unavailable", {
+        reason: "Graph endpoint is not configured",
+      });
       render(snapshot ? "STALE" : "UNAVAILABLE");
       return;
     }
     refreshPromise = (async () => {
+      logger.info("[cthuwu-leaderboard] refresh started", {
+        cachedBlock: snapshot?.sourceBlockNumber ?? null,
+      });
       render("REFRESHING");
       try {
         const next = await fetchCompleteLeaderboard(config.graphEndpoint!, {
           ...(options.fetch ? { fetch: options.fetch } : {}),
           now,
           ...(config.baseRpcEndpoint ? { baseRpcEndpoint: config.baseRpcEndpoint } : {}),
+          diagnostic: (event, details) => {
+            logger.debug(`[cthuwu-leaderboard] ${event}`, details);
+          },
         });
         if (disposed) return;
         if (storage) writeLeaderboardCache(storage, next);
         snapshot = next;
+        logger.info("[cthuwu-leaderboard] refresh completed", {
+          block: next.sourceBlockNumber,
+          wallets: next.rankedWallets.length,
+          identities: next.rankedWallets.reduce(
+            (total, group) => total + group.identities.length,
+            next.suspended.length,
+          ),
+          suspended: next.suspended.length,
+        });
         render("CURRENT");
       } catch (error) {
         if (disposed) return;
+        logger.error("[cthuwu-leaderboard] refresh failed", {
+          reason: safeDiagnosticReason(error),
+          cacheAvailable: snapshot !== undefined,
+          online: activeNavigator.onLine !== false,
+        });
         if (error instanceof IndexingError) {
           render("INDEXING ERROR");
         } else if (activeNavigator.onLine === false) {
@@ -140,6 +172,13 @@ export function initializeLeaderboard(
       window.removeEventListener("online", onOnline);
     },
   };
+}
+
+function safeDiagnosticReason(error: unknown): string {
+  const reason = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+  return reason
+    .replace(/https:\/\/[^\s)\]}]+/giu, "<redacted-endpoint>")
+    .slice(0, 512);
 }
 
 function renderLeaderboard(

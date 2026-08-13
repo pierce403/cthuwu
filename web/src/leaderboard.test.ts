@@ -69,10 +69,16 @@ describe("Tentacle leaderboard UI", () => {
           resolveRequest = resolve;
         }),
     ) as typeof fetch;
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+    };
     const controller = initializeLeaderboard(elements, {
       config: { ...config, graphEndpoint: "https://example.test/graphql" },
       fetch: pending,
       now: () => new Date("2026-08-11T12:01:00Z"),
+      logger,
     });
     expect(elements.ranked.textContent).toContain("Cache Tentacle");
     expect(elements.ranked.textContent).toContain("UWU1");
@@ -83,6 +89,14 @@ describe("Tentacle leaderboard UI", () => {
     await controller.refresh();
     expect(elements.status.textContent).toBe("STALE");
     expect(elements.ranked.textContent).toContain("Cache Tentacle");
+    expect(logger.info).toHaveBeenCalledWith(
+      "[cthuwu-leaderboard] initialized",
+      expect.objectContaining({ cache: "validated", cachedBlock: "42000000" }),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      "[cthuwu-leaderboard] refresh failed",
+      expect.objectContaining({ cacheAvailable: true }),
+    );
     controller.dispose();
   });
 
@@ -133,10 +147,16 @@ describe("Tentacle leaderboard UI", () => {
       "utf8",
     );
     const elements = mountElements();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+    };
     const controller = initializeLeaderboard(elements, {
       config: { ...config, graphEndpoint: "https://example.test/graphql" },
       fetch: fixtureFetch(fixture),
       now: () => new Date("2026-08-11T12:01:00Z"),
+      logger,
     });
     await controller.refresh();
     expect(elements.status.textContent).toBe("CURRENT");
@@ -144,6 +164,14 @@ describe("Tentacle leaderboard UI", () => {
     expect(elements.ranked.textContent).toContain("0 active · 0 revoked in recent sample");
     expect(elements.ranked.textContent).toContain("informational provenance only");
     expect(readLeaderboardCache(localStorage)?.rankedWallets[0].representativeAgentId).toBe("7");
+    expect(logger.debug).toHaveBeenCalledWith(
+      "[cthuwu-leaderboard] agent0-page",
+      expect.objectContaining({ rows: 1, block: "49768180" }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "[cthuwu-leaderboard] refresh completed",
+      expect.objectContaining({ wallets: 1, identities: 1 }),
+    );
     controller.dispose();
   });
 
