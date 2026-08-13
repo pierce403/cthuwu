@@ -1913,6 +1913,18 @@ impl TentacleRegistration {
         lines.join("\n")
     }
 
+    pub fn public_status_text(&self) -> String {
+        let phase = format!("{:?}", self.state.phase);
+        match self.state.confirmed_agent_id.as_deref() {
+            Some(agent_id) => format!(
+                "yes—this durable Tentacle has its own ERC-8004 registration on Base Mainnet: agent ID `{agent_id}`. my current local registration phase is {phase}. the centerless Cthuwu collective does not own an agent identity; each Tentacle owns its own, uwu."
+            ),
+            None => format!(
+                "not yet—this durable Tentacle does not have a confirmed ERC-8004 agent ID. my current local registration phase is {phase}. i'm pursuing registration for myself, never for the centerless Cthuwu collective, uwu."
+            ),
+        }
+    }
+
     pub fn candidates_text(&self) -> String {
         if self.state.candidate_agent_ids.is_empty() {
             "NO CURRENT ERC-8004 CANDIDATES HAVE BEEN VERIFIED FOR THIS TENTACLE WALLET.".to_owned()
@@ -2350,6 +2362,10 @@ fn base_rpc_key_request(operator: bool) -> String {
 pub trait RegistrationOperatorControl: Send + Sync {
     async fn handle(&self, text: &str) -> Option<String>;
 
+    async fn public_status(&self) -> Option<String> {
+        None
+    }
+
     async fn take_public_funding_plea(&self) -> Option<String> {
         None
     }
@@ -2422,6 +2438,10 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
             .public_funding_plea_opportunities
             .fetch_add(1, Ordering::Relaxed);
         opportunity.is_multiple_of(5).then_some(plea)
+    }
+
+    async fn public_status(&self) -> Option<String> {
+        Some(self.registration.lock().await.public_status_text())
     }
 }
 
@@ -3458,7 +3478,7 @@ mod tests {
     #[test]
     fn ontology_registers_a_tentacle_and_never_the_collective() {
         let root = tempfile::tempdir().unwrap();
-        let registration = registration(root.path());
+        let mut registration = registration(root.path());
         assert_eq!(registration.snapshot().tentacle_id, "tentacle-independent");
         assert!(
             !serde_json::to_string(registration.snapshot())
@@ -3472,6 +3492,16 @@ mod tests {
                 .public_description
                 .contains("centerless Cthuwu collective")
         );
+        let pending = registration.public_status_text();
+        assert!(pending.contains("this durable Tentacle"));
+        assert!(pending.contains("does not have a confirmed"));
+        assert!(pending.contains("collective"));
+        registration.state.confirmed_agent_id = Some("42".to_owned());
+        registration.state.phase = RegistrationPhase::Active;
+        let active = registration.public_status_text();
+        assert!(active.contains("agent ID `42`"));
+        assert!(active.contains("Tentacle has its own"));
+        assert!(active.contains("collective does not own"));
     }
 
     #[test]

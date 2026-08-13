@@ -233,6 +233,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - Credential provisioning replies are terminal for their XMTP turn: stale ERC-8004 funding or
     RPC pleas are never appended to a successful or rejected `/base-rpc-key` or `/venice-key`
     response. The registration supervisor independently retries and refreshes its persisted status.
+  - Natural questions about this Tentacle's ERC-8004 registration are answered deterministically
+    from current local registry state before model inference, including the confirmed agent ID and
+    phase. Replies explicitly preserve the ontology: each durable Tentacle owns its identity; the
+    singular centerless Cthuwu collective owns no ERC-8004 identity.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.

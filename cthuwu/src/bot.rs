@@ -283,6 +283,12 @@ impl UwUBot {
 
         let response = match role {
             PrincipalRole::Operator => {
+                if is_natural_registry_status_request(message.text)
+                    && let Some(control) = &self.registry_control
+                    && let Some(response) = control.public_status().await
+                {
+                    return Ok(Some(limit_response(response.to_ascii_uppercase(), role)));
+                }
                 if message.text.trim().to_ascii_lowercase().starts_with("/registry-")
                     && let Some(control) = &self.registry_control
                     && let Some(response) = control.handle(message.text).await
@@ -469,6 +475,13 @@ impl UwUBot {
                         .to_owned(),
                 });
             }
+        }
+
+        if is_natural_registry_status_request(text)
+            && let Some(control) = &self.registry_control
+            && let Some(status) = control.public_status().await
+        {
+            return Ok(status);
         }
 
         if let Some(control) = &self.model_control
@@ -1181,6 +1194,25 @@ fn is_resource_provision_command(text: &str) -> bool {
     name.eq_ignore_ascii_case("base-rpc-key") || name.eq_ignore_ascii_case("venice-key")
 }
 
+fn is_natural_registry_status_request(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    let names_registry = normalized.contains("8004") || normalized.contains("agent registration");
+    let asks_status = [
+        "status",
+        "register",
+        "registered",
+        "registration",
+        "agent id",
+        "identity",
+        "did you get",
+        "do you have",
+        "are you",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    names_registry && asks_status
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1207,6 +1239,19 @@ mod tests {
         assert!(is_resource_provision_command("  /VENICE-KEY candidate"));
         assert!(!is_resource_provision_command("please use /base-rpc-key"));
         assert!(!is_resource_provision_command("/registry-status"));
+    }
+
+    #[test]
+    fn natural_erc8004_status_questions_are_runtime_routed() {
+        assert!(is_natural_registry_status_request(
+            "did you get yourself an 8004 registration?"
+        ));
+        assert!(is_natural_registry_status_request(
+            "what is your ERC-8004 status?"
+        ));
+        assert!(!is_natural_registry_status_request(
+            "what does ERC-8004 mean generally?"
+        ));
     }
 
     struct FailingModel;
@@ -1374,6 +1419,8 @@ mod tests {
 
     struct PublicFundingControl;
 
+    struct PublicStatusControl;
+
     #[async_trait::async_trait]
     impl RegistrationOperatorControl for PublicFundingControl {
         async fn handle(&self, _text: &str) -> Option<String> {
@@ -1382,6 +1429,17 @@ mod tests {
 
         async fn take_public_funding_plea(&self) -> Option<String> {
             Some("public Base ETH funding plea".to_owned())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RegistrationOperatorControl for PublicStatusControl {
+        async fn handle(&self, _text: &str) -> Option<String> {
+            None
+        }
+
+        async fn public_status(&self) -> Option<String> {
+            Some("authoritative Tentacle ERC-8004 status: agent ID `42`".to_owned())
         }
     }
 
@@ -1549,6 +1607,36 @@ mod tests {
                 .stage,
             OnboardingStage::Complete
         );
+    }
+
+    #[tokio::test]
+    async fn natural_erc8004_question_bypasses_model_and_onboarding() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let bot = configured_bot(
+            root.path(),
+            model.clone(),
+            OperatorStore::new(root.path(), "dev").unwrap(),
+            Arc::new(RecordingTools {
+                calls: StdMutex::new(Vec::new()),
+            }),
+        )
+        .with_registry_control(Arc::new(PublicStatusControl));
+
+        let response = send(
+            &bot,
+            0,
+            "012345abcdef",
+            "did you get yourself an 8004 registration?",
+        )
+        .await;
+        assert_eq!(
+            response,
+            "authoritative Tentacle ERC-8004 status: agent ID `42`"
+        );
+        assert!(model.messages.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
