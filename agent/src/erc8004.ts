@@ -1416,10 +1416,12 @@ async function fundingEstimate(publicClient: PublicClient, operation: Extract<Re
       try {
         gas = await publicClient.estimateGas({ account: wallet, to: ERC8004_IDENTITY_REGISTRY, data: call.data, value: 0n });
         exactOperations += 1;
-      } catch (error) {
-        if (operation.agentId !== undefined) {
-          throw new RecoverableSignerError("gas_estimate", "provider rejected an exact remaining ERC-8004 gas estimate");
-        }
+      } catch {
+        // Some providers reject eth_estimateGas for an otherwise valid authorized registry write.
+        // Funding estimation is allowed to remain conservative: the configured per-transaction
+        // ceiling plus safety factor is safer and more useful than discarding the independently
+        // observable wallet balance. The actual write path still estimates and fails closed before
+        // signing, so this fallback cannot authorize or broadcast a reverting call.
       }
     }
     if (gas > gasCeiling) throw new RecoverableSignerError("gas_ceiling", "estimated registry gas exceeds the configured ceiling");

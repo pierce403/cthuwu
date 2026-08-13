@@ -1204,6 +1204,11 @@ phase.
     recoverable Base RPC blockers and trigger the same immediate operator provisioning demand.
   - The state machine persists intent before broadcast and resumes registration, receipt/finality,
     profile publication, wallet verification, and metadata stages without duplicate minting.
+  - Funding reconciliation never turns a provider-rejected `eth_estimateGas` for a remaining
+    authorized registry update into a fabricated insufficient-ETH diagnosis. It retains the live
+    wallet balance and uses the configured per-transaction gas ceiling as a conservative estimate;
+    the actual write path still estimates and fails closed before signing. Operator model status
+    distinguishes a minted agent ID from incomplete profile/allegiance setup.
   - Repository skills document native Base-balance reconciliation, ERC-8004 status/recovery, and
     bounded skill creation. The operator receives their compact discovered index, reads the relevant
     `SKILL.md` before use, and cannot gain authority from skill prose.

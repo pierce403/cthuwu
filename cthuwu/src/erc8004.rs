@@ -1906,6 +1906,14 @@ impl TentacleRegistration {
                     .as_deref()
                     .unwrap_or("not selected")
             ),
+            format!(
+                "IDENTITY MINTED: {}",
+                self.state.confirmed_agent_id.is_some()
+            ),
+            format!(
+                "REGISTRATION SETUP COMPLETE: {}",
+                self.state.phase == RegistrationPhase::Active
+            ),
         ];
         if let Some(hash) = &self.state.submitted_transaction_hash {
             lines.push(format!("PENDING TRANSACTION: {hash}"));
@@ -1972,6 +1980,10 @@ impl TentacleRegistration {
             lines.push(format!("RECOVERABLE: {}", failure.recoverable));
             if is_base_rpc_access_failure(failure) {
                 lines.push("BASE RPC ACCESS BLOCKED: true".to_owned());
+            }
+            if failure.detail.contains("[gas_estimate]") {
+                lines.push("GAS ESTIMATE BLOCKED: true".to_owned());
+                lines.push("INSUFFICIENT BASE ETH PROVEN: false".to_owned());
             }
         }
         lines.join("\n")
