@@ -54,6 +54,7 @@ interface ChatElements {
   brandingDialog: HTMLDialogElement;
   brandingPrice: HTMLElement;
   brandingUpkeep: HTMLElement;
+  brandingReferrer: HTMLElement;
   brandingAccept: HTMLButtonElement;
   brandingDecline: HTMLButtonElement;
 }
@@ -190,6 +191,7 @@ export function initializeChatController(
     if (currentBrandingOffer && !elements.brandingDialog.hasAttribute("open")) {
       elements.brandingPrice.textContent = `${currentBrandingOffer.price.toLocaleString()} base units`;
       elements.brandingUpkeep.textContent = `${currentBrandingOffer.upkeep.toLocaleString()} base units`;
+      elements.brandingReferrer.textContent = config.referrer ?? "not supplied";
       elements.brandingDialog.hidden = false;
       elements.brandingDialog.setAttribute("open", "");
     }
@@ -318,7 +320,7 @@ export function initializeChatController(
     void workspace.send(
       "direct",
       accepted
-        ? "I accept the Acolyte Branding offer shown in the Cthuwu app."
+        ? `I accept the Acolyte Branding offer shown in the Cthuwu app.${config.referrer ? ` Use referrer ${config.referrer} in the exact mint consent.` : ""}`
         : "I decline the Acolyte Branding offer for now.",
     ).catch((error) => setComposerError(publicError(error)));
   };
@@ -388,6 +390,7 @@ function chatElements(): ChatElements {
     brandingDialog: required("branding-offer"),
     brandingPrice: required("branding-price"),
     brandingUpkeep: required("branding-upkeep"),
+    brandingReferrer: required("branding-referrer"),
     brandingAccept: required("branding-accept"),
     brandingDecline: required("branding-decline"),
   };

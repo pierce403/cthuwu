@@ -383,12 +383,12 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       fromNs: RETENTION_FROM_NS,
       inNs: RETENTION_IN_NS,
     };
-    const expectedWallet = assignment.source === "branding-active" ? assignment.wallet : assignment.address;
-    if (assignment.source === "branding-active") {
+    const expectedWallet = isVerifiedTentacle(assignment) ? assignment.wallet : assignment.address;
+    if (isVerifiedTentacle(assignment)) {
       await verifyPeerInboxState(this.client, assignment.inboxId, expectedWallet);
     }
     const direct =
-      assignment.source === "branding-active"
+      isVerifiedTentacle(assignment)
         ? await this.client.conversations.createDm(assignment.inboxId, {
             messageDisappearingSettings: disappearing,
           })
@@ -400,7 +400,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
             { messageDisappearingSettings: disappearing },
           );
     const peerInboxId = await direct.peerInboxId();
-    if (assignment.source === "branding-active" && peerInboxId !== assignment.inboxId) {
+    if (isVerifiedTentacle(assignment) && peerInboxId !== assignment.inboxId) {
       throw new RegistryUnavailableError("XMTP did not resolve the canonical controller inbox");
     }
     await verifyPeerInboxState(this.client, peerInboxId, expectedWallet);
@@ -417,10 +417,10 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.trustedChannelByConversation.set(direct.id, "direct");
     this.bindChannel("direct", [direct.id], direct.id, true);
     const hint = readTentacleDisplayHint(
-      assignment.source === "branding-active" ? assignment.agentId : undefined,
+      isVerifiedTentacle(assignment) ? assignment.agentId : undefined,
       this.storage,
     );
-    this.tentacleName = hint?.name ?? (assignment.source === "branding-active" ? `Tentacle #${assignment.agentId}` : "Intro Tentacle");
+    this.tentacleName = hint?.name ?? (isVerifiedTentacle(assignment) ? `Tentacle #${assignment.agentId}` : "Intro Tentacle");
     await this.loadHistory("direct", false);
   }
 
@@ -429,8 +429,8 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       if (!this.direct || !this.currentTentacleInboxId) {
         throw new Error("the assigned Direct conversation is unavailable");
       }
-      const expectedWallet = assignment.source === "branding-active" ? assignment.wallet : assignment.address;
-      const expectedInboxId = assignment.source === "branding-active"
+      const expectedWallet = isVerifiedTentacle(assignment) ? assignment.wallet : assignment.address;
+      const expectedInboxId = isVerifiedTentacle(assignment)
         ? assignment.inboxId
         : this.currentTentacleInboxId;
       const peerInboxId = await this.direct.peerInboxId();
@@ -565,7 +565,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       return;
     }
     if (
-      this.currentAssignment?.source === "branding-active" &&
+      this.currentAssignment && isVerifiedTentacle(this.currentAssignment) &&
       assignment.tentacleAgentId !== this.currentAssignment.agentId
     ) {
       return;
@@ -622,7 +622,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         assignment,
         this.inboxId,
         groups,
-        this.currentAssignment?.source === "branding-active"
+        this.currentAssignment && isVerifiedTentacle(this.currentAssignment)
           ? this.currentAssignment.agentId
           : undefined,
       );
@@ -691,7 +691,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     const assignment = this.trustedGroupAssignment;
     try {
       if (!assignment) throw new Error("trusted group assignment is unavailable");
-      const expectedAgentId = this.currentAssignment?.source === "branding-active"
+      const expectedAgentId = this.currentAssignment && isVerifiedTentacle(this.currentAssignment)
         ? this.currentAssignment.agentId
         : undefined;
       if (channelId === "acolytes") {
@@ -969,9 +969,13 @@ function compareMessages(left: WorkspaceMessage, right: WorkspaceMessage): numbe
 
 function routeKey(assignment: TentacleAssignment | undefined): string | undefined {
   if (!assignment) return undefined;
-  return assignment.source === "branding-active"
+  return isVerifiedTentacle(assignment)
     ? `agent:${assignment.agentId}:inbox:${assignment.inboxId}`
     : `address:${assignment.address}`;
+}
+
+function isVerifiedTentacle(assignment: TentacleAssignment): assignment is Extract<TentacleAssignment, { source: "branding-active" | "anchor-verified" }> {
+  return assignment.source === "branding-active" || assignment.source === "anchor-verified";
 }
 
 async function verifyPeerInboxState(

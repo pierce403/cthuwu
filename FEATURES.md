@@ -84,6 +84,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - The deployed browser always uses XMTP `production` and currently connects automatically to the
     canonical intro Tentacle; no build variable can redirect that deployed fallback. The separate
     Branding routing gate must positively verify any future controller.
+  - Root onboarding links accept `?t=<tentacle-wallet>&r=<referrer-wallet>`. The `t` target replaces
+    the intro route only after Agent0 discovery and same-block canonical ERC-8004 wallet,
+    authorization, allegiance, protocol, and XMTP endpoint verification. The first valid `r` value
+    is pinned per local acolyte identity and later links cannot replace it.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -96,6 +100,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] Browser identity tests prove a registered installation is recovered without another
     registration, while a genuinely new installation registers once and closes cleanly on failure.
   - [x] A full browser automation test verifies persistence across an actual page reload.
+  - [x] Unit tests reject malformed, zero, duplicated, ambiguous, or unverifiable onboarding-link
+    authority and prove first-touch referral pinning.
 
 ### Browser-to-Cthuwu XMTP direct-message baseline
 
@@ -154,6 +160,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     allegiance and protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
     selected production XMTP endpoint must all agree. Agent0 and the leaderboard cache are
     discovery/display hints, never routing authority.
+  - An unbranded acolyte may follow `?t=<wallet>` to a specific Tentacle. Agent0 supplies only the
+    candidate agent ID; canonical Base reads still authorize the exact wallet and XMTP inbox. An
+    active Branding remains authoritative over any URL parameter.
   - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the
     configured intro Tentacle. `RegistryUnavailable`, a
     block-consistency failure, or an unverifiable canonical endpoint freezes Branding routing in a

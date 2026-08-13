@@ -1,6 +1,8 @@
 import { Interface, getAddress } from "ethers";
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
+import { fetchCompleteLeaderboard } from "../leaderboard-data";
+import { parseLeaderboardConfig } from "../leaderboard-config";
 import {
   ALLEGIANCE_HEX,
   BASE_CHAIN_ID,
@@ -56,6 +58,16 @@ export type TentacleAssignment =
       blockNumber: bigint;
       blockHash: string;
       notice: string;
+    }
+  | {
+      source: "anchor-verified";
+      address: string;
+      inboxId: string;
+      agentId: string;
+      wallet: string;
+      blockNumber: bigint;
+      blockHash: string;
+      notice: string;
     };
 
 export class RegistryUnavailableError extends Error {
@@ -72,9 +84,10 @@ export interface RpcClient {
 export async function resolveTentacleAssignment(
   config: AppConfig,
   identity: StoredIdentity,
-  options: { rpc?: RpcClient; fetch?: typeof fetch } = {},
+  options: { rpc?: RpcClient; fetch?: typeof fetch; discoverAgentIds?: (wallet: string) => Promise<string[]> } = {},
 ): Promise<TentacleAssignment> {
   if (!config.brandingContract) {
+    if (config.tentacleAnchor) return resolveAnchoredTentacle(config, options);
     return {
       source: "intro-unconfigured",
       address: config.botAddress,
@@ -125,6 +138,9 @@ export async function resolveTentacleAssignment(
     const status = brandingStatus(branding.status);
     if (status === "RegistryUnavailable") throw new Error("Branding reports RegistryUnavailable");
     if (status !== "Active") {
+      if (config.tentacleAnchor) {
+        return await resolveAnchoredTentacle(config, options, rpc, blockNumber, blockTag, observedBlock);
+      }
       await verifyUnchangedBlock(rpc, blockTag, observedBlock);
       return {
         source: "intro-fallback",
@@ -204,6 +220,69 @@ export async function resolveTentacleAssignment(
         ? `Canonical Base routing state is unavailable: ${error.message}`
         : undefined,
     );
+  }
+}
+
+async function resolveAnchoredTentacle(
+  config: AppConfig,
+  options: { rpc?: RpcClient; fetch?: typeof fetch; discoverAgentIds?: (wallet: string) => Promise<string[]> },
+  existingRpc?: RpcClient,
+  existingBlockNumber?: bigint,
+  existingBlockTag?: string,
+  existingBlock?: BlockHeader,
+): Promise<TentacleAssignment> {
+  try {
+    const wallet = canonicalAddress(config.tentacleAnchor, "t link target");
+    if (wallet === ZERO_ADDRESS) throw new Error("t link target is zero");
+    const discover = options.discoverAgentIds ?? (async (target: string) => {
+      const endpoint = parseLeaderboardConfig().graphEndpoint;
+      if (!endpoint) throw new Error("Agent0 discovery is unavailable");
+      const snapshot = await fetchCompleteLeaderboard(endpoint, {
+        fetch: options.fetch,
+        baseRpcEndpoint: config.baseRpcEndpoint,
+      });
+      const match = snapshot.rankedWallets.find((entry) => entry.wallet.toLowerCase() === target);
+      return match?.identities.map((identity) => identity.agentId) ?? [];
+    });
+    const agentIds = [...new Set(await discover(wallet))];
+    if (agentIds.length !== 1 || !/^(?:0|[1-9][0-9]*)$/u.test(agentIds[0]!)) {
+      throw new Error(agentIds.length === 0
+        ? "no discoverable Cthuwu ERC-8004 identity belongs to the t address"
+        : "the t address controls more than one Tentacle and is ambiguous");
+    }
+    const rpc = existingRpc ?? options.rpc ?? createJsonRpcClient(config.baseRpcEndpoint, options.fetch ?? fetch);
+    let blockNumber = existingBlockNumber;
+    let blockTag = existingBlockTag;
+    let observed = existingBlock;
+    if (!blockNumber || !blockTag || !observed) {
+      const chainId = quantity(await rpc.request("eth_chainId", []), "Base chain ID");
+      if (chainId !== BigInt(BASE_CHAIN_ID)) throw new Error("RPC returned the wrong chain");
+      blockNumber = quantity(await rpc.request("eth_blockNumber", []), "Base block number");
+      blockTag = `0x${blockNumber.toString(16)}`;
+      observed = block(await rpc.request("eth_getBlockByNumber", [blockTag, false]));
+      const registryCode = await rpc.request("eth_getCode", [IDENTITY_REGISTRY, blockTag]);
+      if (!isCode(registryCode)) throw new Error("canonical registry code is unavailable");
+    }
+    const agentId = agentIds[0]!;
+    const [version, walletResult, authorizedResult, allegianceResult, protocolResult, uriResult] = await Promise.all([
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getVersion", [], blockTag),
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getAgentWallet", [agentId], blockTag),
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "isAuthorizedOrOwner", [wallet, agentId], blockTag),
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getMetadata", [agentId, "cthuwu.allegiance"], blockTag),
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getMetadata", [agentId, "cthuwu.protocol"], blockTag),
+      contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "tokenURI", [agentId], blockTag),
+    ]);
+    if (version[0] !== "2.0.0" || canonicalAddress(walletResult[0], "agentWallet") !== wallet ||
+      authorizedResult[0] !== true || String(allegianceResult[0]).toLowerCase() !== ALLEGIANCE_HEX ||
+      String(protocolResult[0]).toLowerCase() !== PROTOCOL_V1_HEX) {
+      throw new Error("the t address is not the current eligible controller of that Tentacle");
+    }
+    const inboxId = endpointFromAgentUri(String(uriResult[0]), agentId);
+    await verifyUnchangedBlock(rpc, blockTag, observed);
+    return { source: "anchor-verified", address: wallet, wallet, inboxId, agentId,
+      blockNumber, blockHash: observed.hash, notice: `Deep-linked Tentacle verified at Base block ${blockNumber}` };
+  } catch (error) {
+    throw new RegistryUnavailableError(error instanceof Error ? `Tentacle link could not be verified: ${error.message}` : undefined);
   }
 }
 

@@ -86,6 +86,7 @@ function canonicalRpc(options: {
   finalHash?: string;
   profileUri?: string;
   brandingUwu?: string;
+  registryWallet?: string;
 } = {}) {
   const status = options.status ?? 1;
   const owner = status === 0 ? ZERO_ADDRESS : "0x3333333333333333333333333333333333333333";
@@ -132,7 +133,7 @@ function canonicalRpc(options: {
         return registryInterface.encodeFunctionResult("getVersion", ["2.0.0"]);
       }
       if (selector === registryInterface.getFunction("getAgentWallet")!.selector) {
-        return registryInterface.encodeFunctionResult("getAgentWallet", [owner]);
+        return registryInterface.encodeFunctionResult("getAgentWallet", [options.registryWallet ?? owner]);
       }
       if (selector === registryInterface.getFunction("isAuthorizedOrOwner")!.selector) {
         return registryInterface.encodeFunctionResult("isAuthorizedOrOwner", [true]);
@@ -217,6 +218,37 @@ describe("canonical Tentacle assignment", () => {
       blockNumber: 123n,
       blockHash: `0x${"a".repeat(64)}`,
     });
+  });
+
+  it("routes an unbranded deep link only after exact ERC-8004 verification", async () => {
+    const config = {
+      ...baseConfig,
+      brandingContract: "0x2222222222222222222222222222222222222222",
+      tentacleAnchor: "0x3333333333333333333333333333333333333333",
+    };
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({ status: 0, registryWallet: config.tentacleAnchor }),
+      discoverAgentIds: async () => ["42"],
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      address: config.tentacleAnchor,
+      wallet: config.tentacleAnchor,
+      agentId: "42",
+      inboxId: inbox,
+      blockNumber: 123n,
+    });
+  });
+
+  it("refuses an ambiguous t address instead of choosing a controller", async () => {
+    const config = {
+      ...baseConfig,
+      brandingContract: "0x2222222222222222222222222222222222222222",
+      tentacleAnchor: "0x3333333333333333333333333333333333333333",
+    };
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({ status: 0 }),
+      discoverAgentIds: async () => ["42", "43"],
+    })).rejects.toThrow(/ambiguous/u);
   });
 
   it("freezes on tuple spoofing, positive RegistryUnavailable, or a reorg", async () => {

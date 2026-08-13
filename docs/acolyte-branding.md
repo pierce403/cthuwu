@@ -11,6 +11,20 @@ claim that a Branding contract has been deployed, that a production Global group
 bootstrapped, or that [cthuwu.app](https://cthuwu.app) currently routes through either one. Until
 those production gates pass, the browser continues to use the configured intro Tentacle.
 
+## Onboarding links
+
+The static chat entry point accepts `/?t=<tentacle-wallet>&r=<referrer-wallet>`. Both values must be
+nonzero Ethereum addresses. `t` is not direct routing authority: the browser discovers a candidate
+agent ID, then verifies the exact wallet, authorization, Cthuwu allegiance/protocol metadata, and
+production XMTP endpoint against canonical ERC-8004 state at one stable Base block. Existing active
+Branding overrides the link.
+
+The browser pins the first valid `r` value under the recovered acolyte identity. A later referral
+link cannot replace it. Branding invitations display the pinned referrer and the XMTP acceptance
+receipt names it. That receipt is still not an EIP-712 mint consent or a transaction: the eventual
+mint path must copy the same address into `MintConsent.referrer`, obtain the acolyte signature, and
+verify the confirmed Base transaction before claiming the Branding exists.
+
 ## Roles and on-chain boundary
 
 Every Branding has four distinct roles:

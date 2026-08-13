@@ -23,6 +23,8 @@ export interface AppConfig {
   baseRpcEndpoint: string;
   brandingContract?: string;
   assignmentRefreshMs: number;
+  tentacleAnchor?: string;
+  referrer?: string;
 }
 
 export function parseConfig(

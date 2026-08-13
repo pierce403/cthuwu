@@ -39,6 +39,7 @@ export type AssignmentState =
   | "intro-unconfigured"
   | "intro-fallback"
   | "branding-active"
+  | "anchor-verified"
   | "direct-verification-unavailable"
   | "registry-unavailable";
 

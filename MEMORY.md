@@ -2,6 +2,12 @@
 
 Last reviewed: 2026-08-12
 
+- Root onboarding links use `?t=<tentacle-wallet>&r=<referrer-wallet>`. A `t` route requires
+  Agent0 discovery plus same-block canonical ERC-8004 and XMTP endpoint verification; an existing
+  active Branding wins. The first valid `r` is pinned per browser identity and is surfaced in the
+  Branding invitation, but the invitation remains only an XMTP receipt until exact EIP-712 consent
+  and a confirmed mint are implemented.
+
 ## Product
 
 - Each Tentacle presents as a cute little eldritch-horror companion; Cthuwu itself is the

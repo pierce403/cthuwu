@@ -10,6 +10,7 @@ import { decryptIdentityBackup, encryptIdentityBackup } from "./identity-backup"
 import { initializePwaInstallPrompt, type PwaInstallController } from "./pwa";
 import { fetchAccountBalances } from "./account-balances";
 import { initializeChatController, type ChatController } from "./chat/controller";
+import { parseOnboardingLink, pinReferrer } from "./onboarding-links";
 import "./style.css";
 
 const MOTION_STORAGE_KEY = "cthuwu.ui.motion.v1";
@@ -58,7 +59,9 @@ function bootstrap(): void {
     // Preserve the backup-critical boundary: create/recover the browser identity before config or I/O.
     identity = loadOrCreateIdentity(environment);
     addressElement.textContent = identity.address;
-    chatController = initializeChatController(parseConfig(), identity);
+    const link = parseOnboardingLink(location.search);
+    const referrer = pinReferrer(environment, identity.address, link.referrer);
+    chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer }, identity);
   } catch (error) {
     fatalIdentity(error);
   }
