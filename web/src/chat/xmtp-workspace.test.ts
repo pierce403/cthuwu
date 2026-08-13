@@ -15,7 +15,7 @@ import {
   type AssignmentControl,
 } from "./control";
 import { createChatUiStateStore } from "./storage";
-import { XmtpMultiChannelWorkspace, recoverRegisteredClient } from "./xmtp-workspace";
+import { XmtpMultiChannelWorkspace, acquireXmtpDatabaseLease, recoverRegisteredClient } from "./xmtp-workspace";
 
 const own = "1".repeat(64);
 const tentacle = "2".repeat(64);
@@ -251,16 +251,44 @@ describe("multi-channel XMTP workspace", () => {
   beforeEach(() => localStorage.clear());
 
   it("reuses an installation and closes failed registration", async () => {
-    const existing = { isRegistered: vi.fn(async () => true), register: vi.fn(), close: vi.fn() };
+    const existing = { isRegistered: vi.fn(async () => true), register: vi.fn(), revokeAllOtherInstallations: vi.fn(), close: vi.fn() };
     await expect(recoverRegisteredClient(async () => existing)).resolves.toBe(existing);
     expect(existing.register).not.toHaveBeenCalled();
     const failed = {
       isRegistered: vi.fn(async () => false),
       register: vi.fn(async () => { throw new Error("installation limit"); }),
+      revokeAllOtherInstallations: vi.fn(),
       close: vi.fn(),
     };
     await expect(recoverRegisteredClient(async () => failed)).rejects.toThrow("installation limit");
     expect(failed.close).toHaveBeenCalledOnce();
+  });
+
+  it("revokes stale installations once when a new installation finds the inbox full", async () => {
+    const client = {
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn()
+        .mockRejectedValueOnce(new Error("InboxID abc has already registered 10/10 installations. Please revoke existing installations first."))
+        .mockResolvedValueOnce(undefined),
+      revokeAllOtherInstallations: vi.fn(async () => undefined),
+      close: vi.fn(),
+    };
+    await expect(recoverRegisteredClient(async () => client)).resolves.toBe(client);
+    expect(client.revokeAllOtherInstallations).toHaveBeenCalledOnce();
+    expect(client.register).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails before OPFS open when another tab owns the identity database lease", async () => {
+    let occupied = false;
+    const request = vi.fn(async (_name: string, _options: LockOptions, callback: (lock: Lock | null) => Promise<void>) => {
+      if (occupied) return callback(null);
+      occupied = true;
+      return callback({} as Lock);
+    });
+    vi.stubGlobal("navigator", { ...navigator, locks: { request } });
+    const release = await acquireXmtpDatabaseLease("production", identity.address);
+    await expect(acquireXmtpDatabaseLease("production", identity.address)).rejects.toThrow(/another tab/u);
+    release();
   });
 
   it("keeps unconfigured deployment on legacy intro Direct without inventing group bindings", async () => {

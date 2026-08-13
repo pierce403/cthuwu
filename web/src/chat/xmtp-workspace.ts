@@ -67,6 +67,7 @@ interface MutableChannel extends ChannelSnapshot {
 export interface WorkspaceOptions {
   storage?: Storage;
   resolveAssignment?: typeof resolveTentacleAssignment;
+  releaseDatabaseLease?: () => void;
 }
 
 export async function createXmtpWorkspace(
@@ -75,22 +76,33 @@ export async function createXmtpWorkspace(
   options: WorkspaceOptions = {},
 ): Promise<ChatWorkspace> {
   const wallet = new Wallet(identity.walletPrivateKey);
-  const client = (await recoverRegisteredClient(() =>
-    Client.create(createSigner(wallet), {
+  const releaseDatabaseLease = await acquireXmtpDatabaseLease(config.environment, identity.address);
+  let client: XmtpClient;
+  try {
+    client = (await recoverRegisteredClient(() =>
+      Client.create(createSigner(wallet), {
       env: config.environment,
       appVersion: "cthuwu-web/0.2.0",
       codecs: [...CONTROL_CODECS],
       // Reopen the Browser SDK's persisted installation before asking XMTP whether it is already
       // registered. A normal reload must not consume another inbox installation slot.
       disableAutoRegister: true,
-    }),
-  )) as XmtpClient;
+      }),
+    )) as XmtpClient;
+  } catch (error) {
+    releaseDatabaseLease();
+    throw error;
+  }
   try {
-    const workspace = new XmtpMultiChannelWorkspace(client, config, identity, options);
+    const workspace = new XmtpMultiChannelWorkspace(client, config, identity, {
+      ...options,
+      releaseDatabaseLease,
+    });
     await workspace.start();
     return workspace;
   } catch (error) {
     client.close();
+    releaseDatabaseLease();
     throw error;
   }
 }
@@ -98,6 +110,7 @@ export async function createXmtpWorkspace(
 interface RegistrationClient {
   isRegistered(): Promise<boolean>;
   register(): Promise<void>;
+  revokeAllOtherInstallations(): Promise<void>;
   close(): void;
 }
 
@@ -106,12 +119,47 @@ export async function recoverRegisteredClient<T extends RegistrationClient>(
 ): Promise<T> {
   const client = await createClient();
   try {
-    if (!(await client.isRegistered())) await client.register();
+    if (!(await client.isRegistered())) {
+      try {
+        await client.register();
+      } catch (error) {
+        if (!isInstallationLimitError(error)) throw error;
+        await client.revokeAllOtherInstallations();
+        await client.register();
+      }
+    }
     return client;
   } catch (error) {
     client.close();
     throw error;
   }
+}
+
+function isInstallationLimitError(error: unknown): boolean {
+  return error instanceof Error && /already registered 10\/10 installations/iu.test(error.message);
+}
+
+export async function acquireXmtpDatabaseLease(
+  environment: string,
+  address: string,
+): Promise<() => void> {
+  if (!navigator.locks) return () => undefined;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const acquired = new Promise<boolean>((resolve) => {
+    void navigator.locks.request(
+      `cthuwu:xmtp-db:v1:${environment}:${address.toLowerCase()}`,
+      { ifAvailable: true, mode: "exclusive" },
+      async (lock) => {
+        resolve(Boolean(lock));
+        if (lock) await held;
+      },
+    );
+  });
+  if (!(await acquired)) {
+    throw new Error("This XMTP identity is already open in another tab. Close the other Cthuwu tab, then retry.");
+  }
+  return release;
 }
 
 export class XmtpMultiChannelWorkspace implements ChatWorkspace {
@@ -159,12 +207,15 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.storage = options.storage ?? safeLocalStorage();
     this.uiStore = createChatUiStateStore(this.storage);
     this.resolveAssignment = options.resolveAssignment ?? resolveTentacleAssignment;
+    this.releaseDatabaseLease = options.releaseDatabaseLease;
     this.channels = {
       direct: channel("direct", "loading"),
       acolytes: channel("acolytes", "awaiting-assignment"),
       global: channel("global", "awaiting-assignment"),
     };
   }
+
+  private readonly releaseDatabaseLease?: () => void;
 
   async start(): Promise<void> {
     // Start every required stream before sending the join control message, so a fast assignment
@@ -301,6 +352,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     await Promise.all(this.streams.splice(0).map((stream) => stream.return().then(() => undefined)));
     this.client.close();
+    this.releaseDatabaseLease?.();
     this.emit();
   }
 

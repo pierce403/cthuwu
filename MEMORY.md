@@ -94,6 +94,10 @@ Last reviewed: 2026-08-12
   `client.register()`. Auto-registering on every launch creates needless installations and reaches
   XMTP's 10-installation inbox cap; an already registered installation must be recovered without a
   second register request.
+- The Browser SDK OPFS VFS does not support simultaneous connections. A per-environment/address Web
+  Locks lease rejects a competing tab before database open. If the recovered database is genuinely
+  unregistered and XMTP reports 10/10 installations, the local wallet signer revokes all other
+  installations and retries registration once without replacing the browser wallet identity.
 - The container also defaults XMTP to `production`. A transient node-economics refresh failure
   retries every second and retains the last verified treasury observation only until its freshness
   TTL expires; unknown or stale economics still fail closed. Base's built-in public RPC fallback is

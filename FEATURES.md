@@ -79,6 +79,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Browser startup reopens the Browser SDK's persisted installation, then queries XMTP registration
     state before registering. A routine reload never creates another installation for an inbox that
     XMTP already recognizes.
+  - One browser tab holds an exclusive Web Locks lease for the environment/address XMTP OPFS
+    database, preventing the Browser SDK's unsupported simultaneous database access. If a genuinely
+    new local installation encounters XMTP's 10/10 inbox limit, the local wallet signer revokes all
+    other installations and retries registration exactly once; it does not reset the wallet identity.
   - The in-progress channel workspace reuses this one `StoredIdentity` and one Browser SDK `Client`
     for Direct, Acolytes, and Global; it never creates one identity or client per tab.
   - The deployed browser always uses XMTP `production` and currently connects automatically to the
@@ -103,6 +107,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] Reset leaves unrelated and other-environment storage untouched.
   - [x] Browser identity tests prove a registered installation is recovered without another
     registration, while a genuinely new installation registers once and closes cleanly on failure.
+  - [x] Tests prove a competing tab is rejected before OPFS access and a 10/10 registration failure
+    revokes other installations once before one bounded registration retry.
   - [x] A full browser automation test verifies persistence across an actual page reload.
   - [x] Unit tests reject malformed, zero, duplicated, ambiguous, or unverifiable onboarding-link
     authority and prove first-touch referral pinning.
