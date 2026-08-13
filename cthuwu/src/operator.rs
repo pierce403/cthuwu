@@ -4813,22 +4813,31 @@ mod tests {
             .execute("create_file", r#"{"path":"note.md","content":"one"}"#)
             .await;
         assert!(created.ok);
-        assert!(!tools
-            .execute("create_file", r#"{"path":"note.md","content":"two"}"#)
-            .await
-            .ok);
-        assert!(tools
-            .execute(
-                "edit_file",
-                r#"{"path":"note.md","old_text":"one","new_text":"two"}"#,
-            )
-            .await
-            .ok);
-        assert_eq!(fs::read_to_string(root.path().join("note.md")).unwrap(), "two");
-        assert!(tools
-            .execute("delete_file", r#"{"path":"note.md"}"#)
-            .await
-            .ok);
+        assert!(
+            !tools
+                .execute("create_file", r#"{"path":"note.md","content":"two"}"#)
+                .await
+                .ok
+        );
+        assert!(
+            tools
+                .execute(
+                    "edit_file",
+                    r#"{"path":"note.md","old_text":"one","new_text":"two"}"#,
+                )
+                .await
+                .ok
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            "two"
+        );
+        assert!(
+            tools
+                .execute("delete_file", r#"{"path":"note.md"}"#)
+                .await
+                .ok
+        );
         assert!(!root.path().join("note.md").exists());
     }
 
