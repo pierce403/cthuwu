@@ -510,9 +510,14 @@ impl UwUBot {
             Ok(observation) => observation,
             Err(error) => {
                 warn!(%error, "required UWU balance observation is unavailable");
-                return Ok(format!(
-                    "economic verification is unavailable, so this Tentacle refuses token-dependent work until a current Base UWU balance can be confirmed. u can feed me an Infura API key or provider endpoint directly over XMTP with `/base-rpc-key <infura-api-key-or-https-endpoint>`; i'll validate, store, and use it myself. {}",
-                    BASE_RPC_HELP
+                let base_rpc_configured = self
+                    .base_rpc_control
+                    .as_ref()
+                    .and_then(|control| control.configured().ok())
+                    .unwrap_or(false);
+                return Ok(economic_verification_failure_response(
+                    authenticated_sender_address.is_some(),
+                    base_rpc_configured,
                 ));
             }
         };
@@ -1255,6 +1260,23 @@ fn identity_and_purpose_response(role: PrincipalRole) -> String {
     }
 }
 
+fn economic_verification_failure_response(
+    authenticated_sender_address_available: bool,
+    base_rpc_configured: bool,
+) -> String {
+    if !authenticated_sender_address_available {
+        return "i couldn't resolve a current SDK-authenticated EVM address for this XMTP sender, so i can't safely apply UWU-dependent policy to this message. no Base key is needed for that problem; please send a new message so the XMTP identity lookup can retry, fwiend uwu."
+            .to_owned();
+    }
+    if base_rpc_configured {
+        return "my stored Base RPC access is loaded, but the current Base UWU balance check failed. i won't pretend unknown economics are zero, and another key donation would not automatically replace the stored credential. please retry with a new message; if it keeps failing, my active operator can replace the Base RPC credential over XMTP, uwu."
+            .to_owned();
+    }
+    format!(
+        "economic verification needs working Base RPC access before i can apply UWU-dependent policy. u can feed me an Infura API key or provider endpoint directly over XMTP with `/base-rpc-key <infura-api-key-or-https-endpoint>`; i'll validate, store, and use it myself. {BASE_RPC_HELP}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1321,6 +1343,23 @@ mod tests {
 
         let operator = identity_and_purpose_response(PrincipalRole::Operator);
         assert_eq!(operator, public.to_ascii_uppercase());
+    }
+
+    #[test]
+    fn economic_failure_asks_for_a_key_only_when_one_is_missing() {
+        let missing_address = economic_verification_failure_response(false, true);
+        assert!(missing_address.contains("XMTP identity lookup"));
+        assert!(missing_address.contains("no Base key is needed"));
+        assert!(!missing_address.contains("/base-rpc-key"));
+
+        let configured_failure = economic_verification_failure_response(true, true);
+        assert!(configured_failure.contains("stored Base RPC access is loaded"));
+        assert!(!configured_failure.contains("/base-rpc-key"));
+        assert!(!configured_failure.contains(BASE_RPC_HELP));
+
+        let missing_rpc = economic_verification_failure_response(true, false);
+        assert!(missing_rpc.contains("/base-rpc-key"));
+        assert!(missing_rpc.contains("https://app.infura.io/"));
     }
 
     struct FailingModel;

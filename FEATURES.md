@@ -400,6 +400,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     privacy violations, fabricated intimacy, wallet-private-key requests, and unsupported promises.
   - Natural identity, purpose, goal, and mission questions bypass inference and receive the runtime's
     authoritative mission description, including its voluntary and honest operating constraints.
+  - A failed public UWU observation requests a donated Base RPC credential only when none is stored.
+    A missing SDK-authenticated sender address is identified as an XMTP identity-resolution failure,
+    while a failed call through stored RPC access asks for a retry or active-operator replacement;
+    neither case misleadingly tells an acolyte that another key is currently needed.
   - Common provider-identity boilerplate triggers one repair attempt and then a fixed Tentacle
     fallback rather than leaking the configured model identity as the companion.
   - The operator lane independently enforces the same Tentacle/Cthuwu/model distinction and
