@@ -244,11 +244,12 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     from current local registry state before model inference, including the confirmed agent ID and
     phase. Replies explicitly preserve the ontology: each durable Tentacle owns its identity; the
     singular centerless Cthuwu collective owns no ERC-8004 identity.
-  - An authenticated operator's natural Base-funding checks—including “check your balance” and a
-    short “did you see it?” follow-up while registration is awaiting funds—bypass model inference,
-    perform a bounded native registration refresh with private wallet/RPC state, and may resume
-    registration immediately. `/registry-refresh` exposes the same deterministic action. The model
-    is never asked to locate the private identity in workspace files or invent a shell command.
+  - Authenticated operator inference always receives compiled `base_rpc_status`, `erc8004_status`,
+    and `erc8004_refresh` tools. The model selects them from natural intent after reading the relevant
+    discovered skill instead of relying on hard-coded query phrases. They expose the public wallet,
+    sanitized RPC configuration, registration state, and current funding result while withholding
+    endpoints, credentials, private keys, and XMTP database material. Live refresh may resume the
+    existing automatic registration state machine; slash commands remain deterministic controls.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.

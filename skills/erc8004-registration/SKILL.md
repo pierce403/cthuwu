@@ -8,9 +8,10 @@ description: Inspect, refresh, recover, and explain this Tentacle's canonical Ba
 Use this skill for questions about this durable Tentacle's ERC-8004 identity, agent ID, funding,
 registration progress, recovery, or allegiance.
 
-1. Use `/registry-status` for persisted status and `/registry-refresh` when the operator asks for a
+1. Use `erc8004_status` for persisted state and `erc8004_refresh` when the operator asks for a
    current balance, says funds were sent, or asks the Tentacle to resume. Refresh performs a bounded
-   live reconciliation and may automatically advance the existing registration intent.
+   live reconciliation and may automatically advance the existing registration intent. Slash
+   commands remain deterministic recovery controls, not the ordinary natural-language path.
 2. Treat only a confirmed agent ID in active verified state as successful registration. A submitted
    transaction, candidate, funding estimate, or local intent is not a confirmed registration.
 3. Explain blockers from the returned phase and receipt. For Base ETH, quote only the runtime's

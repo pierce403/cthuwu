@@ -289,24 +289,6 @@ impl UwUBot {
                         role,
                     )));
                 }
-                if is_natural_registry_status_request(message.text)
-                    && let Some(control) = &self.registry_control
-                    && let Some(response) = control.public_status().await
-                {
-                    return Ok(Some(limit_response(response.to_ascii_uppercase(), role)));
-                }
-                if is_natural_base_balance_request(message.text)
-                    && let Some(control) = &self.registry_control
-                    && let Some(response) = control.refresh_status().await
-                {
-                    return Ok(Some(limit_response(response.to_ascii_uppercase(), role)));
-                }
-                if is_contextual_resource_followup(message.text)
-                    && let Some(control) = &self.registry_control
-                    && let Some(response) = control.refresh_status_if_awaiting_funding().await
-                {
-                    return Ok(Some(limit_response(response.to_ascii_uppercase(), role)));
-                }
                 if message.text.trim().to_ascii_lowercase().starts_with("/registry-")
                     && let Some(control) = &self.registry_control
                     && let Some(response) = control.handle(message.text).await
@@ -1240,37 +1222,6 @@ fn is_natural_registry_status_request(text: &str) -> bool {
     names_registry && asks_status
 }
 
-fn is_natural_base_balance_request(text: &str) -> bool {
-    let normalized = text.to_ascii_lowercase();
-    [
-        "check your balance",
-        "check ur balance",
-        "check the balance",
-        "base eth balance",
-        "base balance",
-        "check your funds",
-        "did the funds arrive",
-        "did you receive the funds",
-        "did you get the funds",
-        "did you see the funds",
-        "did the eth arrive",
-        "did the base eth arrive",
-        "did you see the eth",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
-}
-
-fn is_contextual_resource_followup(text: &str) -> bool {
-    matches!(
-        text.to_ascii_lowercase()
-            .trim()
-            .trim_end_matches(['?', '!', '.', ','])
-            .trim(),
-        "did you see it" | "did u see it" | "did you get it" | "did u get it"
-    )
-}
-
 fn is_natural_identity_or_purpose_request(text: &str) -> bool {
     let normalized = text.to_ascii_lowercase();
     let trimmed = normalized
@@ -1592,14 +1543,6 @@ mod tests {
         async fn public_status(&self) -> Option<String> {
             Some("authoritative Tentacle ERC-8004 status: agent ID `42`".to_owned())
         }
-
-        async fn refresh_status(&self) -> Option<String> {
-            Some("fresh Base balance: 121000000000000 wei; registration resumed".to_owned())
-        }
-
-        async fn refresh_status_if_awaiting_funding(&self) -> Option<String> {
-            Some("fresh Base balance: 121000000000000 wei; registration resumed".to_owned())
-        }
     }
 
     #[async_trait::async_trait]
@@ -1796,42 +1739,6 @@ mod tests {
             "authoritative Tentacle ERC-8004 status: agent ID `42`"
         );
         assert!(model.messages.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn operator_balance_and_funding_followups_refresh_registration_without_model_inference() {
-        let root = tempfile::tempdir().unwrap();
-        let mut operators = OperatorStore::new(root.path(), "production").unwrap();
-        operators
-            .add_at(OPERATOR_ID, "Dean", "1749999999999999999")
-            .unwrap();
-        let model = Arc::new(RecordingModel {
-            messages: StdMutex::new(Vec::new()),
-        });
-        let bot = default_nature_bot(
-            root.path(),
-            model.clone(),
-            operators,
-            Arc::new(RecordingTools {
-                calls: StdMutex::new(Vec::new()),
-            }),
-        )
-        .with_registry_control(Arc::new(PublicStatusControl));
-
-        for (sequence, message) in ["check your balance", "did you see it?"].iter().enumerate() {
-            let response = send(&bot, sequence + 1, OPERATOR_ID, message).await;
-            assert!(response.contains("FRESH BASE BALANCE: 121000000000000 WEI"));
-        }
-        assert!(model.messages.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn recognizes_native_base_balance_requests_without_overmatching_vague_followups() {
-        assert!(is_natural_base_balance_request("check your balance"));
-        assert!(is_natural_base_balance_request("Did the Base ETH arrive?"));
-        assert!(!is_natural_base_balance_request("check Alice's balance"));
-        assert!(is_contextual_resource_followup("did you see it?"));
-        assert!(!is_contextual_resource_followup("did you see the comet?"));
     }
 
     #[tokio::test]

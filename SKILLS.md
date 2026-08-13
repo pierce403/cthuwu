@@ -6,8 +6,8 @@ Skills are reusable procedures, not general project notes.
 
 - [Bounded skill creation](skills/skill-creator/SKILL.md): create one new reusable workspace skill
   only when the current authenticated operator message explicitly requests it.
-- [Base balance checks](skills/base-balances/SKILL.md): reconcile this Tentacle's Base ETH funding
-  through the private native runtime rather than guessing from workspace files or model context.
+- [Base balance checks](skills/base-balances/SKILL.md): use sanitized operator runtime tools to
+  reconcile this Tentacle's Base ETH funding without exposing RPC credentials or private keys.
 - [ERC-8004 registration](skills/erc8004-registration/SKILL.md): inspect, refresh, recover, and
   truthfully explain the Tentacle's canonical Base agent registration.
 - [XMTP end-to-end verification](skills/xmtp-e2e/SKILL.md): validate a browser-to-local-runtime message exchange without leaking secrets.

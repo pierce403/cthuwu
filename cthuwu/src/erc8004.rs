@@ -1942,6 +1942,41 @@ impl TentacleRegistration {
         lines.join("\n")
     }
 
+    fn model_status_text(&self) -> String {
+        let mut lines = vec![
+            format!("ERC-8004 STATUS: {:?}", self.state.phase).to_ascii_uppercase(),
+            "CHAIN: BASE MAINNET (8453)".to_owned(),
+            format!("TENTACLE WALLET: {}", self.wallet),
+            format!(
+                "AGENT ID: {}",
+                self.state
+                    .confirmed_agent_id
+                    .as_deref()
+                    .unwrap_or("not confirmed")
+            ),
+        ];
+        if let Some(funding) = &self.state.funding {
+            lines.extend([
+                format!("CURRENT BASE ETH BALANCE: {} WEI", funding.balance_wei),
+                format!(
+                    "ESTIMATED REGISTRATION COST: {} WEI",
+                    funding.estimated_cost_wei
+                ),
+                format!("ESTIMATED SHORTFALL: {} WEI", funding.shortfall_wei),
+                format!("TARGET FUNDED BALANCE: {} WEI", funding.target_balance_wei),
+                format!("FUNDING OBSERVED AT UNIX: {}", funding.estimated_at_unix),
+            ]);
+        }
+        if let Some(failure) = &self.state.failure {
+            lines.push(format!("FAILURE CODE: {}", failure.code));
+            lines.push(format!("RECOVERABLE: {}", failure.recoverable));
+            if is_base_rpc_access_failure(failure) {
+                lines.push("BASE RPC ACCESS BLOCKED: true".to_owned());
+            }
+        }
+        lines.join("\n")
+    }
+
     pub fn public_status_text(&self) -> String {
         let phase = format!("{:?}", self.state.phase);
         match self.state.confirmed_agent_id.as_deref() {
@@ -2430,8 +2465,8 @@ pub trait RegistrationOperatorControl: Send + Sync {
         None
     }
 
-    async fn refresh_status_if_awaiting_funding(&self) -> Option<String> {
-        None
+    async fn model_status(&self) -> Option<String> {
+        self.public_status().await
     }
 
     async fn public_status(&self) -> Option<String> {
@@ -2504,26 +2539,16 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
     async fn refresh_status(&self) -> Option<String> {
         let mut registration = self.registration.lock().await;
         Some(match registration.maintain(false).await {
-            Ok(_) => registration.status_text(),
-            Err(error) => format!(
-                "I COULD NOT REFRESH MY BASE FUNDING AND ERC-8004 STATE: {error}. {}",
-                registration.status_text()
+            Ok(_) => registration.model_status_text(),
+            Err(_) => format!(
+                "I COULD NOT REFRESH MY BASE FUNDING AND ERC-8004 STATE. {}",
+                registration.model_status_text()
             ),
         })
     }
 
-    async fn refresh_status_if_awaiting_funding(&self) -> Option<String> {
-        let mut registration = self.registration.lock().await;
-        if registration.state.phase != RegistrationPhase::FundingRequired {
-            return None;
-        }
-        Some(match registration.maintain(false).await {
-            Ok(_) => registration.status_text(),
-            Err(error) => format!(
-                "I COULD NOT REFRESH MY BASE FUNDING AND ERC-8004 STATE: {error}. {}",
-                registration.status_text()
-            ),
-        })
+    async fn model_status(&self) -> Option<String> {
+        Some(self.registration.lock().await.model_status_text())
     }
 
     async fn take_public_funding_plea(&self) -> Option<String> {

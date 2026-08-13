@@ -882,7 +882,8 @@ async fn main() -> Result<()> {
     let operator_harness = Arc::new(
         OperatorHarness::new(operator_model, operator_tools, operator_context)
             .with_model_control(router.clone())
-            .with_base_rpc_control(base_rpc_control.clone()),
+            .with_base_rpc_control(base_rpc_control.clone())
+            .with_registry_control(registry_control.clone()),
     );
     let bot = UwUBot::new(
         contacts,
