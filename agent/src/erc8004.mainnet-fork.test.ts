@@ -275,6 +275,7 @@ describe.skipIf(!RUN_MAINNET_FORK)(
             type: "discover",
             wallet,
             registrationNonce,
+            scope: "exhaustive",
           }),
         );
         expect(discovered.complete).toBe(true);

@@ -1178,8 +1178,12 @@ phase.
     opts an identity in.
   - The persistent XMTP wallet is the Tentacle's Base identity and verified nonzero `agentWallet`.
     Transfer, wallet clearing, ownership/operator loss, or wallet mismatch suspends the identity.
-  - Startup reverifies persisted identity, discovers candidates, adopts one exact authorized match,
-    requires operator selection for ambiguity, and can opt an existing agent in without minting.
+  - Startup directly reverifies a persisted agent ID. A pristine identity performs only a recent
+    20,000-block candidate scan (at most two 10,000-block log ranges) before funding/registering;
+    exhaustive history is reserved for an unresolved persisted registration nonce or the explicit
+    authenticated operator `registry recover` action. Discovery RPC failures back maintenance from
+    15 minutes to at least one hour. Candidate ambiguity still requires operator selection, and an
+    existing discovered agent can be opted in without minting.
   - The first registration-supervisor pass on every boot is an explicit resource audit. It bypasses
     the ordinary notification cooldown for a currently verified Base ETH shortfall and sends the
     sole operator an immediate, exact Base-only funding demand; a recoverable Base RPC blocker gets

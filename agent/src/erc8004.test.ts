@@ -471,6 +471,30 @@ describe("narrow ERC-8004 signer protocol", () => {
     }
   });
 
+  it("limits automatic recent discovery to two 10,000-block requests", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const observedBlockNumber = ERC8004_START_BLOCK + 1_000_000n;
+    const result = await discoverAgents(
+      {
+        getBlock: async () => ({
+          number: observedBlockNumber,
+          hash: `0x${"aa".repeat(32)}`,
+        }),
+        request: async (value: Record<string, unknown>) => {
+          requests.push(value);
+          return [];
+        },
+      } as never,
+      WALLET,
+      undefined,
+      "recent",
+    ) as { fromBlock: string; candidates: unknown[] };
+
+    expect(requests).toHaveLength(2);
+    expect(result.fromBlock).toBe((observedBlockNumber - 19_999n).toString());
+    expect(result.candidates).toEqual([]);
+  });
+
   it("cancels new discovery chunks and awaits every in-flight worker before rejecting", async () => {
     let markAllStarted: (() => void) | undefined;
     const allStarted = new Promise<void>((resolve) => {

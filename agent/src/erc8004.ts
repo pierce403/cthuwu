@@ -70,6 +70,7 @@ const MAX_OPERATOR_OWNERS = 64;
 // Base's public mainnet RPC rejects eth_getLogs ranges wider than 10,000
 // blocks. Keep this inclusive range pinned to that real production limit.
 const LOG_BLOCK_SPAN = 10_000n;
+const RECENT_DISCOVERY_BLOCKS = 20_000n;
 const DISCOVERY_CONCURRENCY = 5;
 const RPC_RETRY_ATTEMPTS = 3;
 const RPC_RETRY_BASE_DELAY_MS = 1_100;
@@ -116,7 +117,7 @@ type ReadOperation =
       observedBlockHash?: Hex;
     }
   | { type: "inspect_agent"; agentId: string; wallet: string }
-  | { type: "discover"; wallet: string; registrationNonce?: string }
+  | { type: "discover"; wallet: string; registrationNonce?: string; scope: "recent" | "exhaustive" }
   | { type: "receipt"; transactionHash: string }
   | {
       type: "funding_estimate";
@@ -389,15 +390,19 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
       exactKeys(
         operation,
         operation.registrationNonce === undefined
-          ? ["type", "wallet"]
-          : ["type", "wallet", "registrationNonce"],
+          ? ["type", "wallet", "scope"]
+          : ["type", "wallet", "registrationNonce", "scope"],
       );
+      if (operation.scope !== "recent" && operation.scope !== "exhaustive") {
+        throw new PermanentSignerError("invalid_request", "discovery scope must be recent or exhaustive");
+      }
       return {
         version: 1,
         actionId,
         operation: {
           type: "discover",
           wallet: walletAddress(operation.wallet),
+          scope: operation.scope,
           ...(operation.registrationNonce === undefined
             ? {}
             : { registrationNonce: transactionNonce(operation.registrationNonce) }),
@@ -1012,10 +1017,11 @@ async function getLogsChunked(
   accept: (log: DiscoveryLog) => boolean,
   budget: { logs: number },
   observedBlockNumber: bigint,
+  firstBlock = ERC8004_START_BLOCK,
 ): Promise<readonly DiscoveryLog[]> {
   const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
   for (
-    let fromBlock = ERC8004_START_BLOCK;
+    let fromBlock = firstBlock;
     fromBlock <= observedBlockNumber;
     fromBlock += LOG_BLOCK_SPAN
   ) {
@@ -1124,6 +1130,7 @@ export async function discoverAgents(
   publicClient: PublicClient,
   wallet: Address,
   registrationNonce?: string,
+  scope: "recent" | "exhaustive" = "exhaustive",
 ): Promise<unknown> {
   // Recovery decisions must never compare logs from one RPC head with a nonce from another.
   // Use a canonical finalized observation and echo its number/hash for a later EIP-1898-pinned
@@ -1137,6 +1144,11 @@ export async function discoverAgents(
   }
   const observedBlockNumber = observedBlock.number;
   const observedBlockHash = observedBlock.hash;
+  const firstBlock = scope === "recent"
+    ? observedBlockNumber - ERC8004_START_BLOCK + 1n > RECENT_DISCOVERY_BLOCKS
+      ? observedBlockNumber - RECENT_DISCOVERY_BLOCKS + 1n
+      : ERC8004_START_BLOCK
+    : ERC8004_START_BLOCK;
   const budget = { logs: 0 };
   const walletTopic = pad(wallet, { size: 32 });
   const combined = await getLogsChunked(
@@ -1166,6 +1178,7 @@ export async function discoverAgents(
     },
     budget,
     observedBlockNumber,
+    firstBlock,
   );
   const registered: DiscoveryLog[] = [];
   const transferred: DiscoveryLog[] = [];
@@ -1234,6 +1247,7 @@ export async function discoverAgents(
         (log.eventName === "Transfer" && log.args.to === owner),
       budget,
       observedBlockNumber,
+      firstBlock,
     );
     for (const log of ownerLogs) {
       if (log.eventName === "Registered" && log.args.owner === owner) {
@@ -1297,7 +1311,7 @@ export async function discoverAgents(
   }
   return {
     complete: true,
-    fromBlock: ERC8004_START_BLOCK.toString(),
+    fromBlock: firstBlock.toString(),
     observedBlockNumber: observedBlockNumber.toString(),
     observedBlockHash,
     matchedRegistrationAgentIds: [...matchedRegistrationAgentIds],
@@ -1698,6 +1712,7 @@ export async function handleErc8004Request(
           publicClient,
           getAddress(operation.wallet),
           operation.registrationNonce,
+          operation.scope,
         );
         break;
       case "receipt":

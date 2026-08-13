@@ -68,6 +68,7 @@ const DEFAULT_HELPER_TIMEOUT: Duration = Duration::from_secs(180);
 const DEFAULT_CONFIRMATIONS: u64 = 12;
 const DEFAULT_NOTIFICATION_COOLDOWN_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAINTENANCE_INTERVAL_SECONDS: u64 = 15 * 60;
+const RECOVERABLE_RPC_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -813,12 +814,31 @@ impl TentacleRegistration {
     }
 
     pub fn maintenance_interval(&self) -> Duration {
+        if self
+            .state
+            .failure
+            .as_ref()
+            .is_some_and(is_base_rpc_access_failure)
+        {
+            return self.config.maintenance_interval.max(Duration::from_secs(
+                RECOVERABLE_RPC_MAINTENANCE_INTERVAL_SECONDS,
+            ));
+        }
         self.config.maintenance_interval
     }
 
     pub async fn maintain(
         &mut self,
         force_registration: bool,
+    ) -> Result<Vec<OperatorNotification>> {
+        self.maintain_with_discovery(force_registration, false)
+            .await
+    }
+
+    async fn maintain_with_discovery(
+        &mut self,
+        force_registration: bool,
+        exhaustive_discovery: bool,
     ) -> Result<Vec<OperatorNotification>> {
         let now = unix_seconds()?;
         if !self.config.enabled {
@@ -895,6 +915,7 @@ impl TentacleRegistration {
         let mut discover_operation = json!({
             "type": "discover",
             "wallet": self.wallet.to_string(),
+            "scope": if unresolved_register || exhaustive_discovery { "exhaustive" } else { "recent" },
         });
         if unresolved_register && let Some(nonce) = self.state.submitted_transaction_nonce.as_ref()
         {
@@ -2453,8 +2474,12 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
             "/registry-republish" => registration.republish_profile().await,
             "/registry-pending" => registration.inspect_pending().await,
             "/registry-retry" => registration.retry().await,
+            "/registry-recover" => registration
+                .maintain_with_discovery(false, true)
+                .await
+                .map(|_| registration.status_text()),
             _ if command.to_ascii_lowercase().starts_with("/registry-") => Err(anyhow::anyhow!(
-                "unknown registry command; use status, candidates, adopt, register, allegiance on|off, republish, pending, or retry"
+                "unknown registry command; use status, candidates, adopt, register, allegiance on|off, republish, pending, retry, or recover"
             )),
             _ => return None,
         };
@@ -3870,6 +3895,48 @@ mod tests {
             1,
         );
         assert!(is_base_rpc_access_failure(&failure));
+    }
+
+    #[test]
+    fn recoverable_rpc_failure_backs_off_automatic_maintenance() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+        registration.config.maintenance_interval = Duration::from_secs(15 * 60);
+        registration.state.failure = Some(failure_from_error(
+            "RPC request failed: over rate limit",
+            true,
+            1,
+        ));
+        assert_eq!(
+            registration.maintenance_interval(),
+            Duration::from_secs(60 * 60)
+        );
+
+        registration.state.failure = None;
+        assert_eq!(
+            registration.maintenance_interval(),
+            Duration::from_secs(15 * 60)
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_discovery_is_recent_and_explicit_recovery_is_exhaustive() {
+        for (exhaustive, expected_scope) in [(false, "recent"), (true, "exhaustive")] {
+            let root = tempfile::tempdir().unwrap();
+            let gateway = Arc::new(ScriptedGateway::new(vec![
+                ("inspect_registry", ScriptResult::Ok(json!({}))),
+                ("discover", ScriptResult::Err("RPC request failed")),
+            ]));
+            let mut registration = scripted_registration(root.path(), gateway.clone());
+            registration.state.xmtp_inbox_id = Some("ab".repeat(32));
+            registration
+                .maintain_with_discovery(false, exhaustive)
+                .await
+                .unwrap();
+            let operations = gateway.operations();
+            assert_eq!(operations[1]["scope"], expected_scope);
+            gateway.assert_exhausted();
+        }
     }
 
     #[tokio::test]
