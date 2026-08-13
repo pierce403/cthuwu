@@ -464,6 +464,13 @@ h1 .uwu {
   color: var(--text);
 }
 
+.referral-status {
+  min-height: 1em;
+  margin: 0;
+  color: var(--mint);
+  font-size: 0.72rem;
+}
+
 .chat {
   position: relative;
   display: grid;

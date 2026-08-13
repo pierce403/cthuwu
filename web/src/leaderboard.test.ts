@@ -83,6 +83,9 @@ describe("Tentacle leaderboard UI", () => {
     expect(elements.ranked.textContent).toContain("Cache Tentacle");
     expect(elements.ranked.textContent).toContain("UWU1");
     expect(elements.ranked.textContent).toContain("0.00");
+    expect(elements.ranked.querySelector<HTMLAnchorElement>(".tentacle-wallet a")?.getAttribute("href")).toBe(
+      "/#t=0x1111111111111111111111111111111111111111",
+    );
     expect(elements.status.textContent).toBe("REFRESHING");
     expect(pending).toHaveBeenCalledTimes(1);
     resolveRequest?.(new Response("unavailable", { status: 503 }));

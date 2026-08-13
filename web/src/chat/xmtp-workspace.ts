@@ -187,6 +187,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       assignmentState: this.assignmentState,
       assignmentNotice: this.assignmentNotice,
       tentacleName: this.tentacleName,
+      ...(this.currentAssignment ? { assignedTentacleAddress: this.currentAssignment.address } : {}),
       channels: Object.fromEntries(
         CHAT_CHANNELS.map((id) => {
           const value = this.channels[id];

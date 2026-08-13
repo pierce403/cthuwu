@@ -89,6 +89,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     the intro route only after Agent0 discovery and same-block canonical ERC-8004 wallet,
     authorization, allegiance, protocol, and XMTP endpoint verification. The first valid `r` value
     is pinned per local acolyte identity and later links cannot replace it.
+  - Every verified leaderboard wallet address links to the root chat fragment for that Tentacle.
+    The main chat interface can copy a social referral URL whose `t` is the currently assigned
+    Tentacle and whose `r` is the sharer's locally recovered browser wallet.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -103,6 +106,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] A full browser automation test verifies persistence across an actual page reload.
   - [x] Unit tests reject malformed, zero, duplicated, ambiguous, or unverifiable onboarding-link
     authority and prove first-touch referral pinning.
+  - [x] UI tests prove leaderboard wallet links target Direct chat and copied referral URLs bind the
+    current assigned Tentacle and local acolyte address in the browser-only fragment.
 
 ### Browser-to-Cthuwu XMTP direct-message baseline
 

@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
+import { recruitmentUrl } from "../onboarding-links";
 import { createXmtpWorkspace } from "./xmtp-workspace";
 import {
   CHAT_CHANNELS,
@@ -51,6 +52,8 @@ interface ChatElements {
   badges: Record<ChatChannel, HTMLElement>;
   activity: HTMLElement;
   rewardStatus: HTMLElement;
+  copyReferral: HTMLButtonElement;
+  referralStatus: HTMLElement;
   brandingDialog: HTMLDialogElement;
   brandingPrice: HTMLElement;
   brandingUpkeep: HTMLElement;
@@ -104,6 +107,7 @@ export function initializeChatController(
     elements.name.textContent = channelId === "direct"
       ? snapshot.tentacleName
       : channelId === "acolytes" ? `${snapshot.tentacleName} · acolytes` : "Cthuwu · global";
+    elements.copyReferral.disabled = !snapshot.assignedTentacleAddress;
     elements.panel.setAttribute("aria-labelledby", `tab-${channelId}`);
     elements.messages.setAttribute("aria-label", `${CHANNEL_LABELS[channelId]} channel messages`);
     elements.composerLabel.textContent = `Message the ${CHANNEL_LABELS[channelId]} channel`;
@@ -326,6 +330,21 @@ export function initializeChatController(
   };
   elements.brandingAccept.addEventListener("click", () => answerBrandingOffer(true));
   elements.brandingDecline.addEventListener("click", () => answerBrandingOffer(false));
+  elements.copyReferral.addEventListener("click", () => {
+    const target = latest?.assignedTentacleAddress;
+    if (!target) return;
+    const url = recruitmentUrl(location.origin, target, identity.address);
+    const copy = navigator.clipboard?.writeText(url);
+    if (!copy) {
+      elements.referralStatus.textContent = "could not copy the referral link";
+      return;
+    }
+    void copy.then(() => {
+      elements.referralStatus.textContent = "referral link copied";
+    }).catch(() => {
+      elements.referralStatus.textContent = "could not copy the referral link";
+    });
+  });
 
   const closeWorkspace = async (): Promise<void> => {
     unsubscribe?.();
@@ -387,6 +406,8 @@ function chatElements(): ChatElements {
     badges,
     activity: required("activity-card"),
     rewardStatus: required("reward-status"),
+    copyReferral: required("copy-referral"),
+    referralStatus: required("referral-status"),
     brandingDialog: required("branding-offer"),
     brandingPrice: required("branding-price"),
     brandingUpkeep: required("branding-upkeep"),

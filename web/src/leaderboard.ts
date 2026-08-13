@@ -345,7 +345,7 @@ function renderWallet(group: RankedWallet, now: Date): HTMLElement {
 
   const walletRow = element("div", "tentacle-wallet");
   walletRow.append(text("span", "Base agentWallet"));
-  walletRow.append(externalLink(shortAddress(group.wallet), `${BASE_EXPLORER}/address/${group.wallet}`));
+  walletRow.append(talkLink(shortAddress(group.wallet), group.wallet));
   walletRow.append(copyButton(group.wallet, "Copy agentWallet"));
 
   const raw = element("p", "tentacle-raw");
@@ -503,6 +503,14 @@ function externalLink(label: string, href: string): HTMLAnchorElement {
   link.href = href;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
+  return link;
+}
+
+function talkLink(label: string, wallet: string): HTMLAnchorElement {
+  const link = document.createElement("a");
+  link.textContent = label;
+  link.href = `/#t=${wallet.toLowerCase()}`;
+  link.setAttribute("aria-label", `Talk directly with Tentacle ${wallet}`);
   return link;
 }
 

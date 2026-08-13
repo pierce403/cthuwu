@@ -8,6 +8,8 @@ Last reviewed: 2026-08-12
   active Branding wins. The first valid `r` is pinned per browser identity and is surfaced in the
   Branding invitation, but the invitation remains only an XMTP receipt until exact EIP-712 consent
   and a confirmed mint are implemented.
+- Leaderboard wallet addresses are Direct-chat links. The root UI copies social recruitment URLs
+  using the currently assigned Tentacle for `t` and the local browser identity for `r`.
 
 ## Product
 

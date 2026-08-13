@@ -45,6 +45,7 @@ function initialSnapshot(): WorkspaceSnapshot {
     assignmentState: "intro-unconfigured",
     assignmentNotice: "Branding routing pending deployment",
     tentacleName: "Intro Tentacle",
+    assignedTentacleAddress: config.botAddress,
     channels: {
       direct: {
         ...channel("direct"),
@@ -102,6 +103,10 @@ describe("three-channel chat controller", () => {
       configurable: true,
       value: vi.fn(),
     });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
   });
 
   it("renders text safely and sends through the exact active tab", async () => {
@@ -116,6 +121,12 @@ describe("three-channel chat controller", () => {
     expect(document.querySelector("#unread-acolytes")?.textContent).toBe("3");
     expect(document.querySelector<HTMLElement>("#unread-acolytes")?.hidden).toBe(false);
     expect(document.querySelector("#retention-notice")?.textContent).toContain("after 14 days");
+
+    document.querySelector<HTMLButtonElement>("#copy-referral")?.click();
+    await vi.waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${location.origin}/#t=${config.botAddress}&r=${identity.address}`,
+    ));
+    expect(document.querySelector("#referral-status")?.textContent).toBe("referral link copied");
 
     document.querySelector<HTMLButtonElement>("#tab-direct")?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),

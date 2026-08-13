@@ -50,6 +50,7 @@ export interface WorkspaceSnapshot {
   assignmentState: AssignmentState;
   assignmentNotice: string;
   tentacleName: string;
+  assignedTentacleAddress?: string;
   channels: Record<ChatChannel, ChannelSnapshot>;
 }
 

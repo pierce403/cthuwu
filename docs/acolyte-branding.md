@@ -26,6 +26,11 @@ receipt names it. That receipt is still not an EIP-712 mint consent or a transac
 mint path must copy the same address into `MintConsent.referrer`, obtain the acolyte signature, and
 verify the confirmed Base transaction before claiming the Branding exists.
 
+The public Tentacle leaderboard turns each verified `agentWallet` into a direct-chat link using the
+same `#t=` fragment. Once assignment resolves, the main chat page can copy a recruitment URL with
+that assigned Tentacle as `t` and the current local browser identity as `r`; neither address enters
+the HTTP request.
+
 ## Roles and on-chain boundary
 
 Every Branding has four distinct roles:

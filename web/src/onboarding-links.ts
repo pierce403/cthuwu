@@ -29,6 +29,13 @@ export function pinReferrer(
   return offered;
 }
 
+export function recruitmentUrl(origin: string, tentacle: string, referrer: string): string {
+  const target = getAddress(tentacle).toLowerCase();
+  const recruiter = getAddress(referrer).toLowerCase();
+  if (target === ZERO || recruiter === ZERO) throw new Error("Recruitment addresses must be nonzero");
+  return `${new URL(origin).origin}/#t=${target}&r=${recruiter}`;
+}
+
 function addressParam(params: URLSearchParams, name: string): string {
   if (params.getAll(name).length !== 1) throw new Error(`The ${name} link parameter must appear once`);
   try {
