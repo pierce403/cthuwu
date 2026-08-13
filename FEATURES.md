@@ -225,8 +225,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     out-of-band `/venice-key <api-key>` provisioning request before deterministic inference can
     mask the missing dependency.
   - A recoverable Base RPC/rate-limit failure in ERC-8004 registration asks both the authenticated
-    operator and acolytes for `/base-rpc-key <https-endpoint>`, gives exact Alchemy and QuickNode
-    URLs and copy instructions, and warns against wallet private keys. The runtime validates chain
+    operator and acolytes for `/base-rpc-key <infura-api-key-or-https-endpoint>`, prefers Infura's
+    free plan with exact dashboard and copy instructions, and warns against wallet private keys. A
+    bounded Infura key is converted locally to its Base Mainnet endpoint. The runtime validates chain
     8453, persists the first acolyte donation owner-only, and hot-loads it for UWU observation and
     ERC-8004 work; only the active operator may replace it.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator

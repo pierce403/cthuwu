@@ -8,10 +8,12 @@ use async_trait::async_trait;
 use std::{fs, io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
-pub const BASE_RPC_HELP: &str = "paste the full Base Mainnet HTTPS RPC endpoint, not a wallet key. Alchemy: open https://dashboard.alchemy.com/, create or select an app on Base Mainnet, copy its HTTPS endpoint, then send `/base-rpc-key <https-endpoint>`. QuickNode: follow https://www.quicknode.com/docs/base/quickstart, create a Base Mainnet endpoint, copy its HTTP Provider URL, then send the same command. the command remains in your XMTP history, so use a restricted provider key when possible.";
+pub const BASE_RPC_HELP: &str = "Infura is preferred because it offers a free plan: open https://app.infura.io/, sign in or create an account, create an API key with Base enabled, copy its API key, then send `/base-rpc-key <infura-api-key>`. u may also paste a full Base Mainnet HTTPS RPC endpoint. i'll validate chain 8453 before keeping it. the command remains in your XMTP history, so restrict the key to Base and this Tentacle when the provider allows it.";
 pub const VENICE_KEY_HELP: &str = "open https://venice.ai/settings/api, choose Generate New API Key, select Inference Only, add an expiry or spending limit if desired, copy it when shown, then send `/venice-key <api-key>`. the command remains in your XMTP history.";
 
 const MAX_ENDPOINT_BYTES: u64 = 4 * 1024;
+const INFURA_KEY_BYTES: usize = 32;
+const INFURA_BASE_ENDPOINT_PREFIX: &str = "https://base-mainnet.infura.io/v3/";
 
 #[derive(Debug)]
 pub struct RpcProvisionReply {
@@ -93,7 +95,8 @@ impl BaseRpcControl for BaseRpcStore {
                 response: "a Base RPC credential is already loaded, fwiend. only the active operator may replace it.".to_owned(),
             });
         }
-        let validator = JsonRpcTokenTransport::for_chain(candidate, BASE_MAINNET_CHAIN_ID)
+        let endpoint = endpoint_from_donation(candidate)?;
+        let validator = JsonRpcTokenTransport::for_chain(&endpoint, BASE_MAINNET_CHAIN_ID)
             .map_err(anyhow::Error::new)
             .context("the donated value is not a safe HTTPS RPC endpoint")?;
         validator
@@ -101,15 +104,30 @@ impl BaseRpcControl for BaseRpcStore {
             .await
             .map_err(anyhow::Error::new)
             .context("the donated endpoint did not validate as Base Mainnet")?;
-        self.save(candidate)?;
+        self.save(&endpoint)?;
         self.endpoint
-            .replace(candidate)
+            .replace(&endpoint)
             .map_err(anyhow::Error::new)
             .context("activating the validated Base RPC endpoint")?;
         Ok(RpcProvisionReply {
-            response: "i validated that endpoint as Base Mainnet chain 8453, tucked it into owner-only local storage, and started using it without a restart, fwiend. thank u for feeding this Tentacle, uwu.".to_owned(),
+            response: "i validated that donated Infura key or endpoint as Base Mainnet chain 8453, tucked it into owner-only local storage, and started using it without a restart, fwiend. thank u for feeding this Tentacle, uwu.".to_owned(),
         })
     }
+}
+
+fn endpoint_from_donation(candidate: &str) -> Result<String> {
+    if candidate.len() == INFURA_KEY_BYTES
+        && candidate.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Ok(format!("{INFURA_BASE_ENDPOINT_PREFIX}{candidate}"));
+    }
+    if candidate.contains(char::is_whitespace) {
+        bail!("Base RPC donation must be one Infura API key or one HTTPS endpoint");
+    }
+    RpcEndpointHandle::new(candidate)
+        .map_err(anyhow::Error::new)
+        .context("the donated value is neither an Infura API key nor a safe RPC endpoint")?;
+    Ok(candidate.to_owned())
 }
 
 fn load_endpoint(path: &std::path::Path) -> Result<Option<String>> {
@@ -209,5 +227,16 @@ mod tests {
         let error = store.provision(&endpoint, false).await.unwrap_err();
         assert!(!error.to_string().contains(&endpoint));
         assert!(!store.configured().unwrap());
+    }
+
+    #[test]
+    fn infura_api_key_is_recognized_without_accepting_arbitrary_text() {
+        let key = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            endpoint_from_donation(key).unwrap(),
+            format!("{INFURA_BASE_ENDPOINT_PREFIX}{key}")
+        );
+        assert!(endpoint_from_donation("short-key").is_err());
+        assert!(endpoint_from_donation("0123456789abcdef0123456789abcde!").is_err());
     }
 }

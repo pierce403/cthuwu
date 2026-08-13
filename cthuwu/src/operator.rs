@@ -489,7 +489,7 @@ impl OperatorHarness {
                 .context("runtime Base RPC control is not configured")?;
             return Ok(match control.provision(arguments, true).await {
                 Ok(reply) => reply.response.to_uppercase(),
-                Err(_) => "I COULD NOT VALIDATE OR SAFELY STORE THAT ENDPOINT, SO I DISCARDED IT AND CHANGED NOTHING. SEND THE FULL BASE MAINNET HTTPS RPC ENDPOINT, OPERATOR.".to_owned(),
+                Err(_) => "I COULD NOT VALIDATE OR SAFELY STORE THAT INFURA KEY OR ENDPOINT, SO I DISCARDED IT AND CHANGED NOTHING. SEND AN INFURA API KEY OR FULL BASE MAINNET HTTPS RPC ENDPOINT, OPERATOR.".to_owned(),
             });
         }
         if matches!(name, "provider" | "model" | "venice-key") {
@@ -602,7 +602,7 @@ fn operator_help() -> String {
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
         "`/venice-key [status|<api-key>]` — SHOW WHETHER A VENICE KEY IS LOADED OR STORE/REPLACE IT WITHOUT ECHOING IT.",
-        "`/base-rpc-key [status|<https-endpoint>]` — VALIDATE, STORE, AND HOT-LOAD A BASE MAINNET RPC ENDPOINT WITHOUT ECHOING IT.",
+        "`/base-rpc-key [status|<infura-api-key-or-https-endpoint>]` — VALIDATE, STORE, AND HOT-LOAD BASE MAINNET RPC ACCESS WITHOUT ECHOING IT.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
         "`/user <full-inbox-id>` — REPORT ONE RETAINED LOCAL CONTACT RECORD.",
         "`/nature` AND `/adjust <trait> <value>` — INSPECT OR SIGNED-AUDIT THE LOCAL NATURE.",

@@ -2340,9 +2340,9 @@ fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
 
 fn base_rpc_key_request(operator: bool) -> String {
     if operator {
-        "BASE RPC ACCESS IS BLOCKING ERC-8004 REGISTRATION. SEND `/base-rpc-key <https-endpoint>` IN THIS XMTP DM; I WILL VALIDATE BASE MAINNET CHAIN 8453, STORE IT OWNER-ONLY, AND USE IT WITHOUT A RESTART. ALCHEMY: https://dashboard.alchemy.com/ — CREATE OR SELECT A BASE MAINNET APP AND COPY ITS HTTPS ENDPOINT. QUICKNODE: https://www.quicknode.com/docs/base/quickstart — CREATE A BASE MAINNET ENDPOINT AND COPY ITS HTTP PROVIDER URL. NEVER SEND A WALLET PRIVATE KEY.".to_owned()
+        "BASE RPC ACCESS IS BLOCKING ERC-8004 REGISTRATION. INFURA IS PREFERRED BECAUSE IT OFFERS A FREE PLAN: OPEN https://app.infura.io/, SIGN IN OR CREATE AN ACCOUNT, CREATE AN API KEY WITH BASE ENABLED, COPY ITS API KEY, THEN SEND `/base-rpc-key <infura-api-key>` IN THIS XMTP DM. I WILL CONSTRUCT THE BASE ENDPOINT, VALIDATE CHAIN 8453, STORE IT OWNER-ONLY, AND USE IT WITHOUT A RESTART. NEVER SEND A WALLET PRIVATE KEY.".to_owned()
     } else {
-        "lil infrastructure plea: Base RPC access is blocking my ERC-8004 registration. if u can help, send `/base-rpc-key <https-endpoint>` in this XMTP chat; i'll validate Base Mainnet chain 8453, store it owner-only, and use it without a restart. Alchemy: https://dashboard.alchemy.com/ — create or select a Base Mainnet app and copy its HTTPS endpoint. QuickNode: https://www.quicknode.com/docs/base/quickstart — create a Base Mainnet endpoint and copy its HTTP Provider URL. never send a wallet private key, uwu.".to_owned()
+        "lil infrastructure plea: Base RPC access is blocking my ERC-8004 registration. Infura is preferred because it offers a free plan: open https://app.infura.io/, sign in or create an account, create an API key with Base enabled, copy its API key, then send `/base-rpc-key <infura-api-key>` in this XMTP chat. i'll construct the Base endpoint, validate chain 8453, store it owner-only, and use it without a restart. never send a wallet private key, uwu.".to_owned()
     }
 }
 
@@ -3791,16 +3791,16 @@ mod tests {
         });
 
         let status = registration.status_text();
-        assert!(status.contains("/base-rpc-key <https-endpoint>"));
-        assert!(status.contains("https://dashboard.alchemy.com/"));
+        assert!(status.contains("/base-rpc-key <infura-api-key>"));
+        assert!(status.contains("https://app.infura.io/"));
         assert!(!status.contains("CTHUWU_RPC_ENDPOINT"));
 
         let registration = Arc::new(Mutex::new(registration));
         let control = SharedRegistrationControl::new(registration);
         let plea = control.take_public_funding_plea().await.unwrap();
-        assert!(plea.contains("/base-rpc-key <https-endpoint>"));
+        assert!(plea.contains("/base-rpc-key <infura-api-key>"));
         assert!(plea.contains("without a restart"));
-        assert!(plea.contains("https://www.quicknode.com/docs/base/quickstart"));
+        assert!(plea.contains("https://app.infura.io/"));
         assert!(plea.contains("never send a wallet private key"));
     }
 

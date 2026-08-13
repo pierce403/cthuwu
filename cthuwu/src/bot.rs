@@ -396,7 +396,7 @@ impl UwUBot {
                 return Ok(match control.provision(arguments, false).await {
                     Ok(reply) => reply.response,
                     Err(_) => format!(
-                        "i could not validate or safely store that endpoint, so i discarded it and changed nothing. make sure it is the full Base Mainnet HTTPS endpoint, fwiend. {BASE_RPC_HELP}"
+                        "i could not validate or safely store that Infura key or endpoint, so i discarded it and changed nothing, fwiend. {BASE_RPC_HELP}"
                     ),
                 });
             }
@@ -486,7 +486,7 @@ impl UwUBot {
             Err(error) => {
                 warn!(%error, "required UWU balance observation is unavailable");
                 return Ok(format!(
-                    "economic verification is unavailable, so this Tentacle refuses token-dependent work until a current Base UWU balance can be confirmed. u can feed me a provider endpoint directly over XMTP with `/base-rpc-key <https-endpoint>`; i'll validate, store, and use it myself. {}",
+                    "economic verification is unavailable, so this Tentacle refuses token-dependent work until a current Base UWU balance can be confirmed. u can feed me an Infura API key or provider endpoint directly over XMTP with `/base-rpc-key <infura-api-key-or-https-endpoint>`; i'll validate, store, and use it myself. {}",
                     BASE_RPC_HELP
                 ));
             }

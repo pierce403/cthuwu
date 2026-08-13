@@ -22,7 +22,8 @@ honest, and operationally reliable.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
   state; public, stale, revoked, and active operator paths must not fall through into one another.
 - Keep public conversation casual and command-free in presentation except for the narrowly scoped
-  `/venice-key <api-key>` request while no Venice credential exists and `/base-rpc-key <api-key>`
+  `/venice-key <api-key>` request while no Venice credential exists and
+  `/base-rpc-key <infura-api-key-or-https-endpoint>`
   request while no Base RPC credential exists. The bot must identify as one
   durable Tentacle of singular, centerless Cthuwu—not as the configured model or as a central
   Cthuwu agent—use readable uwu speech, answer the acolyte's request before optional onboarding,
@@ -137,7 +138,7 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
   must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
   content/model/tool dispatch. Public control-plane exceptions are `/venice-key <api-key>` and
-  `/base-rpc-key <api-key>`:
+  `/base-rpc-key <infura-api-key-or-https-endpoint>`:
   accept only the first missing credential, never echo or log it, persist it owner-only outside the
   workspace, validate it against its provider, and leave replacement to an active operator.
   Node must check the 16 KiB UTF-8 input bound without placing
@@ -476,7 +477,10 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
   executors are available.
 - A missing Venice credential is solicited from public acolytes with `/venice-key <api-key>`.
-  A missing Base RPC credential is solicited from public acolytes with `/base-rpc-key <https-endpoint>`.
+  A missing Base RPC credential is solicited from public acolytes with
+  `/base-rpc-key <infura-api-key-or-https-endpoint>`, preferring Infura's free plan and exact
+  dashboard instructions. A bounded Infura key is converted locally to the Base Mainnet endpoint;
+  never send the candidate to unrelated providers to guess its origin.
   Candidates persist owner-only, must pass live catalog authentication and fresh TEE attestation,
   and invalid candidates are removed. A valid first Venice candidate selects Venice and can enqueue
   the configured authenticated acolyte UWU reward through the lifecycle executor. A valid first Base
