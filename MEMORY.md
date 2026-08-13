@@ -767,3 +767,6 @@ The original manual milestone was:
 - ERC-8004 funding reconciliation must not strand a minted identity when a Base provider lacks the
   optional GasPriceOracle L1 fee estimate. Reserve a conservative bounded L1 allowance while the
   actual write path continues to estimate gas and enforce fee ceilings independently.
+- Token-economics refresh is deferred and coalesced while any public turn pins the current metrics
+  period. Expected turn contention is not an error and must not produce per-second warnings or RPC
+  calls; an observation racing with a newly started turn is discarded and retried afterward.

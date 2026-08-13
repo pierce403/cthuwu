@@ -1227,6 +1227,10 @@ phase.
     gas/fee ceiling again as a conservative L1 allowance for each pending transaction and reports
     that the L1 component is not exact. The write path still independently estimates execution,
     enforces fee ceilings, signs, and fails closed before broadcast.
+  - A public inference turn pins its current metrics/economics snapshot. The refresh supervisor
+    detects that binding before an RPC call and coalesces refreshes until the turn completes; if a
+    turn starts during an in-flight read, that observation is discarded and retried afterward.
+    Expected contention neither consumes one RPC request per second nor emits repeated warnings.
   - Repository skills document native Base-balance reconciliation, ERC-8004 status/recovery, and
     bounded skill creation. The operator receives their compact discovered index, reads the relevant
     `SKILL.md` before use, and cannot gain authority from skill prose.

@@ -1643,6 +1643,17 @@ async fn run_autonomy_supervisor(
             && now >= next_economic_refresh
             && accepts_economic_observations
         {
+            let refresh_is_deferred = evolution
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
+                .node_economic_refresh_is_deferred();
+            if refresh_is_deferred {
+                // The in-flight public turn is intentionally bound to the current
+                // economics snapshot. Coalesce this refresh until it releases the
+                // binding; do not spend RPC quota or emit one warning per tick.
+                next_economic_refresh = now.saturating_add(1);
+                continue;
+            }
             let observation = observe_with_death_preemption(
                 &evolution,
                 &blockchain,
@@ -1681,15 +1692,22 @@ async fn run_autonomy_supervisor(
             };
             let refresh_succeeded = match observation {
                 Ok(Some((snapshot, provenance))) => {
-                    match evolution
+                    let mut runtime = evolution
                         .lock()
-                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
-                        .record_node_economic_observation(snapshot, provenance)
-                    {
-                        Ok(_) => true,
-                        Err(error) => {
-                            warn!(%error, "could not bind refreshed Tentacle economics");
-                            false
+                        .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
+                    if runtime.node_economic_refresh_is_deferred() {
+                        // A turn may have started while the RPC request was in
+                        // flight. Discard this observation and retry after that
+                        // bound turn completes rather than treating contention as
+                        // an economic failure.
+                        false
+                    } else {
+                        match runtime.record_node_economic_observation(snapshot, provenance) {
+                            Ok(_) => true,
+                            Err(error) => {
+                                warn!(%error, "could not bind refreshed Tentacle economics");
+                                false
+                            }
                         }
                     }
                 }

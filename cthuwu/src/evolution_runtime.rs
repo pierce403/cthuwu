@@ -1108,6 +1108,13 @@ impl EvolutionRuntime {
         self.ritual.is_confirmed() || self.lifecycle.death_pending()
     }
 
+    /// A public inference turn pins the current metrics/economics view. Refresh
+    /// supervisors should coalesce a new observation until all such turns end
+    /// instead of repeatedly performing RPC work that cannot yet be committed.
+    pub fn node_economic_refresh_is_deferred(&self) -> bool {
+        !self.active_public_turns.is_empty()
+    }
+
     pub(crate) const fn requires_recovery(&self) -> bool {
         self.degraded
     }
@@ -5276,6 +5283,7 @@ mod tests {
         let PublicTurnStart::Ready(turn) = runtime.begin_public_turn().unwrap() else {
             panic!("confirmed runtime should reserve a public turn");
         };
+        assert!(runtime.node_economic_refresh_is_deferred());
         assert_eq!(turn.nature_cooperation, runtime.nature().cooperation);
         let value = if runtime.nature().growth == 100 {
             99
@@ -5291,6 +5299,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("public turns"));
         runtime.finish_public_turn(turn.token, None).unwrap();
+        assert!(!runtime.node_economic_refresh_is_deferred());
         assert!(
             runtime
                 .handle_operator_message(
