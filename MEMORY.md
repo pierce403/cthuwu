@@ -92,11 +92,14 @@ Last reviewed: 2026-08-12
 - A fresh or legacy-pending node records a signed local `ACCEPT DEFAULT NATURE` transition before
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
-- The browser's canonical intro Tentacle is temporarily hard-coded as
-  `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`. `NotConfigured`, unminted, expired, and positively
+- The browser's canonical intro Tentacle is registered Base ERC-8004 agent 61608 and is hard-coded
+  to its XMTP wallet `0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90`. `NotConfigured`, unminted, expired, and positively
   ineligible Branding states preserve that continuity path. After a Branding deployment is
   explicitly configured, registry/endpoint unavailability freezes assignment and exposes retry;
   it never becomes another intro fallback.
+- The production-origin-restricted Agent0 Graph key resolves the Base subgraph without indexing
+  errors. Agent 61608 appears by ID with its wallet and registration profile, but the leaderboard
+  intentionally excludes it until its exact allegiance/protocol discovery metadata is indexed.
 - The browser recovers one `StoredIdentity` and creates one Browser SDK `Client` for all three tabs.
   Direct binds the exact assigned-Tentacle DM; Acolytes binds the exact assigned group; Global is a
   logical `readConversationIds[]` plus `writeConversationId`. This shape anticipates XMTP's current

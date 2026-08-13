@@ -2,9 +2,9 @@ export type XmtpEnvironment = "dev" | "production" | "local";
 
 export const XMTP_ENVIRONMENT: XmtpEnvironment = "production";
 
-// Temporary bootstrap discovery until intro Tentacles can register through the planned Base
-// registry. This is public routing metadata, never an identity secret.
-export const INTRO_TENTACLE_ADDRESS = "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db";
+// Public XMTP address of the canonical intro Tentacle, whose Base ERC-8004 agent is 61608.
+// Branding-controlled routing still verifies the complete on-chain profile at one pinned block.
+export const INTRO_TENTACLE_ADDRESS = "0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90";
 export const DEFAULT_BASE_RPC_ENDPOINT = "https://mainnet.base.org/";
 export const CANONICAL_BRANDING_CONTRACT = "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da";
 export const CANONICAL_BRANDING_DEPLOYMENT_BLOCK = 49_852_729n;

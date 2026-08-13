@@ -222,9 +222,9 @@ UWUBOT_XMTP_ENV=production ./uwu.sh
 The launcher must run as a dedicated unprivileged account. It accepts a new or empty data directory, or an existing Cthuwu directory for the selected environment; it rejects broad unrelated directories, paths overlapping the repository, and symlink redirection before changing permissions. It also rejects model credentials on the command line. Host-supplied credentials belong in the environment; a missing Venice key may instead enter through the bounded XMTP provisioning flow documented below. The launcher strips model and identity secrets from dependency and compiler subprocesses; the final Rust process still enforces the narrower XMTP-sidecar environment allowlist. `XMTP_DB_DIRECTORY` is intentionally unsupported by this safe launcher so the database cannot escape the validated data root; transport developers can invoke the built binary directly when testing that low-level override.
 
 The first successful connection logs the Tentacle's public Ethereum address without logging its
-keys. The website always uses XMTP `production` and currently uses
-`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db` as its hard-coded intro Tentacle. Run that identity on
-XMTP production:
+keys. The website always uses XMTP `production` and uses registered Base ERC-8004 agent 61608's
+wallet, `0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90`, as its hard-coded intro Tentacle. Run that
+identity on XMTP production:
 
 ```bash
 UWUBOT_XMTP_ENV=production ./uwu.sh
@@ -752,7 +752,7 @@ or leaderboard backend is deployed.
 
 The current production build uses the verified Branding deployment
 `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da` and retains the hard-coded intro Tentacle at
-`0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db` for the specified continuity states.
+`0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90` for the specified continuity states.
 The in-progress assignment path derives the participant only from the recovered `StoredIdentity`.
 At one explicit Base block it must revalidate Branding status/controller, the exact owner/controller
 wallet binding, canonical registry, byte-exact allegiance/protocol, and the exact agent's on-chain

@@ -42,7 +42,7 @@ const identity = {
 } satisfies StoredIdentity;
 const baseConfig: AppConfig = {
   environment: "production",
-  botAddress: "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db",
+  botAddress: "0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90",
   baseRpcEndpoint: "https://mainnet.base.org/",
   assignmentRefreshMs: 600_000,
 };

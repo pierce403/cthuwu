@@ -44,7 +44,7 @@ export const GLOBAL_LOGICAL_CHANNEL_ID = "cthuwu.global.v1" as const;
 export const RETENTION_FROM_NS = 1n;
 export const RETENTION_IN_NS = 1_209_600_000_000_000n;
 export const INTRO_TENTACLE_ADDRESS = getAddress(
-  "0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db",
+  "0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90",
 );
 export const CANONICAL_BRANDING_CONTRACT = getAddress(
   "0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da",

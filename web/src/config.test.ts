@@ -15,7 +15,7 @@ describe("configuration", () => {
   });
 
   it("always selects the hard-coded intro Tentacle", () => {
-    expect(INTRO_TENTACLE_ADDRESS).toBe("0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db");
+    expect(INTRO_TENTACLE_ADDRESS).toBe("0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90");
     expect(parseConfig()).toEqual({
       environment: "production",
       botAddress: INTRO_TENTACLE_ADDRESS,

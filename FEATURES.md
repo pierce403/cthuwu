@@ -102,9 +102,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
 - **Properties**:
   - The browser is hard-coded to XMTP `production`; development and local XMTP environments are not
     valid frontend deployment modes.
-  - The intro Tentacle is temporarily hard-coded as
-    `0x0bf56d21a7392db33b0e646ebeb2a64c14cf04db`, so repository variables cannot silently redirect
-    first-contact conversations.
+  - The intro Tentacle is hard-coded as its registered agent 61608 wallet
+    `0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90`, so repository variables cannot silently redirect
+    first-contact conversations. Its registration profile binds the same wallet to the production
+    XMTP inbox; exact Cthuwu discovery metadata still gates leaderboard membership.
   - The in-progress Branding assignment path may select an exact positively active controller from
     canonical Branding and ERC-8004 state, with the intro Tentacle retained for
     unminted/expired/positively ineligible subjects. It does not add a custom registry, membership
@@ -1269,7 +1270,8 @@ phase.
     Base verification, direct UWU reads, reputation samples, and hostile response bounds.
   - [x] Browser tests cover precision, raw sorting, cache-first/atomic refresh, partial/error cases,
     suspended/shared-wallet rendering, sanitization, mobile controls, and offline snapshot display.
-  - [ ] The static production build is configured with a hostname/Agent0-subgraph/spend-restricted Graph key.
+  - [x] The static production build uses the checked-in hostname/Agent0-subgraph-restricted public
+    Graph key; a production-origin query on 2026-08-12 returned Agent0 without indexing errors.
 
 ### Base Acolyte Branding and controller routing
 
