@@ -286,6 +286,7 @@ async function main(): Promise<void> {
     message: CatchUpMessage,
     conversation: CatchUpDm,
     senderAddress: string | undefined,
+    quietReplay = false,
   ): Promise<void> => {
     if (typeof message.content !== "string") {
       return;
@@ -306,7 +307,9 @@ async function main(): Promise<void> {
         conversationId: message.conversationId,
       };
       const inboundBytes = Buffer.byteLength(text, "utf8");
-      diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
+      if (!quietReplay) {
+        diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
+      }
       const result = await (inboundBytes > MAX_INBOUND_TEXT_BYTES
         ? bridge.rejectOversized(metadata)
         : bridge.request({ ...metadata, text }));
@@ -315,7 +318,9 @@ async function main(): Promise<void> {
         await conversation.sendText(result.text);
         diagnostic("delivered XMTP reply");
       } else {
-        diagnostic("uwubot ignored the XMTP message");
+        if (!quietReplay) {
+          diagnostic("uwubot ignored the XMTP message");
+        }
       }
     } catch (_error: unknown) {
       diagnostic("failed to process an inbound XMTP text message");
@@ -357,7 +362,7 @@ async function main(): Promise<void> {
           agent.client.preferences,
           message.senderInboxId,
         ).catch(() => undefined);
-        await processDirectText(message, conversation, senderAddress);
+        await processDirectText(message, conversation, senderAddress, true);
       },
     })
       .then((result) => {

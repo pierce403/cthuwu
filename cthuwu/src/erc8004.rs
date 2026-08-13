@@ -2390,6 +2390,7 @@ fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
         || detail.contains("over rate limit")
         || detail.contains("rate limit")
         || detail.contains("too many requests")
+        || detail.contains("request exceeds defined limit")
 }
 
 fn base_rpc_key_request(operator: bool) -> String {
@@ -3859,6 +3860,16 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn provider_query_limit_is_a_recoverable_base_rpc_blocker() {
+        let failure = failure_from_error(
+            "recoverable ERC-8004 helper error [rpc_or_signing_failure]: Request exceeds defined limit. URL: <redacted-rpc>",
+            true,
+            1,
+        );
+        assert!(is_base_rpc_access_failure(&failure));
     }
 
     #[tokio::test]

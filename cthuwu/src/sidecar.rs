@@ -641,12 +641,6 @@ pub async fn run_xmtp_sidecar(
         if let Some(address) = imprint.imprinted_address {
             info!("Tentacle has imprinted on {address}");
         }
-        info!(
-            role = ?role,
-            message_bytes = request.text.len(),
-            sender_address_available = request.sender_address.is_some(),
-            "received authenticated XMTP direct message"
-        );
         let first_delivery =
             bot.claim_authenticated_message(&request.message_id, &request.sender_inbox_id)?;
         if request.event_type == "reject_inbound" {
@@ -663,6 +657,12 @@ pub async fn run_xmtp_sidecar(
             send_response(&stdin, SidecarResponse::Ignore { id: request.id }).await?;
             continue;
         }
+        info!(
+            role = ?role,
+            message_bytes = request.text.len(),
+            sender_address_available = request.sender_address.is_some(),
+            "received new authenticated XMTP direct message"
+        );
         let lane = match role {
             PrincipalRole::User => public_lane.clone(),
             PrincipalRole::Operator

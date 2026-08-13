@@ -236,6 +236,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - Credential provisioning replies are terminal for their XMTP turn: stale ERC-8004 funding or
     RPC pleas are never appended to a successful or rejected `/base-rpc-key` or `/venice-key`
     response. The registration supervisor independently retries and refreshes its persisted status.
+  - Startup DM catch-up still submits bounded historical inbound messages to Rust's durable dedupe
+    ledger so genuinely unanswered messages can be recovered, but duplicate history is quiet: the
+    console emits one aggregate catch-up summary rather than per-message receive/ignore pairs. Only
+    newly claimed authenticated messages receive the normal Rust activity log.
   - Natural questions about this Tentacle's ERC-8004 registration are answered deterministically
     from current local registry state before model inference, including the confirmed agent ID and
     phase. Replies explicitly preserve the ontology: each durable Tentacle owns its identity; the
@@ -1181,6 +1185,8 @@ phase.
     sole operator an immediate, exact Base-only funding demand; a recoverable Base RPC blocker gets
     an immediate operator demand with the Infura provisioning command instead. Later maintenance
     remains delivery-acknowledged and rate-limited, and confirmed registration emits no resource demand.
+    Provider errors that report a broad registry query "exceeds defined limit" are classified as
+    recoverable Base RPC blockers and trigger the same immediate operator provisioning demand.
   - The state machine persists intent before broadcast and resumes registration, receipt/finality,
     profile publication, wallet verification, and metadata stages without duplicate minting.
   - A provider-estimated complete cost receives configurable safety and reserve. Operator shortfall
