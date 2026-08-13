@@ -239,23 +239,9 @@ impl Contact {
         self.touch();
     }
 
-    pub fn mark_onboarding_prompted(&mut self) {
-        self.awaiting_onboarding_answer = true;
-        self.onboarding_turns_since_prompt = 0;
-        self.touch();
-    }
-
     pub fn defer_onboarding(&mut self) {
         self.awaiting_onboarding_answer = false;
         self.onboarding_turns_since_prompt = 0;
-        self.touch();
-    }
-
-    pub fn note_conversation_turn(&mut self) {
-        self.onboarding_turns_since_prompt = self
-            .onboarding_turns_since_prompt
-            .saturating_add(1)
-            .min(100);
         self.touch();
     }
 

@@ -770,3 +770,7 @@ The original manual milestone was:
 - Token-economics refresh is deferred and coalesced while any public turn pins the current metrics
   period. Expected turn contention is not an error and must not produce per-second warnings or RPC
   calls; an observation racing with a newly started turn is discarded and retried afterward.
+- Public chat does not append scheduled onboarding questions or dormancy pleas. Voluntary
+  contribution recognition is field-independent and the site renders bounded reward/Branding UI
+  metadata as a pending reward card and one-time decision modal; modal acceptance is not mint consent.
+  Sanitize model-produced `[[cthuwu:` prefixes before appending compiled UI markers.

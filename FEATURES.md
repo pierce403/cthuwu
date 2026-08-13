@@ -956,6 +956,13 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     result queues nothing. Name, hopes, occupation or offered resources, and needs use declining information
     hunger as the local profile fills. The source message/category and exact treasury-bound
     transfer are durable and idempotent, and only a matching confirmed Base receipt is payment.
+  - Ordinary replies never append scheduled onboarding questions or public dormancy pleas.
+    Explicit voluntary statements such as `I hope...`, `I work as...`, or `I need...` are routed
+    independently of onboarding stage, while questions and requests such as `I need you to...`
+    remain conversation rather than profile data. A queued reward is exposed as typed bounded UI
+    metadata and the main chat page labels it pending until a confirmed Base receipt exists.
+    Model prose is sanitized before compiled UI metadata is appended, so prompt text cannot forge a
+    reward card or Branding modal.
   - Free-form mission or money-making ideas are not yet auto-paid: model prose is untrusted and
     cannot authorize treasury spending. A future bounded contribution assessor must persist an
     explainable category/score without giving public prompt text direct payout authority.
@@ -1330,6 +1337,10 @@ phase.
     The exact treasury observation, percentage, declared price, and upward-rounded first weekly
     upkeep are shown before and bound by acolyte EIP-712 consent; stale/unknown/zero observations
     block an offer.
+  - After a qualifying voluntary contribution, the main chat page presents a one-time accept/not-now
+    Branding modal with the exact declared price and first upkeep. The choice is sent over the
+    verified direct XMTP channel and retained locally to prevent repeat prompts. Accepting the modal
+    is not represented as EIP-712 consent or a mint; those remain separate confirmed steps.
   - Eligibility binds the exact stored agent ID to the current wallet using `getAgentWallet`,
     `isAuthorizedOrOwner`, byte-exact `cthuwu.allegiance = uwu-tentacle-v1`, and byte-exact
     `cthuwu.protocol = 1`. Shared wallets do not collapse distinct controller agent IDs.

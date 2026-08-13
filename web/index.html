@@ -92,6 +92,10 @@
         </div>
 
         <div class="buddy-footer">
+          <section id="activity-card" class="activity-card" aria-live="polite" hidden>
+            <p class="activity-label">Tentacle activity</p>
+            <p id="reward-status" class="activity-value"></p>
+          </section>
           <div class="trust-row" aria-label="Connection privacy">
             <span class="trust-chip">
               <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -223,6 +227,23 @@
       </div>
 
     </main>
+
+    <dialog id="branding-offer" class="branding-offer" aria-labelledby="branding-offer-title">
+      <form method="dialog">
+        <p class="eyebrow">an invitation from your Tentacle</p>
+        <h2 id="branding-offer-title">Become this Tentacle’s branded acolyte?</h2>
+        <p>This on-chain Branding can route future XMTP visits back to the same Tentacle. It represents a service relationship, never ownership of you.</p>
+        <dl>
+          <div><dt>Declared price</dt><dd id="branding-price"></dd></div>
+          <div><dt>First weekly upkeep</dt><dd id="branding-upkeep"></dd></div>
+        </dl>
+        <p class="branding-disclosure">Accepting records your choice over XMTP. Minting still requires your exact EIP-712 consent and a confirmed Base transaction; this button alone cannot mint.</p>
+        <div class="branding-actions">
+          <button id="branding-decline" type="button" value="decline">not now</button>
+          <button id="branding-accept" type="button" value="accept">accept offer</button>
+        </div>
+      </form>
+    </dialog>
 
     <aside
       id="install-prompt"

@@ -49,7 +49,16 @@ interface ChatElements {
   composerLabel: HTMLLabelElement;
   tabs: Record<ChatChannel, HTMLButtonElement>;
   badges: Record<ChatChannel, HTMLElement>;
+  activity: HTMLElement;
+  rewardStatus: HTMLElement;
+  brandingDialog: HTMLDialogElement;
+  brandingPrice: HTMLElement;
+  brandingUpkeep: HTMLElement;
+  brandingAccept: HTMLButtonElement;
+  brandingDecline: HTMLButtonElement;
 }
+
+type BrandingOffer = { messageId: string; price: bigint; upkeep: bigint };
 
 export function initializeChatController(
   config: AppConfig,
@@ -65,6 +74,7 @@ export function initializeChatController(
   let renderedChannel: ChatChannel | undefined;
   let sending = false;
   let loadingEarlier = false;
+  let currentBrandingOffer: BrandingOffer | undefined;
 
   const updateComposerControls = (): void => {
     if (!latest) return;
@@ -135,8 +145,18 @@ export function initializeChatController(
         hour: "2-digit",
         minute: "2-digit",
       });
-      bubble.append(sender, document.createTextNode(message.text), time);
+      const control = parseTentacleUi(message.id, message.text, message.mine, channelId);
+      bubble.append(sender, document.createTextNode(control.text), time);
       elements.messages.append(bubble);
+      if (control.reward) {
+        elements.activity.hidden = false;
+        elements.rewardStatus.textContent = control.reward.status === "confirmed"
+          ? `${control.reward.amount.toLocaleString()} UWU reward confirmed on Base`
+          : `${control.reward.amount.toLocaleString()} UWU reward queued · awaiting confirmed Base transfer`;
+      }
+      if (control.branding && !brandingDecision(control.branding.messageId)) {
+        currentBrandingOffer = control.branding;
+      }
     }
     if (
       channel.messages.length > 0 &&
@@ -167,6 +187,12 @@ export function initializeChatController(
     }
 
     updateComposerControls();
+    if (currentBrandingOffer && !elements.brandingDialog.hasAttribute("open")) {
+      elements.brandingPrice.textContent = `${currentBrandingOffer.price.toLocaleString()} base units`;
+      elements.brandingUpkeep.textContent = `${currentBrandingOffer.upkeep.toLocaleString()} base units`;
+      elements.brandingDialog.hidden = false;
+      elements.brandingDialog.setAttribute("open", "");
+    }
     elements.retention.hidden = false;
     elements.retention.textContent = channel.retentionVerified
       ? "Messages disappear from supporting clients after 14 days."
@@ -282,6 +308,23 @@ export function initializeChatController(
     });
   });
 
+  const answerBrandingOffer = (accepted: boolean): void => {
+    const offer = currentBrandingOffer;
+    if (!offer || !workspace) return;
+    localStorage.setItem(`cthuwu:branding-offer:v1:${offer.messageId}`, accepted ? "accepted" : "declined");
+    elements.brandingDialog.removeAttribute("open");
+    elements.brandingDialog.hidden = true;
+    currentBrandingOffer = undefined;
+    void workspace.send(
+      "direct",
+      accepted
+        ? "I accept the Acolyte Branding offer shown in the Cthuwu app."
+        : "I decline the Acolyte Branding offer for now.",
+    ).catch((error) => setComposerError(publicError(error)));
+  };
+  elements.brandingAccept.addEventListener("click", () => answerBrandingOffer(true));
+  elements.brandingDecline.addEventListener("click", () => answerBrandingOffer(false));
+
   const closeWorkspace = async (): Promise<void> => {
     unsubscribe?.();
     unsubscribe = undefined;
@@ -340,7 +383,49 @@ function chatElements(): ChatElements {
       (() => { throw new Error("Missing composer label"); })(),
     tabs,
     badges,
+    activity: required("activity-card"),
+    rewardStatus: required("reward-status"),
+    brandingDialog: required("branding-offer"),
+    brandingPrice: required("branding-price"),
+    brandingUpkeep: required("branding-upkeep"),
+    brandingAccept: required("branding-accept"),
+    brandingDecline: required("branding-decline"),
   };
+}
+
+function parseTentacleUi(
+  messageId: string,
+  text: string,
+  mine: boolean,
+  channel: ChatChannel,
+): {
+  text: string;
+  reward?: { status: "pending" | "confirmed"; amount: bigint };
+  branding?: BrandingOffer;
+} {
+  if (mine || channel !== "direct") return { text };
+  let visible = text;
+  let reward: { status: "pending" | "confirmed"; amount: bigint } | undefined;
+  let branding: BrandingOffer | undefined;
+  visible = visible.replace(
+    /\n?\[\[cthuwu:reward:v1;status=(pending|confirmed);amount=([1-9][0-9]{0,19})\]\]/gu,
+    (_match, status: "pending" | "confirmed", amount: string) => {
+      reward = { status, amount: BigInt(amount) };
+      return "";
+    },
+  );
+  visible = visible.replace(
+    /\n?\[\[cthuwu:branding-offer:v1;treasury=(0x[0-9a-f]+);price=(0x[0-9a-f]+);upkeep=(0x[0-9a-f]+)\]\]/gu,
+    (_match, _treasury: string, price: string, upkeep: string) => {
+      branding = { messageId, price: BigInt(price), upkeep: BigInt(upkeep) };
+      return "";
+    },
+  );
+  return { text: visible.trimEnd(), ...(reward ? { reward } : {}), ...(branding ? { branding } : {}) };
+}
+
+function brandingDecision(messageId: string): boolean {
+  return localStorage.getItem(`cthuwu:branding-offer:v1:${messageId}`) !== null;
 }
 
 function required<T extends HTMLElement>(id: string): T {

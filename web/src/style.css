@@ -2568,3 +2568,26 @@ html[data-motion="paused"] .message {
     transition-duration: 0.01ms !important;
   }
 }
+.activity-card {
+  padding: 0.8rem 1rem;
+  border: 1px solid rgba(137, 255, 210, 0.28);
+  border-radius: 1rem;
+  background: rgba(13, 38, 37, 0.58);
+}
+
+.activity-label { margin: 0 0 0.2rem; opacity: 0.72; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; }
+.activity-value { margin: 0; }
+
+.branding-offer {
+  max-width: min(32rem, calc(100vw - 2rem));
+  color: #f8f4ff;
+  border: 1px solid rgba(173, 130, 255, 0.55);
+  border-radius: 1.4rem;
+  background: #140d22;
+  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.65);
+}
+.branding-offer::backdrop { background: rgba(5, 2, 12, 0.76); backdrop-filter: blur(6px); }
+.branding-offer dl div { display: flex; justify-content: space-between; gap: 1rem; margin: 0.6rem 0; }
+.branding-offer dd { margin: 0; font-family: monospace; }
+.branding-disclosure { font-size: 0.86rem; opacity: 0.76; }
+.branding-actions { display: flex; justify-content: flex-end; gap: 0.7rem; margin-top: 1.2rem; }

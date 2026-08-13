@@ -170,7 +170,6 @@ pub(crate) struct PublicTurnContext {
     pub policy: ModelPolicy,
     pub nature_fingerprint: String,
     pub nature_cooperation: u8,
-    pub onboarding_prompt_cadence: u32,
 }
 
 #[derive(Debug)]
@@ -1220,10 +1219,6 @@ impl EvolutionRuntime {
         .bounded()
     }
 
-    pub fn onboarding_prompt_cadence(&self) -> u32 {
-        2 + u32::from(100_u8.saturating_sub(self.ritual.nature().engagement)) / 34
-    }
-
     /// Reserves a public turn against the current signed Nature without holding the bot mutex
     /// across remote inference. Nature mutation is deferred until every reservation is finished.
     pub(crate) fn begin_public_turn(&mut self) -> Result<PublicTurnStart> {
@@ -1291,7 +1286,6 @@ impl EvolutionRuntime {
             policy: self.model_policy(),
             nature_fingerprint: self.ritual.nature().fingerprint()?,
             nature_cooperation: self.ritual.nature().cooperation,
-            onboarding_prompt_cadence: self.onboarding_prompt_cadence(),
         }))
     }
 

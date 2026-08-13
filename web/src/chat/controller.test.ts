@@ -93,6 +93,7 @@ function fakeWorkspace(start = initialSnapshot()): ChatWorkspace & { emit(): voi
 describe("three-channel chat controller", () => {
   beforeEach(() => {
     mount();
+    localStorage.clear();
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callback(0);
       return 1;
@@ -176,6 +177,34 @@ describe("three-channel chat controller", () => {
 
     expect(mutations).toEqual([]);
     expect(messages.querySelector(".message")).toBe(bubble);
+    await controller.close();
+  });
+
+  it("renders reward state and presents a one-time Branding decision modal", async () => {
+    const start = initialSnapshot();
+    start.channels.direct.messages[0] = {
+      ...start.channels.direct.messages[0]!,
+      text: "thanks for sharing\n[[cthuwu:reward:v1;status=pending;amount=8]]\n[[cthuwu:branding-offer:v1;treasury=0x3e8;price=0x64;upkeep=0x1]]",
+    };
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    expect(document.querySelector(".message")?.textContent).toContain("thanks for sharing");
+    expect(document.querySelector(".message")?.textContent).not.toContain("cthuwu:reward");
+    expect(document.querySelector("#reward-status")?.textContent).toContain("8 UWU reward queued");
+    expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(true);
+    expect(document.querySelector("#branding-price")?.textContent).toBe("100 base units");
+
+    document.querySelector<HTMLButtonElement>("#branding-accept")?.click();
+    await vi.waitFor(() => expect(workspace.send).toHaveBeenCalledWith(
+      "direct",
+      "I accept the Acolyte Branding offer shown in the Cthuwu app.",
+    ));
+    expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(false);
+    expect(localStorage.getItem("cthuwu:branding-offer:v1:m1")).toBe("accepted");
     await controller.close();
   });
 });

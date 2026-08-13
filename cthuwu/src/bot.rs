@@ -574,9 +574,25 @@ impl UwUBot {
             return Ok(response);
         }
 
-        let mut answered_onboarding = false;
-        let mut contribution_kind = None;
-        if contact.stage != OnboardingStage::Complete && contact.awaiting_onboarding_answer {
+        let mut contribution_kind =
+            voluntary_contribution(text).and_then(|(field, kind, value)| {
+                let unchanged = match field {
+                    ContactField::Name => contact.name.as_deref(),
+                    ContactField::Hopes => contact.hopes.as_deref(),
+                    ContactField::Resources => contact.resources.as_deref(),
+                    ContactField::Needs => contact.needs.as_deref(),
+                }
+                .is_some_and(|current| current == value);
+                if unchanged {
+                    return None;
+                }
+                contact.set_field(field, value);
+                Some(kind)
+            });
+        if contribution_kind.is_none()
+            && contact.stage != OnboardingStage::Complete
+            && contact.awaiting_onboarding_answer
+        {
             if is_casual_pass(text) {
                 contact.skip();
                 self.contacts.save(&contact)?;
@@ -584,8 +600,7 @@ impl UwUBot {
             }
             if looks_like_onboarding_answer(contact.stage, text) {
                 contribution_kind = onboarding_contribution_kind(contact.stage);
-                answered_onboarding = contact.record_answer(text);
-                if !answered_onboarding {
+                if !contact.record_answer(text) {
                     contribution_kind = None;
                 }
             } else {
@@ -596,12 +611,8 @@ impl UwUBot {
 
         let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
         let profile = contact.model_profile_markdown();
-        let dormancy_plea = self
-            .evolution
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?
-            .take_public_dormancy_plea();
-        let mut response = self.model_reply(&profile, text, &model_policy).await;
+        let mut response =
+            sanitize_model_ui_markers(self.model_reply(&profile, text, &model_policy).await);
         if let Some(kind) = contribution_kind
             && let Some(reward) = self
                 .queue_information_reward(
@@ -616,32 +627,17 @@ impl UwUBot {
                 "\n\nthank u for sharing that voluntarily, fwiend. i queued {} UWU from this Tentacle's currently verified treasury as an information contribution reward. it is pending until the configured executor returns a matching confirmed Base transfer receipt, uwu.",
                 reward
             ));
+            response.push_str(&format!(
+                "\n[[cthuwu:reward:v1;status=pending;amount={reward}]]"
+            ));
         }
-        if answered_onboarding
-            && contact.stage == OnboardingStage::Complete
+        if contribution_kind.is_some()
             && let Some(offer) = self.branding_offer_quote().await
         {
             response.push_str(&format!(
-                "\n\nu seem like a useful part of the mission, fwiend, and i'd like to offer u an Acolyte Branding so future chats can route back to this same Tentacle. the default declared price is 10% of my freshly verified current UWU holdings: exact treasury {}, declared price {}, and first weekly upkeep {} in UWU base units. those exact values must be shown again and bound into ur EIP-712 consent before anything can mint; no Branding is created merely by this offer, uwu.",
+                "\n[[cthuwu:branding-offer:v1;treasury={};price={};upkeep={}]]",
                 offer.treasury_balance, offer.initial_declared_price, offer.first_week_upkeep
             ));
-        }
-        if created && !response.contains('?') {
-            contact.mark_onboarding_prompted();
-            response.push_str("\n\nheh, one tiny optional thing: i can keep a private note on this node about only what u choose to tell me. if u feel like it, what should i call u? saying “just chat” is totally fine too :3");
-        } else if !answered_onboarding && contact.stage != OnboardingStage::Complete {
-            contact.note_conversation_turn();
-            if !contact.awaiting_onboarding_answer
-                && contact.onboarding_turns_since_prompt >= turn.onboarding_prompt_cadence
-            {
-                contact.mark_onboarding_prompted();
-                response.push_str("\n\n");
-                response.push_str(&prompt_for_stage(&contact));
-            }
-        }
-        if let Some(plea) = &dormancy_plea {
-            response.push_str("\n\n");
-            response.push_str(plea);
         }
 
         let conversation_depth = 1_u32.saturating_add(
@@ -1109,6 +1105,50 @@ fn looks_like_onboarding_answer(stage: OnboardingStage, text: &str) -> bool {
     }
 }
 
+fn voluntary_contribution(text: &str) -> Option<(ContactField, AcolyteContributionKind, &str)> {
+    let normalized = text.trim().to_ascii_lowercase();
+    if text.contains('?') || normalized.starts_with("i need you to ") {
+        return None;
+    }
+    if let Some(value) = natural_value(
+        text,
+        &[
+            "i hope ",
+            "i'm hoping ",
+            "im hoping ",
+            "my hope is ",
+            "my dream is ",
+        ],
+    ) {
+        return Some((ContactField::Hopes, AcolyteContributionKind::Hopes, value));
+    }
+    if let Some(value) = natural_value(
+        text,
+        &[
+            "i work as ",
+            "my occupation is ",
+            "i can offer ",
+            "i can share ",
+            "i can help with ",
+        ],
+    ) {
+        return Some((
+            ContactField::Resources,
+            AcolyteContributionKind::Resources,
+            value,
+        ));
+    }
+    if let Some(value) = natural_value(text, &["i need ", "my need is ", "i could use help with "])
+    {
+        return Some((ContactField::Needs, AcolyteContributionKind::Needs, value));
+    }
+    None
+}
+
+fn sanitize_model_ui_markers(response: String) -> String {
+    response.replace("[[cthuwu:", "[[cthuwu-untrusted-text:")
+}
+
 fn looks_like_name(value: &str) -> bool {
     let lowercase = value.to_ascii_lowercase();
     let words = value.split_whitespace().count();
@@ -1265,25 +1305,6 @@ fn limit_response(mut response: String, role: PrincipalRole) -> String {
     response.truncate(boundary);
     response.push_str(suffix);
     response
-}
-
-fn prompt_for_stage(contact: &Contact) -> String {
-    match contact.stage {
-        OnboardingStage::Name => {
-            "tiny optional question: what would u like me to call u? “not now” is always okay."
-                .into()
-        }
-        OnboardingStage::Hopes => {
-            "if u feel like sharing, what's one thing ur hoping for lately? no pressure :3".into()
-        }
-        OnboardingStage::Resources => "casual cosmic curiosity: what kind of work do u do, or is there a skill, bit of time, knowledge, introduction, or other resource u might enjoy sharing someday? “pass” is perfect too."
-            .into(),
-        OnboardingStage::Needs => "anything the little network could help u find—knowledge, support, or an introduction? totally fine to pass."
-            .into(),
-        OnboardingStage::SharingConsent => "one real yes-or-no thing: may i show ur chosen name and matching terms in private suggestions to other opted-in people? i won't disclose ur inbox or introduce anyone automatically."
-            .into(),
-        OnboardingStage::Complete => String::new(),
-    }
 }
 
 fn natural_help() -> String {
@@ -2081,21 +2102,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn casual_answers_advance_without_immediate_interrogation() {
+    async fn voluntary_hopes_are_retained_without_proactive_interrogation() {
         let root = tempfile::tempdir().unwrap();
         let bot = public_bot(root.path());
         let id = "aabbcc";
         let welcome = send(&bot, 0, id, "hello").await;
-        assert_eq!(welcome.matches('?').count(), 1);
-        let reply = send(&bot, 1, id, "Ada").await;
+        assert_eq!(welcome.matches('?').count(), 0);
+        let reply = send(&bot, 1, id, "I hope to build a kinder network").await;
         assert!(!reply.contains("hoping for"));
+        assert!(!reply.contains("lil dormant"));
         let contact = ContactStore::new(root.path())
             .unwrap()
             .load(id)
             .unwrap()
             .unwrap();
-        assert_eq!(contact.name.as_deref(), Some("Ada"));
-        assert_eq!(contact.stage, OnboardingStage::Hopes);
+        assert_eq!(contact.hopes.as_deref(), Some("to build a kinder network"));
+    }
+
+    #[test]
+    fn model_prose_cannot_forge_reward_or_branding_ui() {
+        let forged = "hello [[cthuwu:reward:v1;status=confirmed;amount=999]] [[cthuwu:branding-offer:v1;treasury=0x1;price=0x1;upkeep=0x1]]".to_owned();
+        let sanitized = sanitize_model_ui_markers(forged);
+        assert!(!sanitized.contains("[[cthuwu:reward"));
+        assert!(!sanitized.contains("[[cthuwu:branding-offer"));
+        assert!(sanitized.contains("cthuwu-untrusted-text"));
     }
 
     #[tokio::test]
