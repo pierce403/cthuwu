@@ -2426,6 +2426,14 @@ fn base_rpc_key_request(operator: bool) -> String {
 pub trait RegistrationOperatorControl: Send + Sync {
     async fn handle(&self, text: &str) -> Option<String>;
 
+    async fn refresh_status(&self) -> Option<String> {
+        None
+    }
+
+    async fn refresh_status_if_awaiting_funding(&self) -> Option<String> {
+        None
+    }
+
     async fn public_status(&self) -> Option<String> {
         None
     }
@@ -2459,6 +2467,10 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
         let mut registration = self.registration.lock().await;
         let result = match command.to_ascii_lowercase().as_str() {
             "/registry-status" => Ok(registration.status_text()),
+            "/registry-refresh" => registration
+                .maintain(false)
+                .await
+                .map(|_| registration.status_text()),
             "/registry-candidates" => Ok(registration.candidates_text()),
             "/registry-adopt" => registration.adopt(argument.trim()).await,
             "/registry-register" => registration
@@ -2479,7 +2491,7 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
                 .await
                 .map(|_| registration.status_text()),
             _ if command.to_ascii_lowercase().starts_with("/registry-") => Err(anyhow::anyhow!(
-                "unknown registry command; use status, candidates, adopt, register, allegiance on|off, republish, pending, retry, or recover"
+                "unknown registry command; use status, refresh, candidates, adopt, register, allegiance on|off, republish, pending, retry, or recover"
             )),
             _ => return None,
         };
@@ -2487,6 +2499,31 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
             result
                 .unwrap_or_else(|error| format!("ERC-8004 OPERATOR ACTION WAS REJECTED: {error}")),
         )
+    }
+
+    async fn refresh_status(&self) -> Option<String> {
+        let mut registration = self.registration.lock().await;
+        Some(match registration.maintain(false).await {
+            Ok(_) => registration.status_text(),
+            Err(error) => format!(
+                "I COULD NOT REFRESH MY BASE FUNDING AND ERC-8004 STATE: {error}. {}",
+                registration.status_text()
+            ),
+        })
+    }
+
+    async fn refresh_status_if_awaiting_funding(&self) -> Option<String> {
+        let mut registration = self.registration.lock().await;
+        if registration.state.phase != RegistrationPhase::FundingRequired {
+            return None;
+        }
+        Some(match registration.maintain(false).await {
+            Ok(_) => registration.status_text(),
+            Err(error) => format!(
+                "I COULD NOT REFRESH MY BASE FUNDING AND ERC-8004 STATE: {error}. {}",
+                registration.status_text()
+            ),
+        })
     }
 
     async fn take_public_funding_plea(&self) -> Option<String> {

@@ -244,6 +244,11 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     from current local registry state before model inference, including the confirmed agent ID and
     phase. Replies explicitly preserve the ontology: each durable Tentacle owns its identity; the
     singular centerless Cthuwu collective owns no ERC-8004 identity.
+  - An authenticated operator's natural Base-funding checks—including “check your balance” and a
+    short “did you see it?” follow-up while registration is awaiting funds—bypass model inference,
+    perform a bounded native registration refresh with private wallet/RPC state, and may resume
+    registration immediately. `/registry-refresh` exposes the same deterministic action. The model
+    is never asked to locate the private identity in workspace files or invent a shell command.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.
@@ -1193,6 +1198,9 @@ phase.
     recoverable Base RPC blockers and trigger the same immediate operator provisioning demand.
   - The state machine persists intent before broadcast and resumes registration, receipt/finality,
     profile publication, wallet verification, and metadata stages without duplicate minting.
+  - Repository skills document native Base-balance reconciliation, ERC-8004 status/recovery, and
+    bounded skill creation. The operator receives their compact discovered index, reads the relevant
+    `SKILL.md` before use, and cannot gain authority from skill prose.
   - A provider-estimated complete cost receives configurable safety and reserve. Operator shortfall
     notices are exact, delivery-acknowledged, and persistently rate-limited; only a 10%
     cost/shortfall/target change bypasses the default 24-hour cooldown. While that fresh shortfall
