@@ -68,6 +68,7 @@ const DEFAULT_HELPER_TIMEOUT: Duration = Duration::from_secs(180);
 const DEFAULT_CONFIRMATIONS: u64 = 12;
 const DEFAULT_NOTIFICATION_COOLDOWN_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAINTENANCE_INTERVAL_SECONDS: u64 = 15 * 60;
+const SUBMITTED_TRANSACTION_MAINTENANCE_INTERVAL_SECONDS: u64 = 15;
 const RECOVERABLE_RPC_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -822,6 +823,11 @@ impl TentacleRegistration {
         {
             return self.config.maintenance_interval.max(Duration::from_secs(
                 RECOVERABLE_RPC_MAINTENANCE_INTERVAL_SECONDS,
+            ));
+        }
+        if self.state.phase == RegistrationPhase::Submitted {
+            return self.config.maintenance_interval.min(Duration::from_secs(
+                SUBMITTED_TRANSACTION_MAINTENANCE_INTERVAL_SECONDS,
             ));
         }
         self.config.maintenance_interval
@@ -3972,10 +3978,14 @@ mod tests {
     }
 
     #[test]
-    fn recoverable_rpc_failure_backs_off_automatic_maintenance() {
+    fn automatic_maintenance_tracks_pending_transactions_promptly_and_backs_off_rpc_failures() {
         let root = tempfile::tempdir().unwrap();
         let mut registration = registration(root.path());
         registration.config.maintenance_interval = Duration::from_secs(15 * 60);
+
+        registration.state.phase = RegistrationPhase::Submitted;
+        assert_eq!(registration.maintenance_interval(), Duration::from_secs(15));
+
         registration.state.failure = Some(failure_from_error(
             "RPC request failed: over rate limit",
             true,
@@ -3987,6 +3997,7 @@ mod tests {
         );
 
         registration.state.failure = None;
+        registration.state.phase = RegistrationPhase::Active;
         assert_eq!(
             registration.maintenance_interval(),
             Duration::from_secs(15 * 60)

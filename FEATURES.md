@@ -1252,6 +1252,9 @@ phase.
     `balanceOf` values at that same block. Agent0 is an index, not membership authority.
   - The browser queries The Graph directly. There is no SSR, API route, worker, database, browser
     wallet connection, or private backend.
+  - A Tentacle with a submitted ERC-8004 transaction polls its receipt on a short bounded cadence,
+    then advances the remaining profile and discovery-metadata transactions one confirmed nonce at
+    a time; it does not wait the ordinary 15-minute steady-state interval between publication steps.
   - Exact-allegiance identities are grouped by verified nonzero `agentWallet`; the lowest agent ID
     represents a shared-wallet group and the balance/rank/future influence appears once. Zero balance
     remains visible as `UNFUNDED`; zero/unverified wallet is separately suspended.
