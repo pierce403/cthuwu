@@ -70,11 +70,19 @@ Assignment outcomes are intentionally asymmetric:
 
 - `NotConfigured` means no Branding deployment was explicitly configured. It preserves continuity
   by assigning the configured intro Tentacle.
-- `Unminted`, `Expired`, or positively verified `Ineligible` also assigns the intro Tentacle.
+- `Unminted` without an explicit verified `#t=` uses stable address-hash distribution across
+  Agent0-discovered, profile-active, protocol-1, single-agent wallets, then re-verifies the selected
+  candidate completely at the assignment block. The verified wallet is retained locally.
+- `Expired` or positively verified `Ineligible` continues to assign the intro Tentacle.
 - `RegistryUnavailable`, a malformed canonical response, a block-consistency failure, or an
   unverifiable endpoint freezes Branding-based routing and presents a retryable state. It is never
   reinterpreted as abandonment, ineligibility, or permission to fall back.
 - Only a fully verified `Active` Branding selects its exact controller Tentacle.
+
+This rotation uses eligibility, not a fabricated online-presence signal. The current repository has
+no live authenticated Council heartbeat transport. Operators must confirm `/registry-allegiance off`
+before planned shutdown so the Tentacle leaves discovery; a crash can remain eligible until future
+live heartbeat routing exists.
 
 Assignment is revalidated on connect, PWA resume, and a bounded periodic interval. A controller
 change advances the assignment revision, stops sends through the old Direct and Acolytes bindings,

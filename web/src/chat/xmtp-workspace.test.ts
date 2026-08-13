@@ -61,6 +61,16 @@ const configuredFallback: TentacleAssignment = {
   blockHash: `0x${"6".repeat(64)}`,
   notice: "Unminted Branding; using intro Tentacle",
 };
+const rotated: TentacleAssignment = {
+  source: "rotation-verified",
+  address,
+  wallet: address,
+  inboxId: tentacle,
+  agentId: "42",
+  blockNumber: 123n,
+  blockHash: `0x${"6".repeat(64)}`,
+  notice: "Eligible Tentacle rotation verified",
+};
 
 class FakeStream<T> implements AsyncIterable<T> {
   private values: T[] = [];
@@ -302,6 +312,17 @@ describe("multi-channel XMTP workspace", () => {
     expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
     expect(workspace.snapshot().channels.acolytes.status).toBe("awaiting-assignment");
     expect(workspace.snapshot().channels.global.readConversationIds).toEqual([]);
+    await workspace.close();
+  });
+
+  it("persists a verified unbranded rotation choice for browser continuity", async () => {
+    const value = fixture();
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: vi.fn(async () => rotated),
+      storage: localStorage,
+    });
+    await workspace.start();
+    expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBe(address);
     await workspace.close();
   });
 

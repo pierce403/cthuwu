@@ -85,9 +85,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     other installations and retries registration exactly once; it does not reset the wallet identity.
   - The in-progress channel workspace reuses this one `StoredIdentity` and one Browser SDK `Client`
     for Direct, Acolytes, and Global; it never creates one identity or client per tab.
-  - The deployed browser always uses XMTP `production` and currently connects automatically to the
-    canonical intro Tentacle; no build variable can redirect that deployed fallback. The separate
-    Branding routing gate must positively verify any future controller.
+  - The deployed browser always uses XMTP `production`. Active Branding and an explicit verified
+    `#t=` target remain authoritative. A new unminted identity without either uses a stable
+    address-hash rotation across Agent0-discovered eligible Tentacles, with complete same-block
+    canonical verification before Direct opens. The verified choice is persisted locally.
   - Root onboarding fragments accept `#t=<tentacle-wallet>&r=<referrer-wallet>`. Fragments remain
     browser-local and are not included in the HTTP request. The `t` target replaces
     the intro route only after Agent0 discovery and same-block canonical ERC-8004 wallet,
@@ -175,6 +176,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - An unbranded acolyte may follow `#t=<wallet>` to a specific Tentacle. Agent0 supplies only the
     candidate agent ID; canonical Base reads still authorize the exact wallet and XMTP inbox. An
     active Branding remains authoritative over any URL parameter.
+  - A new `Unminted` acolyte without `#t=` is distributed deterministically across current eligible
+    single-agent wallets. Existing active Branding is never rotated. ERC-8004 eligibility is not
+    process liveness: until authenticated live heartbeats ship, an operator must send
+    `/registry-allegiance off` and let it confirm before intentionally taking a Tentacle offline.
   - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the
     configured intro Tentacle. `RegistryUnavailable`, a
     block-consistency failure, or an unverifiable canonical endpoint freezes Branding routing in a

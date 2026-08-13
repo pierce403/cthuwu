@@ -10,6 +10,10 @@ Last reviewed: 2026-08-12
   and a confirmed mint are implemented.
 - Leaderboard wallet addresses are Direct-chat links. The root UI copies social recruitment URLs
   using the currently assigned Tentacle for `t` and the local browser identity for `r`.
+- New Unminted browser identities without explicit `#t=` use a stable address-hash rotation across
+  eligible single-agent Tentacle wallets and retain the verified choice locally. Active Branding
+  remains absolute. This is eligibility, not runtime liveness; planned shutdown requires confirmed
+  `/registry-allegiance off` until authenticated live heartbeats ship.
 
 ## Product
 

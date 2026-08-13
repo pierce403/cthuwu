@@ -40,6 +40,7 @@ export type AssignmentState =
   | "intro-fallback"
   | "branding-active"
   | "anchor-verified"
+  | "rotation-verified"
   | "direct-verification-unavailable"
   | "registry-unavailable";
 

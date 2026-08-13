@@ -370,6 +370,12 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         await this.restartStreams();
       }
       const assignment = await this.resolveAssignment(this.config, this.identity);
+      if (assignment.source === "rotation-verified") {
+        this.storage?.setItem(
+          `cthuwu.rotation.v1:${this.config.environment}:${this.identity.address}`,
+          assignment.address,
+        );
+      }
       this.registryFailureCount = 0;
       this.nextAutomaticRegistryAttemptAt = 0;
       const changed = routeKey(assignment) !== routeKey(this.currentAssignment);
@@ -1040,8 +1046,8 @@ function routeKey(assignment: TentacleAssignment | undefined): string | undefine
     : `address:${assignment.address}`;
 }
 
-function isVerifiedTentacle(assignment: TentacleAssignment): assignment is Extract<TentacleAssignment, { source: "branding-active" | "anchor-verified" }> {
-  return assignment.source === "branding-active" || assignment.source === "anchor-verified";
+function isVerifiedTentacle(assignment: TentacleAssignment): assignment is Extract<TentacleAssignment, { source: "branding-active" | "anchor-verified" | "rotation-verified" }> {
+  return assignment.source === "branding-active" || assignment.source === "anchor-verified" || assignment.source === "rotation-verified";
 }
 
 async function verifyPeerInboxState(

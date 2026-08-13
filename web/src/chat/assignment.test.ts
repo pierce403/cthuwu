@@ -229,11 +229,28 @@ describe("canonical Tentacle assignment", () => {
     [3, "Ineligible"],
   ])("uses intro only for canonical non-active status %s (%s)", async (status, label) => {
     const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
-    await expect(resolveTentacleAssignment(config, identity, { rpc: canonicalRpc({ status }) })).resolves.toMatchObject({
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({ status }),
+      discoverRotation: async () => [],
+    })).resolves.toMatchObject({
       source: "intro-fallback",
       brandingStatus: label,
       blockNumber: 123n,
       blockHash: `0x${"a".repeat(64)}`,
+    });
+  });
+
+  it("assigns an unminted identity through the eligible Tentacle rotation", async () => {
+    const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
+    const wallet = "0x3333333333333333333333333333333333333333";
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({ status: 0, registryWallet: wallet }),
+      discoverRotation: async () => [{ wallet, agentIds: ["42"] }],
+    })).resolves.toMatchObject({
+      source: "rotation-verified",
+      address: wallet,
+      agentId: "42",
+      inboxId: inbox,
     });
   });
 

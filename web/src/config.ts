@@ -25,6 +25,7 @@ export interface AppConfig {
   assignmentRefreshMs: number;
   tentacleAnchor?: string;
   referrer?: string;
+  rotationAnchor?: string;
 }
 
 export function parseConfig(

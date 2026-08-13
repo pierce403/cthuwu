@@ -1,4 +1,4 @@
-import { Interface, getAddress } from "ethers";
+import { Interface, getAddress, keccak256 } from "ethers";
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
 import { fetchCompleteLeaderboard } from "../leaderboard-data";
@@ -68,6 +68,16 @@ export type TentacleAssignment =
       blockNumber: bigint;
       blockHash: string;
       notice: string;
+    }
+  | {
+      source: "rotation-verified";
+      address: string;
+      inboxId: string;
+      agentId: string;
+      wallet: string;
+      blockNumber: bigint;
+      blockHash: string;
+      notice: string;
     };
 
 export class RegistryUnavailableError extends Error {
@@ -81,10 +91,17 @@ export interface RpcClient {
   request(method: string, params: unknown[]): Promise<unknown>;
 }
 
+interface AssignmentOptions {
+  rpc?: RpcClient;
+  fetch?: typeof fetch;
+  discoverAgentIds?: (wallet: string) => Promise<string[]>;
+  discoverRotation?: () => Promise<Array<{ wallet: string; agentIds: string[] }>>;
+}
+
 export async function resolveTentacleAssignment(
   config: AppConfig,
   identity: StoredIdentity,
-  options: { rpc?: RpcClient; fetch?: typeof fetch; discoverAgentIds?: (wallet: string) => Promise<string[]> } = {},
+  options: AssignmentOptions = {},
 ): Promise<TentacleAssignment> {
   if (!config.brandingContract) {
     if (config.tentacleAnchor) return resolveAnchoredTentacle(config, options);
@@ -141,13 +158,13 @@ export async function resolveTentacleAssignment(
       if (config.tentacleAnchor) {
         return await resolveAnchoredTentacle(config, options, rpc, blockNumber, blockTag, observedBlock);
       }
+      if (status === "Unminted") {
+        return await resolveRotatedTentacle(config, identity, status, options, rpc, blockNumber, blockTag, observedBlock);
+      }
       await verifyUnchangedBlock(rpc, blockTag, observedBlock);
       return {
-        source: "intro-fallback",
-        address: config.botAddress,
-        brandingStatus: status,
-        blockNumber,
-        blockHash: observedBlock.hash,
+        source: "intro-fallback", address: config.botAddress, brandingStatus: status,
+        blockNumber, blockHash: observedBlock.hash,
         notice: `${status} Branding at Base block ${blockNumber}; using the configured intro Tentacle`,
       };
     }
@@ -223,9 +240,64 @@ export async function resolveTentacleAssignment(
   }
 }
 
+async function resolveRotatedTentacle(
+  config: AppConfig,
+  identity: StoredIdentity,
+  brandingStatus: Exclude<BrandingStatus, "Active">,
+  options: AssignmentOptions,
+  rpc: RpcClient,
+  blockNumber: bigint,
+  blockTag: string,
+  observedBlock: BlockHeader,
+): Promise<TentacleAssignment> {
+  const discover = options.discoverRotation ?? (async () => {
+    const endpoint = parseLeaderboardConfig().graphEndpoint;
+    if (!endpoint) throw new Error("Agent0 discovery is unavailable");
+    const snapshot = await fetchCompleteLeaderboard(endpoint, {
+      fetch: options.fetch,
+      baseRpcEndpoint: config.baseRpcEndpoint,
+    });
+    return snapshot.rankedWallets
+      .map((group) => ({
+        wallet: group.wallet,
+        agentIds: group.identities
+          .filter((candidate) => candidate.profile.active && candidate.protocolHex === PROTOCOL_V1_HEX)
+          .map((candidate) => candidate.agentId),
+      }))
+      .filter((candidate) => candidate.agentIds.length === 1);
+  });
+  const candidates = (await discover()).sort((left, right) => left.wallet.localeCompare(right.wallet));
+  if (candidates.length === 0) {
+    await verifyUnchangedBlock(rpc, blockTag, observedBlock);
+    return {
+      source: "intro-fallback", address: config.botAddress, brandingStatus,
+      blockNumber, blockHash: observedBlock.hash,
+      notice: `${brandingStatus} Branding; no eligible rotation candidates, using the intro Tentacle`,
+    };
+  }
+  const retained = config.rotationAnchor
+    ? candidates.find((candidate) => candidate.wallet === config.rotationAnchor)
+    : undefined;
+  const index = Number(BigInt(keccak256(identity.address)) % BigInt(candidates.length));
+  const selected = retained ?? candidates[index]!;
+  const assignment = await resolveAnchoredTentacle(
+    { ...config, tentacleAnchor: selected.wallet },
+    { ...options, discoverAgentIds: async () => selected.agentIds },
+    rpc, blockNumber, blockTag, observedBlock,
+  );
+  if (assignment.source !== "anchor-verified") {
+    throw new RegistryUnavailableError("eligible rotation candidate did not resolve as a verified Tentacle");
+  }
+  return {
+    ...assignment,
+    source: "rotation-verified",
+    notice: `${brandingStatus} Branding; eligible Tentacle rotation verified at Base block ${blockNumber}`,
+  };
+}
+
 async function resolveAnchoredTentacle(
   config: AppConfig,
-  options: { rpc?: RpcClient; fetch?: typeof fetch; discoverAgentIds?: (wallet: string) => Promise<string[]> },
+  options: AssignmentOptions,
   existingRpc?: RpcClient,
   existingBlockNumber?: bigint,
   existingBlockTag?: string,

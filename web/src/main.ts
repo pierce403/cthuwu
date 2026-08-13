@@ -62,7 +62,8 @@ function bootstrap(): void {
     // URL fragments stay in the browser and are never included in the HTTP request.
     const link = parseOnboardingLink(location.hash);
     const referrer = pinReferrer(environment, identity.address, link.referrer);
-    chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer }, identity);
+    const rotationAnchor = localStorage.getItem(`cthuwu.rotation.v1:${environment}:${identity.address}`) ?? undefined;
+    chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer, rotationAnchor }, identity);
   } catch (error) {
     fatalIdentity(error);
   }
