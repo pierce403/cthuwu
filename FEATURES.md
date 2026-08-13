@@ -48,6 +48,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     `cthuwu:leaderboard:v1`; service-worker Cache Storage never adds a second Graph-data cache.
   - The composer grows to five lines, Enter sends, Shift+Enter inserts a line, incoming messages do
     not pull a reader away from older history, and disconnected states disable message submission.
+  - Composer keystrokes update only textarea height and send-button state. They never invoke the
+    conversation renderer or replace existing message nodes, preventing desktop conversation flash
+    and preserving selection, focus, and scroll continuity while typing.
   - Identity settings read native ETH and canonical UWU at one explicit Base block and show
     precision-safe `Level = log10(UWU)`. RPC failure is `unavailable`, never a fabricated zero.
     User-triggered key export remains passphrase-encrypted and raw private-key text is never placed

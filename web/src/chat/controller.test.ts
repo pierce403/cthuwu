@@ -149,4 +149,33 @@ describe("three-channel chat controller", () => {
     await controller.close();
     expect(workspace.close).toHaveBeenCalledOnce();
   });
+
+  it("keeps existing message nodes stable across every composer keystroke", async () => {
+    const workspace = fakeWorkspace();
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    const messages = document.querySelector<HTMLDivElement>("#messages")!;
+    const bubble = messages.querySelector<HTMLElement>(".message")!;
+    const input = document.querySelector<HTMLTextAreaElement>("#message")!;
+    const send = document.querySelector<HTMLButtonElement>('#composer button[type="submit"]')!;
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(messages, { childList: true, subtree: true });
+
+    for (const value of ["h", "he", "hel", "hell", "hello"]) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(messages.querySelector(".message")).toBe(bubble);
+      expect(send.disabled).toBe(false);
+    }
+    await Promise.resolve();
+    observer.disconnect();
+
+    expect(mutations).toEqual([]);
+    expect(messages.querySelector(".message")).toBe(bubble);
+    await controller.close();
+  });
 });

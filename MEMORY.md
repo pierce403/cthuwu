@@ -123,6 +123,9 @@ Last reviewed: 2026-08-12
   allegiance/protocol, and the exact agent's on-chain ERC-8004 registration resolving to the
   selected production XMTP endpoint. Agent0 and the leaderboard cache can narrow discovery or
   supply display names, never authorize routing.
+- Chat composer input must not call the full workspace render: that path replaces all message nodes
+  and visibly flashes the conversation on desktop. Keystrokes only resize the textarea and update
+  composer controls; workspace snapshots remain the sole conversation-render trigger.
 - Assignment is revalidated on connect, PWA resume, and a bounded interval. Controller change hands
   off Direct/Acolytes and retains Global; old conversation IDs immediately stop being trusted routes.
 - Versioned `cthuwu.join.v1` / `cthuwu.assignment.v1` control uses registered

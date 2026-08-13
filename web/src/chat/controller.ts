@@ -66,6 +66,17 @@ export function initializeChatController(
   let sending = false;
   let loadingEarlier = false;
 
+  const updateComposerControls = (): void => {
+    if (!latest) return;
+    const channel = latest.channels[latest.activeChannel];
+    const canSend = latest.connected && channel.retentionVerified &&
+      (channel.status === "ready" || channel.status === "empty") &&
+      Boolean(channel.writeConversationId);
+    elements.input.disabled = !canSend || sending;
+    elements.send.disabled = !canSend || sending || elements.input.value.trim().length === 0;
+    elements.sendLabel.textContent = sending ? "sending…" : "whisper";
+  };
+
   const render = (snapshot: WorkspaceSnapshot): void => {
     const previous = latest;
     latest = snapshot;
@@ -155,11 +166,7 @@ export function initializeChatController(
       elements.newMessages.hidden = false;
     }
 
-    const canSend = snapshot.connected && channel.retentionVerified &&
-      (channel.status === "ready" || channel.status === "empty") && Boolean(channel.writeConversationId);
-    elements.input.disabled = !canSend || sending;
-    elements.send.disabled = !canSend || sending || elements.input.value.trim().length === 0;
-    elements.sendLabel.textContent = sending ? "sending…" : "whisper";
+    updateComposerControls();
     elements.retention.hidden = false;
     elements.retention.textContent = channel.retentionVerified
       ? "Messages disappear from supporting clients after 14 days."
@@ -249,7 +256,7 @@ export function initializeChatController(
   });
   elements.input.addEventListener("input", () => {
     resize(elements.input);
-    if (latest) render(latest);
+    updateComposerControls();
   });
   elements.input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
