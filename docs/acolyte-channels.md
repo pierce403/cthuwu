@@ -63,8 +63,10 @@ and protocol `1`, the same Base registry and agent ID, XMTP `production`, the sa
 and a bounded capability list containing `direct-xmtp-messaging`. A top-level endpoint without this
 nested CTHUWU production binding is unavailable, not a routing result.
 
-Agent0 and the leaderboard cache may suggest candidate IDs or supply display details, but every
-routing fact above is re-read from canonical Base state. Neither is routing authority.
+Active Branding remains canonical Base routing authority. For unminted rotation and explicit `#t=`
+links, the complete pinned, indexing-error-free Agent0 directory supplies the candidate identity and
+endpoint without redundant browser RPC reads; XMTP independently binds that inbox to the indexed
+wallet before Direct opens.
 
 Assignment outcomes are intentionally asymmetric:
 
@@ -76,6 +78,9 @@ Assignment outcomes are intentionally asymmetric:
   Agent0 directory. Once the live Branding read proves `Unminted`, the selected candidate is not
   redundantly reread from Base. XMTP still verifies that the resolved inbox belongs to the indexed
   wallet, and the choice is retained locally.
+- An explicit `#t=` wallet selects its sole active protocol-1 identity from that same complete Agent0
+  directory. Multiple eligible identities remain ambiguous and fail closed. Candidate verification
+  performs no Base RPC reads after the Branding status read.
 - `Expired` or positively verified `Ineligible` continues to assign the intro Tentacle.
 - `RegistryUnavailable`, a malformed canonical response, a block-consistency failure, or an
   unverifiable endpoint freezes Branding-based routing and presents a retryable state. It is never

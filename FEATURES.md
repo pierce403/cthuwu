@@ -85,14 +85,15 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     other installations and retries registration exactly once; it does not reset the wallet identity.
   - The in-progress channel workspace reuses this one `StoredIdentity` and one Browser SDK `Client`
     for Direct, Acolytes, and Global; it never creates one identity or client per tab.
-  - The deployed browser always uses XMTP `production`. Active Branding and an explicit verified
+  - The deployed browser always uses XMTP `production`. Active Branding and an explicit Agent0-listed
     `#t=` target remain authoritative. A new unminted identity without either uses a stable
     address-hash rotation across Agent0-discovered eligible Tentacles, with complete same-block
     canonical verification before Direct opens. The verified choice is persisted locally.
   - Root onboarding fragments accept `#t=<tentacle-wallet>&r=<referrer-wallet>`. Fragments remain
     browser-local and are not included in the HTTP request. The `t` target replaces
-    the intro route only after Agent0 discovery and same-block canonical ERC-8004 wallet,
-    authorization, allegiance, protocol, and XMTP endpoint verification. The first valid `r` value
+    the intro route only after complete pinned Agent0 discovery proves one active protocol-1 identity
+    and XMTP endpoint for the wallet. The candidate is not redundantly reread through public Base RPC;
+    XMTP still verifies that the resolved inbox belongs to the linked wallet. The first valid `r` value
     is pinned per local acolyte identity and later links cannot replace it.
   - Every verified leaderboard wallet address links to the root chat fragment for that Tentacle.
     The main chat interface can copy a social referral URL whose `t` is the currently assigned

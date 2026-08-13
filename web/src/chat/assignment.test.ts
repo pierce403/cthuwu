@@ -267,23 +267,28 @@ describe("canonical Tentacle assignment", () => {
     expect(rpc.registryCalls).toEqual([]);
   });
 
-  it("routes an unbranded deep link only after exact ERC-8004 verification", async () => {
+  it("routes an unbranded deep link from Agent0 without candidate Base reads", async () => {
     const config = {
       ...baseConfig,
       brandingContract: "0x2222222222222222222222222222222222222222",
       tentacleAnchor: "0x3333333333333333333333333333333333333333",
     };
+    const rpc = canonicalRpc({ status: 0 });
     await expect(resolveTentacleAssignment(config, identity, {
-      rpc: canonicalRpc({ status: 0, registryWallet: config.tentacleAnchor }),
-      discoverAgentIds: async () => ["42"],
+      rpc,
+      discoverAnchor: async () => [{
+        wallet: config.tentacleAnchor!, agentId: "42", inboxId: inbox,
+        blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
+      }],
     })).resolves.toMatchObject({
       source: "anchor-verified",
       address: config.tentacleAnchor,
       wallet: config.tentacleAnchor,
       agentId: "42",
       inboxId: inbox,
-      blockNumber: 123n,
+      blockNumber: 122n,
     });
+    expect(rpc.registryCalls).toEqual([]);
   });
 
   it("refuses an ambiguous t address instead of choosing a controller", async () => {
@@ -294,7 +299,10 @@ describe("canonical Tentacle assignment", () => {
     };
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ status: 0 }),
-      discoverAgentIds: async () => ["42", "43"],
+      discoverAnchor: async () => ["42", "43"].map((agentId) => ({
+        wallet: config.tentacleAnchor!, agentId, inboxId: inbox,
+        blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
+      })),
     })).rejects.toThrow(/ambiguous/u);
   });
 

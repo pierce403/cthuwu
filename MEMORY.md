@@ -16,6 +16,8 @@ Last reviewed: 2026-08-12
   no redundant live Base calls. Active Branding
   remains absolute. This is eligibility, not runtime liveness; planned shutdown requires confirmed
   `/registry-allegiance off` until authenticated live heartbeats ship.
+- Explicit `#t=` links now select the sole eligible identity from that same complete Agent0 directory
+  instead of repeating six public Base registry reads. XMTP still binds the inbox to the wallet.
 
 ## Product
 
