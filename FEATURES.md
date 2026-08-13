@@ -1176,6 +1176,11 @@ phase.
     Transfer, wallet clearing, ownership/operator loss, or wallet mismatch suspends the identity.
   - Startup reverifies persisted identity, discovers candidates, adopts one exact authorized match,
     requires operator selection for ambiguity, and can opt an existing agent in without minting.
+  - The first registration-supervisor pass on every boot is an explicit resource audit. It bypasses
+    the ordinary notification cooldown for a currently verified Base ETH shortfall and sends the
+    sole operator an immediate, exact Base-only funding demand; a recoverable Base RPC blocker gets
+    an immediate operator demand with the Infura provisioning command instead. Later maintenance
+    remains delivery-acknowledged and rate-limited, and confirmed registration emits no resource demand.
   - The state machine persists intent before broadcast and resumes registration, receipt/finality,
     profile publication, wallet verification, and metadata stages without duplicate minting.
   - A provider-estimated complete cost receives configurable safety and reserve. Operator shortfall

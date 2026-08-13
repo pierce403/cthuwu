@@ -1431,11 +1431,18 @@ async fn run_registration_supervisor(
     operators: Arc<Mutex<OperatorStore>>,
     notices: mpsc::Sender<OperatorNotice>,
 ) {
+    let mut startup_audit = true;
     loop {
         let (notifications, interval) = {
             let mut registration = registration.lock().await;
             let interval = registration.maintenance_interval();
-            match registration.maintain(false).await {
+            let result = if startup_audit {
+                startup_audit = false;
+                registration.maintain_startup().await
+            } else {
+                registration.maintain(false).await
+            };
+            match result {
                 Ok(notifications) => (notifications, interval),
                 Err(error) => {
                     warn!(%error, "ERC-8004 maintenance failed; direct XMTP operation remains available in degraded unlisted mode");

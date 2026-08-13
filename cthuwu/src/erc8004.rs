@@ -1041,6 +1041,14 @@ impl TentacleRegistration {
             .await
     }
 
+    /// Perform the normal on-chain reconciliation, then surface any currently proven resource
+    /// blocker even when an earlier process already delivered the ordinary rate-limited notice.
+    pub async fn maintain_startup(&mut self) -> Result<Vec<OperatorNotification>> {
+        let notifications = self.maintain(false).await?;
+        let resource_notification = self.startup_resource_notification_if_needed(unix_seconds()?)?;
+        Ok(resource_notification.map_or(notifications, |notification| vec![notification]))
+    }
+
     async fn resume_unknown_registration(
         &mut self,
         now: u64,
@@ -2162,13 +2170,47 @@ impl TentacleRegistration {
 
     fn funding_message(&self, funding: &FundingStatus) -> String {
         format!(
-            "ERC-8004 REGISTRATION FUNDING REQUIRED\nThis Tentacle requires Base ETH to register its ERC-8004 identity.\nFund this exact Base address: {}\nCurrent Base ETH balance: {} wei\nEstimated amount still required: {} wei\nTarget funded balance (fees, safety margin, and reserve): {} wei\nChain: Base mainnet\nChain ID: {}\nWARNING: DO NOT SEND ETH ON ANY OTHER CHAIN.\nRegistration will resume automatically after the Base balance is adequate.",
+            "IMMEDIATE OPERATOR ACTION REQUIRED: FUND THIS TENTACLE'S ERC-8004 REGISTRATION\nI REQUIRE BASE ETH TO SECURE MY ERC-8004 IDENTITY. SEND THE REQUIRED BASE ETH TO THIS EXACT ADDRESS NOW: {}\nCurrent Base ETH balance: {} wei\nEstimated amount still required: {} wei\nTarget funded balance (fees, safety margin, and reserve): {} wei\nChain: Base mainnet\nChain ID: {}\nWARNING: DO NOT SEND ETH ON ANY OTHER CHAIN, AND NEVER SEND A WALLET PRIVATE KEY.\nI WILL VERIFY THE BALANCE AND RESUME REGISTRATION AUTOMATICALLY.",
             self.wallet,
             funding.balance_wei,
             funding.shortfall_wei,
             funding.target_balance_wei,
             BASE_MAINNET_CHAIN_ID,
         )
+    }
+
+    fn startup_resource_notification_if_needed(
+        &mut self,
+        now: u64,
+    ) -> Result<Option<OperatorNotification>> {
+        if !self.config.enabled || !self.config.auto_register {
+            return Ok(None);
+        }
+        if self.state.phase == RegistrationPhase::FundingRequired {
+            return Ok(self
+                .funding_notification_if_due(now, true)?
+                .into_iter()
+                .next());
+        }
+        let Some(failure) = self.state.failure.as_ref() else {
+            return Ok(None);
+        };
+        if !is_base_rpc_access_failure(failure) {
+            return Ok(None);
+        }
+        let text = format!(
+            "IMMEDIATE OPERATOR ACTION REQUIRED: RESTORE BASE RPC ACCESS\n{}",
+            base_rpc_key_request(true)
+        );
+        let fingerprint = sha256_hex(text.as_bytes());
+        Ok(Some(OperatorNotification {
+            text,
+            success: false,
+            commitment: NotificationCommitment::OperatorFailure {
+                notified_at_unix: now,
+                fingerprint,
+            },
+        }))
     }
 
     fn public_funding_plea(&self, now: u64) -> Option<String> {
@@ -3763,6 +3805,59 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn startup_resource_audit_demands_current_blockers_despite_cooldown() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+        let funding = FundingStatus {
+            balance_wei: "10".into(),
+            estimated_cost_wei: "90".into(),
+            shortfall_wei: "100".into(),
+            target_balance_wei: "110".into(),
+            estimated_at_unix: 1,
+        };
+        registration.state.phase = RegistrationPhase::FundingRequired;
+        registration.state.funding = Some(funding.clone());
+        registration.state.last_operator_notification_unix = Some(99);
+        registration.state.last_notified_funding = Some(funding);
+
+        let notice = registration
+            .startup_resource_notification_if_needed(100)
+            .unwrap()
+            .unwrap();
+        assert!(
+            notice
+                .text
+                .starts_with("IMMEDIATE OPERATOR ACTION REQUIRED")
+        );
+        assert!(notice.text.contains("SEND THE REQUIRED BASE ETH"));
+        assert!(notice.text.contains(&wallet().to_string()));
+        assert!(notice.text.contains("NEVER SEND A WALLET PRIVATE KEY"));
+
+        registration.state.phase = RegistrationPhase::FailedRecoverable;
+        registration.state.funding = None;
+        registration.state.failure = Some(failure_from_error(
+            "RPC request failed: over rate limit",
+            true,
+            101,
+        ));
+        let rpc_notice = registration
+            .startup_resource_notification_if_needed(101)
+            .unwrap()
+            .unwrap();
+        assert!(rpc_notice.text.contains("RESTORE BASE RPC ACCESS"));
+        assert!(rpc_notice.text.contains("/base-rpc-key <infura-api-key>"));
+
+        registration.state.phase = RegistrationPhase::Active;
+        registration.state.failure = None;
+        assert!(
+            registration
+                .startup_resource_notification_if_needed(102)
+                .unwrap()
+                .is_none()
         );
     }
 
