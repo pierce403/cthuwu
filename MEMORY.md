@@ -764,3 +764,6 @@ The original manual milestone was:
 - Branding offer pricing defaults to 10% of the Tentacle's freshly verified current UWU treasury,
   permits only disclosed 5%-20% adjustments, and binds the exact price and first upkeep into the
   acolyte's EIP-712 consent. Never derive it from UWU total supply.
+- ERC-8004 funding reconciliation must not strand a minted identity when a Base provider lacks the
+  optional GasPriceOracle L1 fee estimate. Reserve a conservative bounded L1 allowance while the
+  actual write path continues to estimate gas and enforce fee ceilings independently.

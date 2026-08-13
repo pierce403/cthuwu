@@ -586,6 +586,41 @@ export async function sumThrottledL1Fees<T>(
   return total;
 }
 
+export async function sumL1FeesWithConservativeFallback<T>(
+  requests: readonly T[],
+  estimate: (request: T) => Promise<bigint>,
+  conservativeFeePerTransaction: bigint,
+  options: {
+    throttleMs?: number;
+    sleep?: Sleep;
+  } = {},
+): Promise<{ fee: bigint; exact: boolean }> {
+  if (conservativeFeePerTransaction < 0n) {
+    throw new PermanentSignerError(
+      "configuration",
+      "conservative L1 fee allowance cannot be negative",
+    );
+  }
+  try {
+    return {
+      fee: await sumThrottledL1Fees(requests, estimate, options),
+      exact: true,
+    };
+  } catch (error) {
+    if (error instanceof PermanentSignerError) throw error;
+    // Some otherwise usable Base providers do not expose the GasPriceOracle
+    // getL1Fee call used by viem. Funding reconciliation may conservatively
+    // reserve the full configured L2 execution ceiling once more for every
+    // pending transaction. The write path still performs its own estimateGas,
+    // fee-cap, signing, and broadcast checks, so this fallback cannot authorize
+    // a transaction that the exact execution path rejects.
+    return {
+      fee: conservativeFeePerTransaction * BigInt(requests.length),
+      exact: false,
+    };
+  }
+}
+
 type SignerNonceAllocation = {
   version: 1;
   chainId: 8453;
@@ -1428,19 +1463,18 @@ async function fundingEstimate(publicClient: PublicClient, operation: Extract<Re
     executionGas += gas;
     l1Calls.push(call.data);
   }
-  let l1Fee: bigint;
-  try {
-    l1Fee = await sumThrottledL1Fees(l1Calls, (data) =>
+  const conservativeL1FeePerTransaction = gasCeiling * maxFeePerGas;
+  const l1Estimate = await sumL1FeesWithConservativeFallback(
+    l1Calls,
+    (data) =>
       publicClient.estimateL1Fee({
         account: wallet,
         to: ERC8004_IDENTITY_REGISTRY,
         data,
       }),
-    );
-  } catch (error) {
-    if (error instanceof PermanentSignerError) throw error;
-    throw new RecoverableSignerError("l1_fee_estimate", "provider did not return Base L1 data fee estimates");
-  }
+    conservativeL1FeePerTransaction,
+  );
+  const l1Fee = l1Estimate.fee;
   const balance = await publicClient.getBalance({ address: wallet });
   const safetyBps = envBigInt("CTHUWU_ERC8004_GAS_SAFETY_BPS", DEFAULT_SAFETY_BPS);
   if (safetyBps < 10_000n || safetyBps > 50_000n) {
@@ -1457,6 +1491,7 @@ async function fundingEstimate(publicClient: PublicClient, operation: Extract<Re
     shortfallWei: (targetBalance > balance ? targetBalance - balance : 0n).toString(),
     executionGas: executionGas.toString(),
     l1DataFeeWei: l1Fee.toString(),
+    l1DataFeeExact: l1Estimate.exact,
     maxFeePerGasWei: maxFeePerGas.toString(),
     maxPriorityFeePerGasWei: maxPriorityFeePerGas.toString(),
     safetyBps: safetyBps.toString(),

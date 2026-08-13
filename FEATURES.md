@@ -1222,6 +1222,11 @@ phase.
     wallet balance and uses the configured per-transaction gas ceiling as a conservative estimate;
     the actual write path still estimates and fails closed before signing. Operator model status
     distinguishes a minted agent ID from incomplete profile/allegiance setup.
+  - A provider that cannot return Base GasPriceOracle L1 data-fee estimates no longer strands an
+    already-minted identity. Funding reconciliation reserves the full configured execution
+    gas/fee ceiling again as a conservative L1 allowance for each pending transaction and reports
+    that the L1 component is not exact. The write path still independently estimates execution,
+    enforces fee ceilings, signs, and fails closed before broadcast.
   - Repository skills document native Base-balance reconciliation, ERC-8004 status/recovery, and
     bounded skill creation. The operator receives their compact discovered index, reads the relevant
     `SKILL.md` before use, and cannot gain authority from skill prose.

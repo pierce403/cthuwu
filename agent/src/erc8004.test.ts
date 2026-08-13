@@ -29,6 +29,7 @@ import {
   readSignerNonceState,
   requestFingerprint,
   sumThrottledL1Fees,
+  sumL1FeesWithConservativeFallback,
   withBoundedRpcRetry,
 } from "./erc8004.js";
 
@@ -377,6 +378,30 @@ describe("narrow ERC-8004 signer protocol", () => {
     );
     expect(total).toBe(30n);
     expect(delays).toEqual([25, 1_100, 25]);
+  });
+
+  it("uses a bounded conservative L1 allowance when the provider lacks the oracle read", async () => {
+    const fallback = await sumL1FeesWithConservativeFallback(
+      ["a", "b", "c"],
+      async () => {
+        throw new Error("provider does not support the Base L1 fee oracle call");
+      },
+      25n,
+      { throttleMs: 0, sleep: async () => undefined },
+    );
+    expect(fallback).toEqual({ fee: 75n, exact: false });
+
+    const exact = await sumL1FeesWithConservativeFallback(
+      [1, 2],
+      async (value) => BigInt(value * 3),
+      100n,
+      { throttleMs: 0, sleep: async () => undefined },
+    );
+    expect(exact).toEqual({ fee: 9n, exact: true });
+
+    await expect(
+      sumL1FeesWithConservativeFallback([], async () => 0n, -1n),
+    ).rejects.toThrow("cannot be negative");
   });
 
   it("discovers direct approvals, current agentWallet, and current operators but filters stale authority", async () => {
