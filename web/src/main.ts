@@ -1,6 +1,8 @@
 import { XMTP_ENVIRONMENT, parseConfig } from "./config";
 import {
   IdentityStorageError,
+  createExternalIdentity,
+  isLocalIdentity,
   loadOrCreateIdentity,
   persistIdentity,
   resetIdentity,
@@ -26,6 +28,11 @@ const dialogCloseElement = requireElement<HTMLButtonElement>("identity-close");
 const addressElement = requireElement<HTMLElement>("identity-address");
 const nameElement = requireElement<HTMLElement>("identity-name");
 const environmentElement = requireElement<HTMLElement>("identity-environment");
+const sourceElement = requireElement<HTMLElement>("identity-source");
+const securityCopyElement = requireElement<HTMLElement>("identity-security-copy");
+const connectBrowserWalletElement = requireElement<HTMLButtonElement>("connect-browser-wallet");
+const connectWalletConnectElement = requireElement<HTMLButtonElement>("connect-walletconnect");
+const useLocalWalletElement = requireElement<HTMLButtonElement>("use-local-wallet");
 const ethBalanceElement = requireElement<HTMLElement>("identity-eth-balance");
 const uwuBalanceElement = requireElement<HTMLElement>("identity-uwu-balance");
 const levelElement = requireElement<HTMLElement>("identity-level");
@@ -62,6 +69,7 @@ function bootstrap(): void {
     identity = loadOrCreateIdentity(environment);
     addressElement.textContent = identity.address;
     nameElement.textContent = acolyteName(identity.address);
+    renderIdentitySource(identity);
     // URL fragments stay in the browser and are never included in the HTTP request.
     const link = parseOnboardingLink(location.hash);
     const referrer = pinReferrer(environment, identity.address, link.referrer);
@@ -114,6 +122,9 @@ function wireIdentityControls(): void {
   refreshBalancesElement.addEventListener("click", () => void refreshBalances());
   importElement.addEventListener("change", () => void importIdentity());
   resetElement.addEventListener("click", () => void confirmReset());
+  connectBrowserWalletElement.addEventListener("click", () => void selectExternalWallet("injected"));
+  connectWalletConnectElement.addEventListener("click", () => void selectExternalWallet("walletConnect"));
+  useLocalWalletElement.addEventListener("click", () => void selectLocalWallet());
 }
 
 async function refreshBalances(): Promise<void> {
@@ -141,6 +152,9 @@ async function refreshBalances(): Promise<void> {
 async function exportIdentity(): Promise<void> {
   try {
     if (!identity) throw new Error("No valid identity is loaded");
+    if (!isLocalIdentity(identity)) {
+      throw new Error("External wallets keep their keys in the wallet app; there is no Cthuwu key to export");
+    }
     const backup = await encryptIdentityBackup(identity, passphraseElement.value);
     const blob = new Blob([backup], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -153,6 +167,73 @@ async function exportIdentity(): Promise<void> {
   } catch (error) {
     setSettingsStatus(publicError(error));
   }
+}
+
+async function selectExternalWallet(connector: "injected" | "walletConnect"): Promise<void> {
+  if (!identity) return;
+  if (isLocalIdentity(identity) && !window.confirm(
+    "Use an external wallet for this Acolyte? Export the current local identity first if you may want its XMTP inbox again.",
+  )) return;
+  setWalletButtonsDisabled(true);
+  setSettingsStatus(connector === "walletConnect" ? "opening WalletConnect…" : "requesting browser wallet…");
+  try {
+    const { connectExternalWallet } = await import("./wallet-connector");
+    const connected = await connectExternalWallet(connector);
+    await chatController?.close();
+    const next = !isLocalIdentity(identity) && identity.address === connected.address &&
+      identity.connector === connected.connector
+      ? { ...identity, chainId: connected.chainId, signerType: connected.signerType }
+      : createExternalIdentity(
+        environment,
+        connected.address,
+        connected.connector,
+        connected.chainId,
+        connected.signerType,
+      );
+    persistIdentity(next);
+    setSettingsStatus("external wallet connected; reloading XMTP…");
+    location.reload();
+  } catch (error) {
+    setSettingsStatus(publicError(error));
+    setWalletButtonsDisabled(false);
+  }
+}
+
+async function selectLocalWallet(): Promise<void> {
+  if (!identity || isLocalIdentity(identity)) return;
+  if (!window.confirm(
+    "Create a new local Acolyte wallet? Reconnecting the external wallet later will recover its XMTP inbox, but local history is not transferred.",
+  )) return;
+  setWalletButtonsDisabled(true);
+  try {
+    await chatController?.close();
+    const { disconnectExternalWallet } = await import("./wallet-connector");
+    await disconnectExternalWallet();
+    resetIdentity(environment);
+    location.reload();
+  } catch (error) {
+    setSettingsStatus(publicError(error));
+    setWalletButtonsDisabled(false);
+  }
+}
+
+function renderIdentitySource(current: StoredIdentity): void {
+  const local = isLocalIdentity(current);
+  sourceElement.textContent = local
+    ? "local generated wallet"
+    : current.connector === "walletConnect" ? "WalletConnect" : "browser wallet";
+  securityCopyElement.textContent = local
+    ? "This device stores a random wallet used only for this chat identity. The XMTP Browser SDK also keeps an unencrypted local message database."
+    : "Your wallet app keeps the signing key; Cthuwu stores only the public address and connector choice. The XMTP Browser SDK still keeps an unencrypted local message database.";
+  exportElement.disabled = !local;
+  exportElement.title = local ? "" : "External wallet keys stay in the wallet app";
+  useLocalWalletElement.hidden = local;
+}
+
+function setWalletButtonsDisabled(disabled: boolean): void {
+  connectBrowserWalletElement.disabled = disabled;
+  connectWalletConnectElement.disabled = disabled;
+  useLocalWalletElement.disabled = disabled;
 }
 
 async function importIdentity(): Promise<void> {

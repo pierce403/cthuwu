@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadOrCreateIdentity } from "./identity";
+import { isLocalIdentity, loadOrCreateIdentity } from "./identity";
 
 const inboxId = "a".repeat(64);
 const chat = vi.hoisted(() => ({
@@ -51,6 +51,7 @@ describe("operator console", () => {
 
   it("registers and reuses the canonical Acolyte identity without selecting a target", async () => {
     const identity = loadOrCreateIdentity("production");
+    if (!isLocalIdentity(identity)) throw new Error("expected local identity");
     await import("./operator");
     await vi.waitFor(() => expect(xmtp.ensure).toHaveBeenCalled());
 

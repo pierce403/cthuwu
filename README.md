@@ -84,7 +84,10 @@ committed, so local intents and core records must not be described as completed 
 
 ## What works
 
-- The browser generates an environment-scoped wallet before connecting, reuses it on reload, and supports passphrase-encrypted identity export/import and confirmed reset.
+- The browser generates an environment-scoped wallet before connecting and reuses it on reload.
+  Identity settings can instead bind the same XMTP flow to an injected browser wallet or
+  WalletConnect session; external private keys remain in the wallet. Generated identities support
+  passphrase-encrypted export/import and confirmed reset.
 - The responsive web client uses a locally hosted animated Cthuwu mascot, loads and streams text
   history, preserves drafts after failed sends, and offers an explicit motion pause control. It is
   also installable as a standalone PWA with dedicated icons, a seven-day install-nudge cooldown,
@@ -853,7 +856,14 @@ messages from the rendered UI. See [the channel protocol](docs/acolyte-channels.
 The root page publishes an absolute Open Graph/Twitter large-image card at
 `https://cthuwu.app/cthuwu-og.jpg`.
 
-The browser wallet is stored in local storage. Its XMTP Browser SDK message database is currently unencrypted. The settings dialog says this explicitly; an identity export recovers the wallet/inbox, not message history or necessarily the same installation. On each launch, the browser reopens the persisted Browser SDK installation and checks XMTP registration before registering; routine reloads therefore reuse the existing installation rather than consuming another of the inbox's installation slots.
+The default generated browser wallet is stored in local storage. A user may instead choose an
+injected EIP-1193 wallet or WalletConnect; that record contains public connector metadata but no
+external private key, and signing remains in the wallet app. The XMTP Browser SDK message database
+is currently unencrypted. The settings dialog says this explicitly; a generated-identity export
+recovers the wallet/inbox, not message history or necessarily the same installation. On each launch,
+the browser reopens the persisted Browser SDK installation and checks XMTP registration before
+registering; routine reloads therefore reuse the existing installation rather than consuming another
+of the inbox's installation slots.
 
 The service worker caches only a bounded static shell and offline assets. It does not cache GraphQL
 responses, registration documents, Base RPC, XMTP network data, messages, identity material, or

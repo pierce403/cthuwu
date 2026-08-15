@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createExternalIdentity, persistIdentity } from "./identity";
 
 const chat = vi.hoisted(() => ({
   connect: vi.fn(async () => undefined),
@@ -55,6 +56,21 @@ describe("application shell", () => {
     expect(document.querySelector("#identity-balance-state")?.textContent).toContain("123");
   });
 
+  it("renders external-wallet custody without offering a fake key export", async () => {
+    persistIdentity(createExternalIdentity(
+      "production",
+      "0x2222222222222222222222222222222222222222",
+      "walletConnect",
+      8453,
+      "EOA",
+    ));
+    await import("./main");
+    expect(document.querySelector("#identity-source")?.textContent).toBe("WalletConnect");
+    expect(document.querySelector("#identity-security-copy")?.textContent).toContain("wallet app keeps the signing key");
+    expect(document.querySelector<HTMLButtonElement>("#export-identity")?.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>("#use-local-wallet")?.hidden).toBe(false);
+  });
+
   it("preserves accessible chat, PWA, identity, and route navigation landmarks", () => {
     const log = document.querySelector<HTMLElement>("#messages");
     const message = document.querySelector<HTMLTextAreaElement>("#message");
@@ -73,10 +89,14 @@ describe("application shell", () => {
     expect(document.querySelector("#settings")?.getAttribute("aria-label")).toContain("identity");
     expect(document.querySelector<HTMLImageElement>(".mascot")?.alt).toBe("");
     expect(document.querySelector("#identity-dialog")?.textContent).toContain("unencrypted");
+    expect(document.querySelector<HTMLButtonElement>("#connect-browser-wallet")?.textContent).toContain("browser wallet");
+    expect(document.querySelector<HTMLButtonElement>("#connect-walletconnect")?.textContent).toContain("WalletConnect");
+    expect(document.querySelector("#identity-dialog")?.textContent).toContain("stores no external private key");
     expect(document.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
     const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content");
-    expect(csp).toContain("img-src 'self' data:");
-    expect(csp).not.toMatch(/img-src[^;]*https:/u);
+    expect(csp).toContain("img-src 'self' data: blob:");
+    expect(csp).toContain("https://secure.walletconnect.org");
+    expect(csp).toContain("frame-src 'self' https://verify.walletconnect.com");
     expect(document.querySelector("#tentacles")).toBeNull();
     expect(document.querySelector<HTMLAnchorElement>('a[href="/tentacles/"]')).not.toBeNull();
     expect(document.querySelector<HTMLAnchorElement>('a[href="/acolytes/"]')).not.toBeNull();

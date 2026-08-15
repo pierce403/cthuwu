@@ -121,6 +121,34 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] UI tests prove leaderboard wallet links target Direct chat and copied referral URLs bind the
     current assigned Tentacle and local acolyte address in the browser-only fragment.
 
+### External browser-wallet identity connector
+
+- **Stability**: beta
+- **Description**: Identity settings may replace the generated local Acolyte identity with an
+  injected browser wallet or WalletConnect session while keeping signing keys in the wallet.
+- **Properties**:
+  - The generated local identity remains the zero-prompt default. The external connector and Reown
+    modal are loaded only after an explicit user action.
+  - WalletConnect uses the public Reown project identifier already published by `converge.cv`; it is
+    an application identifier, not a private API credential.
+  - External identity state contains only the public address, connector kind, connected chain,
+    EOA/SCW signer type, timestamps, and XMTP compatibility material. It contains no wallet private
+    key and offers no misleading key export.
+  - Ethereum, Base, and Base Sepolia are accepted. Bytecode inspection distinguishes EOA from SCW;
+    an SCW remains bound to the inspected chain. Missing sessions, changed accounts, unsupported
+    chains, and SCW chain drift fail closed instead of silently falling back to the generated wallet.
+  - XMTP registration and later signatures are requested from the exact connected account through
+    EIP-1193. WalletConnect sessions restore through their own storage; injected wallets must still
+    expose the saved exact account.
+- **Test Criteria**:
+  - [x] Unit tests cover injected-wallet discovery, supported-chain binding, EOA inspection, public
+    WalletConnect project configuration, and private-key-free external identity persistence.
+  - [x] UI tests distinguish external custody, disable local-key export, and retain an explicit path
+    back to a fresh generated wallet.
+  - [x] Production build code-splits the external connector away from the default local identity path.
+  - [ ] A live production release-gate run connects, registers, reloads, signs, sends, and disconnects
+    once with an injected EOA, WalletConnect EOA, and WalletConnect SCW.
+
 ### Browser-to-Cthuwu XMTP direct-message baseline
 
 - **Stability**: stable

@@ -1,7 +1,7 @@
-import { Wallet, getBytes } from "ethers";
+import { Wallet, getAddress, getBytes } from "ethers";
 import type { XmtpEnvironment } from "./config";
 
-export interface StoredIdentity {
+export interface LocalIdentity {
   version: 1;
   environment: XmtpEnvironment;
   createdAt: string;
@@ -9,6 +9,22 @@ export interface StoredIdentity {
   walletPrivateKey: string;
   compatibilityDbKey: string;
 }
+
+export type ExternalWalletConnector = "injected" | "walletConnect";
+
+export interface ExternalIdentity {
+  version: 2;
+  environment: XmtpEnvironment;
+  createdAt: string;
+  address: string;
+  source: "external";
+  connector: ExternalWalletConnector;
+  chainId: number;
+  signerType: "EOA" | "SCW";
+  compatibilityDbKey: string;
+}
+
+export type StoredIdentity = LocalIdentity | ExternalIdentity;
 
 export class IdentityStorageError extends Error {}
 
@@ -31,6 +47,33 @@ export function loadOrCreateIdentity(
   const identity = makeIdentity(environment, wallet, randomHex32(), now());
   persistIdentity(identity, storage);
   return identity;
+}
+
+export function createExternalIdentity(
+  environment: XmtpEnvironment,
+  address: string,
+  connector: ExternalWalletConnector,
+  chainId: number,
+  signerType: "EOA" | "SCW",
+  now: () => Date = () => new Date(),
+): ExternalIdentity {
+  const identity: ExternalIdentity = {
+    version: 2,
+    environment,
+    createdAt: now().toISOString(),
+    address: canonicalAddress(address),
+    source: "external",
+    connector,
+    chainId,
+    signerType,
+    compatibilityDbKey: randomHex32(),
+  };
+  validateIdentity(identity, environment);
+  return identity;
+}
+
+export function isLocalIdentity(identity: StoredIdentity): identity is LocalIdentity {
+  return identity.version === 1;
 }
 
 export function persistIdentity(identity: StoredIdentity, storage: Storage = localStorage): void {
@@ -69,7 +112,27 @@ export function validateIdentity(
   environment: XmtpEnvironment,
 ): asserts value is StoredIdentity {
   if (!value || typeof value !== "object") throw new IdentityStorageError("Invalid identity backup");
-  const candidate = value as Partial<StoredIdentity>;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version === 2) {
+    if (
+      candidate.environment !== environment ||
+      typeof candidate.createdAt !== "string" ||
+      typeof candidate.address !== "string" ||
+      candidate.source !== "external" ||
+      (candidate.connector !== "injected" && candidate.connector !== "walletConnect") ||
+      typeof candidate.chainId !== "number" ||
+      !Number.isSafeInteger(candidate.chainId) ||
+      ![1, 8453, 84532].includes(candidate.chainId) ||
+      (candidate.signerType !== "EOA" && candidate.signerType !== "SCW") ||
+      typeof candidate.compatibilityDbKey !== "string" ||
+      candidate.walletPrivateKey !== undefined
+    ) {
+      throw new IdentityStorageError("External identity schema or environment does not match");
+    }
+    canonicalAddress(candidate.address);
+    validateCompatibilityKey(candidate.compatibilityDbKey);
+    return;
+  }
   if (
     candidate.version !== 1 ||
     candidate.environment !== environment ||
@@ -82,18 +145,14 @@ export function validateIdentity(
   }
   let wallet: Wallet;
   try {
-    wallet = new Wallet(candidate.walletPrivateKey);
+    wallet = new Wallet(candidate.walletPrivateKey as string);
   } catch {
     throw new IdentityStorageError("Identity contains an invalid private key");
   }
-  if (wallet.address.toLowerCase() !== candidate.address.toLowerCase()) {
+  if (wallet.address.toLowerCase() !== (candidate.address as string).toLowerCase()) {
     throw new IdentityStorageError("Identity address does not match its private key");
   }
-  try {
-    if (getBytes(candidate.compatibilityDbKey).length !== 32) throw new Error();
-  } catch {
-    throw new IdentityStorageError("Identity contains an invalid compatibility key");
-  }
+  validateCompatibilityKey(candidate.compatibilityDbKey as string);
 }
 
 function migrateLegacyIdentity(
@@ -145,4 +204,22 @@ function makeIdentity(
 function randomHex32(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function canonicalAddress(address: string): string {
+  try {
+    const normalized = getAddress(address);
+    if (/^0x0{40}$/i.test(normalized)) throw new Error();
+    return normalized.toLowerCase();
+  } catch {
+    throw new IdentityStorageError("Identity contains an invalid Ethereum address");
+  }
+}
+
+function validateCompatibilityKey(key: string): void {
+  try {
+    if (getBytes(key).length !== 32) throw new Error();
+  } catch {
+    throw new IdentityStorageError("Identity contains an invalid compatibility key");
+  }
 }

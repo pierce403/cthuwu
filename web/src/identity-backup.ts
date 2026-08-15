@@ -1,5 +1,5 @@
 import type { XmtpEnvironment } from "./config";
-import { validateIdentity, type StoredIdentity } from "./identity";
+import { validateIdentity, type LocalIdentity } from "./identity";
 
 const ITERATIONS = 210_000;
 
@@ -13,7 +13,7 @@ interface EncryptedBackup {
 }
 
 export async function encryptIdentityBackup(
-  identity: StoredIdentity,
+  identity: LocalIdentity,
   passphrase: string,
 ): Promise<string> {
   if (passphrase.length < 8) throw new Error("Use a backup passphrase of at least 8 characters");
@@ -49,7 +49,7 @@ export async function decryptIdentityBackup(
   serialized: string,
   passphrase: string,
   expectedEnvironment: XmtpEnvironment,
-): Promise<StoredIdentity> {
+): Promise<LocalIdentity> {
   if (serialized.length > 100_000) throw new Error("Identity backup is unexpectedly large");
   let backup: EncryptedBackup;
   try {
@@ -80,6 +80,7 @@ export async function decryptIdentityBackup(
     );
     const identity = JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
     validateIdentity(identity, expectedEnvironment);
+    if (identity.version !== 1) throw new Error();
     if (identity.address.toLowerCase() !== backup.address.toLowerCase()) throw new Error();
     return identity;
   } catch {

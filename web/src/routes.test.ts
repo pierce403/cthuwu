@@ -56,5 +56,6 @@ describe("public directory routes", () => {
     expect(document.querySelector('script[src="/src/operator.ts"]')).not.toBeNull();
     const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content");
     expect(csp).toContain("connect-src 'self' https: wss:");
+    expect(csp).toContain("frame-src 'self' https://verify.walletconnect.com");
   });
 });

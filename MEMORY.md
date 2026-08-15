@@ -94,6 +94,10 @@ Last reviewed: 2026-08-12
   through the ordinary Rust bridge. Durable processed-message claims suppress prior replies and
   stream/catch-up overlap; bounded truncation is logged without message bodies.
 - Browser identities are generated and connected automatically, then persisted in local storage.
+- The generated browser identity remains the first-load default, but identity settings may replace
+  it with an injected EIP-1193 wallet or WalletConnect session. The Reown project ID is the public
+  identifier already published by `converge.cv`; external records contain no private key, signatures
+  remain in the exact connected wallet, and missing/session/account/SCW-chain drift fails closed.
 - The deployed browser always uses XMTP `production`; it has no environment override. Development
   and local XMTP modes remain explicit backend/test concerns only. Both `uwu.sh` and `uwubot`
   default to `production`; they never select `dev` implicitly.

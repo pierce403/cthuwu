@@ -11,7 +11,7 @@ import {
 } from "@xmtp/browser-sdk";
 import { Wallet, getBytes } from "ethers";
 import type { AppConfig } from "../config";
-import type { StoredIdentity } from "../identity";
+import { isLocalIdentity, type StoredIdentity } from "../identity";
 import {
   RegistryUnavailableError,
   resolveTentacleAssignment,
@@ -115,12 +115,14 @@ async function openRegisteredClient(
   config: AppConfig,
   identity: StoredIdentity,
 ): Promise<{ client: XmtpClient; releaseDatabaseLease: () => Promise<void> }> {
-  const wallet = new Wallet(identity.walletPrivateKey);
   const releaseDatabaseLease = await acquireXmtpDatabaseLease(config.environment, identity.address);
   let client: XmtpClient;
   try {
+    const signer = isLocalIdentity(identity)
+      ? createSigner(new Wallet(identity.walletPrivateKey))
+      : await (await import("../wallet-connector")).createExternalSigner(identity);
     client = (await recoverRegisteredClient(() =>
-      Client.create(createSigner(wallet), {
+      Client.create(signer, {
       env: config.environment,
       appVersion: "cthuwu-web/0.2.0",
       codecs: [...CONTROL_CODECS],
