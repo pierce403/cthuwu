@@ -434,15 +434,17 @@ The `/operator/` page registers the same Acolyte identity used by browser Chat a
 launch command containing only that public EOA:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/pierce403/cthuwu/main/install.sh | bash -s -- --operator 0xACOLYTE_PUBLIC_ADDRESS
+curl -fsSL https://cthuwu.app/install.sh | bash -s -- --operator 0xACOLYTE_PUBLIC_ADDRESS
 ```
 
 The installer refuses root, validates the public address, refuses existing source or Tentacle-state
 paths, clones a new checkout, and passes an explicit fresh data directory to
-`./uwu.sh --xmtp-env production --operator <address>`. It never accepts or transmits an Acolyte
-private key. Review the mutable `main` installer before piping it to Bash, and run the Tentacle under
-an isolated unprivileged OS account. Operators using other XMTP clients need not use the Cthuwu app
-or be Acolytes. Within the app, Branding and operator routing are deliberately independent: an
+`./uwu.sh --operator <address>`. Production is already the launcher and runtime default. It never
+accepts or transmits an Acolyte private key. The Pages build copies the hosted installer directly
+from the repository root and verifies it byte-for-byte before deployment. Review it before piping
+it to Bash, and run the Tentacle under an isolated unprivileged OS account. Operators using other
+XMTP clients need not use the Cthuwu app or be Acolytes. Within the app, Branding and operator
+routing are deliberately independent: an
 Acolyte assigned to one Tentacle can directly operate another after that second Tentacle authorizes
 the Acolyte's canonical XMTP inbox.
 
@@ -472,8 +474,8 @@ Natural-language dialogue history is bounded in memory and isolated per operator
 silently become a persistent transcript.
 
 ```bash
-./uwu.sh --xmtp-env production operator list
-./uwu.sh --xmtp-env production operator revoke <full-inbox-id>
+./uwu.sh operator list
+./uwu.sh operator revoke <full-inbox-id>
 ```
 
 Messages authored at or before the local authorization boundary, and every message from a revoked

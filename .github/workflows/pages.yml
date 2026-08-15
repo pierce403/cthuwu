@@ -40,6 +40,8 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - name: Verify the published installer
+        run: cmp install.sh web/dist/install.sh
         # Restrict the public Graph key by cthuwu.app origin, exact Agent0 subgraph, spending limit,
         # monitoring, and rotation. The checked-in default is intentionally public and replaceable.
       - uses: actions/configure-pages@v6

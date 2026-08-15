@@ -73,8 +73,11 @@ describe("operator console", () => {
     const launch = document.querySelector("#operator-launch-command")?.textContent ?? "";
     expect(authorize).toContain(`operator add ${identity.address} --label WebAcolyte`);
     expect(authorize).toContain("--data-dir /path/to/the-same-data-dir");
-    expect(launch).toContain("curl --proto '=https' --tlsv1.2 -fsSL");
+    expect(authorize).not.toContain("--xmtp-env");
+    expect(launch).toContain("curl -fsSL https://cthuwu.app/install.sh");
     expect(launch).toContain(`--operator ${identity.address}`);
+    expect(launch).not.toContain("--proto");
+    expect(launch).not.toContain("--tlsv1.2");
     expect(`${authorize}\n${launch}\n${document.body.textContent}`).not.toContain(identity.walletPrivateKey);
     expect(authorize).not.toContain("private-key");
     expect(launch).not.toContain("private-key");

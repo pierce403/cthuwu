@@ -597,8 +597,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     wallet. It reuses the canonical app Acolyte EOA/inbox, while operators using other clients need
     not be Acolytes. The route bypasses Branding/rotation, so an Acolyte assigned to one Tentacle may
     operate another and reach an unregistered or underfunded node. It sends no group-join or
-    role-claim control and displays existing-node plus new-node commands containing only the public
-    EOA. The frontend never grants authority; Rust's full-inbox ACL and `sentAtNs` fence remain
+    role-claim control. The primary flow displays a new-node command containing only the public EOA;
+    existing-node authorization is available only inside collapsed troubleshooting. The frontend
+    never grants authority; Rust's full-inbox ACL and `sentAtNs` fence remain
     decisive. Privileged messages render literally rather than interpreting or stripping public
     reward/Branding UI markers.
   - The operator route keeps its single-column mobile flow. On wide screens, untargeted setup is a
@@ -701,6 +702,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - [x] The root installer validates the public operator EOA, refuses root and existing source/state
     paths, clones a fresh checkout, and forwards an explicit fresh `--data-dir` plus only
     `--operator <public-address>` to the safe launcher.
+  - [x] Production is the launcher/runtime default, so generated commands do not repeat
+    `--xmtp-env production`. The Pages build publishes the canonical root installer at
+    `https://cthuwu.app/install.sh` and rejects any byte-level drift before deployment.
   - [ ] A manual release test authorizes, uses, revokes, and rechecks an operator inbox over live XMTP.
   - [ ] An external security review covers XMTP installation compromise/revocation, OS isolation,
     command auditability, and operator-model prompt injection.

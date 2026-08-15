@@ -7,7 +7,7 @@ import { createXmtpWorkspace, ensureXmtpIdentityRegistration } from "./chat/xmtp
 import { parseOnboardingLink } from "./onboarding-links";
 import "./style.css";
 
-const INSTALLER_URL = "https://raw.githubusercontent.com/pierce403/cthuwu/main/install.sh";
+const INSTALLER_URL = "https://cthuwu.app/install.sh";
 
 const targetForm = required<HTMLFormElement>("operator-target-form");
 const targetInput = required<HTMLInputElement>("operator-target");
@@ -104,8 +104,8 @@ async function bootstrap(): Promise<void> {
 }
 
 function prepareCommands(address: string): void {
-  const authorizeCommand = `./uwu.sh --data-dir /path/to/the-same-data-dir --xmtp-env production operator add ${address} --label WebAcolyte`;
-  const launchCommand = `curl --proto '=https' --tlsv1.2 -fsSL ${INSTALLER_URL} | bash -s -- --operator ${address}`;
+  const authorizeCommand = `./uwu.sh --data-dir /path/to/the-same-data-dir operator add ${address} --label WebAcolyte`;
+  const launchCommand = `curl -fsSL ${INSTALLER_URL} | bash -s -- --operator ${address}`;
   authorizeCommandElement.textContent = authorizeCommand;
   launchCommandElement.textContent = launchCommand;
   bindCopy(authorizeCopyElement, authorizeCopyStatus, authorizeCommand, "Existing-node command copied.");

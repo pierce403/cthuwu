@@ -1,8 +1,18 @@
 import { defineConfig } from "vite";
 
+import { copyFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  plugins: [{
+    name: "publish-installer",
+    async closeBundle() {
+      await copyFile(
+        fileURLToPath(new URL("../install.sh", import.meta.url)),
+        fileURLToPath(new URL("dist/install.sh", import.meta.url)),
+      );
+    },
+  }],
   build: {
     rollupOptions: {
       input: {

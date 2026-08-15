@@ -120,7 +120,6 @@ cthuwu_install_prepare_parent() {
 cthuwu_install_build_launcher_arguments() {
   CTHUWU_INSTALL_LAUNCH_ARGS=(
     --data-dir "$CTHUWU_INSTALL_DATA_DIRECTORY"
-    --xmtp-env production
     --operator "$CTHUWU_INSTALL_OPERATOR"
   )
 }

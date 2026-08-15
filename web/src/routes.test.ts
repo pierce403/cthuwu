@@ -53,6 +53,10 @@ describe("public directory routes", () => {
     expect(document.body.textContent).toContain("same Acolyte EOA and XMTP inbox");
     expect(document.body.textContent).toContain("only the public EOA");
     expect(document.querySelector("#operator-launch-command")).not.toBeNull();
+    expect(document.querySelector("details.operator-troubleshooting")?.hasAttribute("open")).toBe(false);
+    expect(document.querySelector("details.operator-troubleshooting summary")?.textContent).toContain(
+      "troubleshooting",
+    );
     expect(document.querySelector('script[src="/src/operator.ts"]')).not.toBeNull();
     const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content");
     expect(csp).toContain("connect-src 'self' https: wss:");

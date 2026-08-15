@@ -63,15 +63,6 @@
             <div><dt>Acolyte public EOA</dt><dd id="operator-address">not loaded</dd></div>
             <div><dt>XMTP inbox</dt><dd id="operator-inbox">registering…</dd></div>
           </dl>
-          <h3>Authorize an existing node</h3>
-          <p>
-            Stop the Tentacle, replace the data-directory placeholder with that node’s exact
-            configured directory, run this locally, then restart it. Only messages authored after
-            the authorization boundary are privileged.
-          </p>
-          <pre id="operator-authorize-command">Registering the public Acolyte address…</pre>
-          <button id="operator-copy-authorize" type="button" disabled>copy existing-node command</button>
-          <p id="operator-authorize-copy-status" class="status" role="status" aria-live="polite"></p>
           <h3>Launch a new Tentacle</h3>
           <p>
             This one-shot installer checks out Cthuwu and launches a production Tentacle with this
@@ -81,6 +72,20 @@
           <pre id="operator-launch-command">Registering the public Acolyte address…</pre>
           <button id="operator-copy-launch" type="button" disabled>copy new-Tentacle command</button>
           <p id="operator-launch-copy-status" class="status" role="status" aria-live="polite"></p>
+          <details class="operator-troubleshooting">
+            <summary>troubleshooting an existing node</summary>
+            <div>
+              <p>
+                If a stopped Tentacle was launched without this operator, replace the data-directory
+                placeholder with that node’s exact configured directory, authorize this Acolyte,
+                then restart it. Production is the default; add <code>--xmtp-env</code> only for a
+                deliberately non-production node.
+              </p>
+              <pre id="operator-authorize-command">Registering the public Acolyte address…</pre>
+              <button id="operator-copy-authorize" type="button" disabled>copy repair command</button>
+              <p id="operator-authorize-copy-status" class="status" role="status" aria-live="polite"></p>
+            </div>
+          </details>
           <p class="operator-danger">
             Every XMTP installation or restored backup for this Acolyte inbox inherits its operator
             authority. Close every other Cthuwu tab using this identity before opening the console;

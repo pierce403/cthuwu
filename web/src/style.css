@@ -2165,6 +2165,30 @@ dd {
   color: var(--mint);
 }
 
+.operator-troubleshooting {
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: #0e0917;
+}
+
+.operator-troubleshooting summary {
+  padding: 0.8rem;
+  color: var(--lavender);
+  font-size: 0.76rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.operator-troubleshooting[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.operator-troubleshooting > div {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.8rem;
+}
+
 .operator-direct-only {
   height: min(48rem, calc(100dvh - 10rem));
 }

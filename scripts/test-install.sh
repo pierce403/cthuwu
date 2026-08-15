@@ -50,13 +50,11 @@ install_test_equal "/tmp/explicit source" "$CTHUWU_INSTALL_DIRECTORY" "CLI insta
 install_test_equal "/tmp/explicit fresh state" "$CTHUWU_INSTALL_DATA_DIRECTORY" "CLI state path"
 
 cthuwu_install_build_launcher_arguments
-install_test_equal "6" "${#CTHUWU_INSTALL_LAUNCH_ARGS[@]}" "launcher argument count"
+install_test_equal "4" "${#CTHUWU_INSTALL_LAUNCH_ARGS[@]}" "launcher argument count"
 install_test_equal "--data-dir" "${CTHUWU_INSTALL_LAUNCH_ARGS[0]}" "data flag"
 install_test_equal "/tmp/explicit fresh state" "${CTHUWU_INSTALL_LAUNCH_ARGS[1]}" "fresh state forwarding"
-install_test_equal "--xmtp-env" "${CTHUWU_INSTALL_LAUNCH_ARGS[2]}" "environment flag"
-install_test_equal "production" "${CTHUWU_INSTALL_LAUNCH_ARGS[3]}" "production environment"
-install_test_equal "--operator" "${CTHUWU_INSTALL_LAUNCH_ARGS[4]}" "operator flag"
-install_test_equal "$operator" "${CTHUWU_INSTALL_LAUNCH_ARGS[5]}" "public operator forwarding"
+install_test_equal "--operator" "${CTHUWU_INSTALL_LAUNCH_ARGS[2]}" "operator flag"
+install_test_equal "$operator" "${CTHUWU_INSTALL_LAUNCH_ARGS[3]}" "public operator forwarding"
 
 CTHUWU_INSTALL_DIRECTORY="/tmp/cthuwu-installer-source-does-not-exist"
 CTHUWU_INSTALL_DATA_DIRECTORY="/tmp"

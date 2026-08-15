@@ -229,7 +229,10 @@ Last reviewed: 2026-08-12
   `0x` imprint address without message text. Local add/list/revoke remains available while stopped.
 - `/operator/` is a separate static direct-DM console for one explicit Tentacle wallet. It uses a
   canonical app Acolyte identity, deliberately bypasses Branding/rotation and group joins, and
-  displays both stop/authorize/restart and fresh-launch commands containing only that public EOA.
+  displays a fresh-launch command containing only that public EOA. Existing-node authorization is
+  demoted to collapsed troubleshooting. Generated commands rely on the verified production default,
+  and the Pages build publishes the canonical root installer at `https://cthuwu.app/install.sh`
+  only after a byte-for-byte drift check.
   Its wide-screen layout centers setup before targeting, then prioritizes the sticky DM console
   beside a compact setup rail; narrow screens retain the single-column flow.
   Operators on other XMTP clients need not be Acolytes; Branding never grants or restricts the

@@ -63,24 +63,28 @@ reach a new or underfunded Tentacle before its ERC-8004 profile is healthy. The 
 explicit Ethereum target through XMTP and verifies that the resulting peer inbox contains that
 wallet identifier.
 
-The page first registers the Acolyte's production XMTP inbox, then enables two commands. For an
-existing stopped node, use its exact data directory and restart afterward:
+The page first registers the Acolyte's production XMTP inbox, then enables the fresh-launch command:
 
 ```bash
-./uwu.sh --data-dir /path/to/the-same-data-dir --xmtp-env production operator add <acolyte-public-address> --label WebAcolyte
+curl -fsSL https://cthuwu.app/install.sh | bash -s -- --operator <acolyte-public-address>
 ```
 
-For a fresh production Tentacle, the page provides this one-shot form:
+Production is the default XMTP environment in both `uwu.sh` and `uwubot`; the command does not repeat
+it. The installer served by `cthuwu.app` is copied byte-for-byte from the repository root during the
+Pages build and checked for drift before deployment.
+
+Existing-node authorization is kept in the page's collapsed troubleshooting flow. For an existing
+stopped production node, use its exact data directory and restart afterward:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/pierce403/cthuwu/main/install.sh | bash -s -- --operator <acolyte-public-address>
+./uwu.sh --data-dir /path/to/the-same-data-dir operator add <acolyte-public-address> --label WebAcolyte
 ```
 
 Both commands contain only the Acolyte's public EOA. Its private key stays in the browser. The root
 installer validates the EOA, refuses root and existing source/Tentacle-state paths, clones Cthuwu,
-then runs the normal safe launcher with an explicit fresh `--data-dir`, `--xmtp-env production`,
-and `--operator <address>`. It cannot silently reuse an older node. Review the mutable `main`
-installer before piping it to Bash and run it under an isolated, unprivileged OS account.
+then runs the normal safe launcher with an explicit fresh `--data-dir` and `--operator <address>`.
+It cannot silently reuse an older node. Review the installer before piping it to Bash and run it
+under an isolated, unprivileged OS account.
 
 Only a newly authored message after the local grant boundary can enter the operator lane. The page
 cannot authorize itself: Rust's exact full-inbox ACL and authenticated `sentAtNs` remain the only
@@ -139,7 +143,7 @@ version-2 active and revoked records keep their state.
 Check the local ACL:
 
 ```bash
-./uwu.sh --xmtp-env production operator list
+./uwu.sh operator list
 ```
 
 ## Revoke an operator
@@ -147,7 +151,7 @@ Check the local ACL:
 Stop the Tentacle, revoke locally with the same data root and XMTP environment, then restart it:
 
 ```bash
-./uwu.sh --xmtp-env production operator revoke <full-xmtp-inbox-id>
+./uwu.sh operator revoke <full-xmtp-inbox-id>
 ```
 
 Revocation leaves a tombstone. Future messages from that inbox are blocked instead of silently
@@ -349,7 +353,7 @@ Set the workspace explicitly before starting the Tentacle:
 ```bash
 UWUBOT_OPERATOR_ROOT=/srv/cthuwu-workspace \
 UWUBOT_OPERATOR_TOOL_TIMEOUT_SECONDS=120 \
-./uwu.sh --xmtp-env production
+./uwu.sh
 ```
 
 The configured tool timeout must be between 1 and 300 seconds, but the sidecar's 2–300 second
