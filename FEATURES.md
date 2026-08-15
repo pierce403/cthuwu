@@ -601,6 +601,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     EOA. The frontend never grants authority; Rust's full-inbox ACL and `sentAtNs` fence remain
     decisive. Privileged messages render literally rather than interpreting or stripping public
     reward/Branding UI markers.
+  - The operator route keeps its single-column mobile flow. On wide screens, untargeted setup is a
+    centered readable card; once a target is pinned, setup becomes a compact rail beside a wider,
+    sticky direct-message console so authorization instructions do not crowd the active session.
   - Operator replies use an enforced all-caps, theatrical ominous/submissive Cthuwu voice with
     light readable uwu touches while excluding code and bounded runtime-provided tool renderings
     from prose uppercasing. Process streams are

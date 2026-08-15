@@ -22,6 +22,7 @@ const launchCommandElement = required<HTMLElement>("operator-launch-command");
 const launchCopyElement = required<HTMLButtonElement>("operator-copy-launch");
 const launchCopyStatus = required<HTMLElement>("operator-launch-copy-status");
 const chatElement = required<HTMLElement>("chat");
+const routeElement = requiredSelector<HTMLElement>(".operator-route");
 
 let identity: StoredIdentity | undefined;
 let controller: ChatController | undefined;
@@ -67,6 +68,7 @@ async function bootstrap(): Promise<void> {
     targetInput.value = target;
     targetStatus.textContent = `Direct route pinned to ${target}.`;
     chatElement.hidden = false;
+    routeElement.classList.add("is-console-active");
     controller = initializeChatController(
       {
         ...base,
@@ -156,4 +158,10 @@ function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing operator element #${id}`);
   return element as T;
+}
+
+function requiredSelector<T extends HTMLElement>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing operator element ${selector}`);
+  return element;
 }

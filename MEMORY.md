@@ -230,6 +230,8 @@ Last reviewed: 2026-08-12
 - `/operator/` is a separate static direct-DM console for one explicit Tentacle wallet. It uses a
   canonical app Acolyte identity, deliberately bypasses Branding/rotation and group joins, and
   displays both stop/authorize/restart and fresh-launch commands containing only that public EOA.
+  Its wide-screen layout centers setup before targeting, then prioritizes the sticky DM console
+  beside a compact setup rail; narrow screens retain the single-column flow.
   Operators on other XMTP clients need not be Acolytes; Branding never grants or restricts the
   independently authorized operator role. The console never asserts a role; Rust's full-inbox ACL
   and authenticated `sentAtNs` boundary remain the sole authority. Operator/tool output renders

@@ -30,8 +30,9 @@ honest, and operationally reliable.
   and describe privacy controls in ordinary language.
 - Keep `FEATURES.md` accurate as requirements or implementation status change.
 - Record useful discoveries while they are fresh.
-- Always commit and push completed scoped work directly to `main`. Use a branch or PR only when
-  Dean explicitly asks for one.
+- Always commit and push completed scoped work directly to `main`. A request to implement, fix, or
+  update this repository is explicit authorization to publish the verified scoped result; do not
+  pause for a separate push confirmation. Use a branch or PR only when Dean explicitly asks for one.
 
 ## Start-of-task loop
 

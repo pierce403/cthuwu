@@ -2050,7 +2050,7 @@ dd {
 
 .operator-grid {
   display: grid;
-  grid-template-columns: minmax(17rem, 0.62fr) minmax(30rem, 1.38fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
   align-items: start;
 }
@@ -2061,6 +2061,11 @@ dd {
   padding: 1rem;
   border-color: var(--line-strong);
   background: #151022eb;
+}
+
+.operator-route:not(.is-console-active) .operator-setup {
+  width: min(100%, 52rem);
+  margin-inline: auto;
 }
 
 .operator-setup h2,
@@ -2175,6 +2180,40 @@ dd {
 .operator-direct-only #tab-acolytes,
 .operator-direct-only #tab-global {
   display: none;
+}
+
+@media (min-width: 70rem) {
+  .operator-route {
+    width: min(100% - 3rem, 88rem);
+  }
+
+  .operator-route .route-header {
+    margin-bottom: clamp(1.5rem, 3vw, 2.5rem);
+  }
+
+  .operator-route.is-console-active .operator-grid {
+    grid-template-columns: minmax(20rem, 23rem) minmax(0, 1fr);
+  }
+
+  .operator-route.is-console-active .operator-setup {
+    width: 100%;
+    margin-inline: 0;
+  }
+
+  .operator-route.is-console-active .operator-direct-only {
+    position: sticky;
+    top: 1.5rem;
+    height: min(54rem, calc(100dvh - 3rem));
+    min-height: 38rem;
+  }
+
+  .operator-route.is-console-active .operator-direct-only .messages {
+    padding-inline: clamp(1.15rem, 2vw, 2rem);
+  }
+
+  .operator-route.is-console-active .operator-direct-only .message {
+    max-width: min(78%, 42rem);
+  }
 }
 
 .sr-only {

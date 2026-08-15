@@ -67,6 +67,7 @@ describe("operator console", () => {
     expect(document.querySelector("#operator-inbox")?.textContent).toBe(inboxId);
     expect(document.querySelector("#operator-name")?.textContent).toMatch(/^[A-Z][A-Za-z-]+ of [A-Z]/u);
     expect(document.querySelector<HTMLElement>("#chat")?.hidden).toBe(true);
+    expect(document.querySelector(".operator-route")?.classList.contains("is-console-active")).toBe(false);
 
     const authorize = document.querySelector("#operator-authorize-command")?.textContent ?? "";
     const launch = document.querySelector("#operator-launch-command")?.textContent ?? "";
@@ -113,6 +114,7 @@ describe("operator console", () => {
       expect.objectContaining({ brandingOffers: false, surface: "operator" }),
     );
     expect(document.querySelector<HTMLElement>("#chat")?.hidden).toBe(false);
+    expect(document.querySelector(".operator-route")?.classList.contains("is-console-active")).toBe(true);
 
     const dependencies = chat.initialize.mock.calls[0]?.[2] as {
       createWorkspace(config: unknown, storedIdentity: unknown): Promise<unknown>;
