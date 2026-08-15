@@ -31,6 +31,7 @@ export interface ChannelSnapshot extends ChannelBinding {
   unread: number;
   hasMore: boolean;
   retentionVerified: boolean;
+  typing: boolean;
   error?: string;
 }
 

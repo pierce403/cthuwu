@@ -127,7 +127,7 @@ export function initializeChatController(
     }
 
     elements.messages.replaceChildren();
-    elements.messages.classList.toggle("is-empty", channel.messages.length === 0);
+    elements.messages.classList.toggle("is-empty", channel.messages.length === 0 && !channel.typing);
     elements.messages.setAttribute("aria-busy", String(channel.status === "loading"));
     if (channel.hasMore) {
       elements.loadEarlier.hidden = false;
@@ -163,6 +163,15 @@ export function initializeChatController(
         currentBrandingOffer = control.branding;
       }
     }
+    if (channel.typing) {
+      const indicator = document.createElement("div");
+      indicator.className = "typing-indicator";
+      indicator.setAttribute("role", "status");
+      indicator.setAttribute("aria-live", "polite");
+      indicator.setAttribute("aria-label", `${snapshot.tentacleName} is typing`);
+      indicator.append(document.createElement("span"), document.createElement("span"), document.createElement("span"));
+      elements.messages.append(indicator);
+    }
     if (
       channel.messages.length > 0 &&
       (channel.status === "error" || channel.status === "policy-blocked")
@@ -173,7 +182,7 @@ export function initializeChatController(
       issue.textContent = channel.error ?? STATUS_COPY[channel.status];
       elements.messages.prepend(issue);
     }
-    if (channel.messages.length === 0) {
+    if (channel.messages.length === 0 && !channel.typing) {
       const state = document.createElement("div");
       state.className = `channel-state channel-state-${channel.status}`;
       state.setAttribute("role", channel.status === "error" || channel.status === "policy-blocked" ? "alert" : "status");

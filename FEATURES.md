@@ -199,6 +199,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     sidecar authenticates their XMTP envelope sender and intercepts them before Rust, inference,
     contact memory, onboarding, or ordinary history. The pinned Browser and Node SDKs register exact
     `cthuwu.app` custom codecs for `join` and `assignment` version `1.0`; there is no text fallback.
+  - Direct inference emits non-push `cthuwu.app/typing:1.0` controls with a short expiry, refreshes
+    them while work continues, and explicitly clears them before the reply. The browser accepts
+    Direct typing only from the currently assigned Tentacle, auto-expires stale state, renders an
+    accessible indicator, and excludes controls from history and unread counts.
   - The assigned Tentacle idempotently persists exactly one Acolytes group, enrolls the authenticated
     requester there and in the explicitly configured singleton Global group, and returns its inbox,
     both logical group bindings, and assignment revision. Periodic reconciliation removes acolytes

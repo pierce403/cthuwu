@@ -23,6 +23,8 @@ import {
   encodeJoinControl,
   isAssignmentContentType,
   isControlContentType,
+  isTypingContentType,
+  isTypingControl,
   type AssignmentControl,
 } from "./control";
 import {
@@ -195,6 +197,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private streamGeneration = 0;
   private registryFailureCount = 0;
   private nextAutomaticRegistryAttemptAt = 0;
+  private readonly typingTimers: Partial<Record<ChatChannel, ReturnType<typeof setTimeout>>> = {};
 
   constructor(
     private readonly client: XmtpClient,
@@ -253,6 +256,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
               unread: value.unread,
               hasMore: value.hasMore,
               retentionVerified: value.retentionVerified,
+              typing: value.typing,
               readConversationIds: [...value.readConversationIds],
               ...(value.writeConversationId
                 ? { writeConversationId: value.writeConversationId }
@@ -350,6 +354,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.connected = false;
     this.streamGeneration += 1;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    for (const channelId of CHAT_CHANNELS) this.clearTyping(channelId, false);
     await Promise.all(this.streams.splice(0).map((stream) => stream.return().then(() => undefined)));
     this.client.close();
     this.releaseDatabaseLease?.();
@@ -611,11 +616,41 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     if (!channelId) return;
     if (isControlContentType(message.contentType)) {
       if (isAssignmentContentType(message.contentType)) await this.handleAssignment(message);
+      if (isTypingContentType(message.contentType)) this.handleTyping(message, channelId);
       return;
     }
     const decoded = decodeChatMessage(message, this.inboxId);
     if (!decoded) return;
     this.addMessage(channelId, decoded, true);
+    if (!decoded.mine) this.clearTyping(channelId);
+  }
+
+  private handleTyping(message: DecodedMessage<unknown>, channelId: ChatChannel): void {
+    if (
+      !isTypingControl(message.content) ||
+      message.senderInboxId === this.inboxId ||
+      (channelId === "direct" && message.senderInboxId !== this.currentTentacleInboxId)
+    ) return;
+    let expiresAtNs: bigint;
+    try { expiresAtNs = BigInt(message.content.expiresAtNs); } catch { return; }
+    const remainingMs = Number((expiresAtNs - BigInt(Date.now()) * 1_000_000n) / 1_000_000n);
+    if (!message.content.active || remainingMs <= 0) {
+      this.clearTyping(channelId);
+      return;
+    }
+    this.clearTyping(channelId, false);
+    this.channels[channelId].typing = true;
+    this.typingTimers[channelId] = setTimeout(() => this.clearTyping(channelId), Math.min(remainingMs, 30_000));
+    this.emit();
+  }
+
+  private clearTyping(channelId: ChatChannel, emit = true): void {
+    const timer = this.typingTimers[channelId];
+    if (timer) clearTimeout(timer);
+    delete this.typingTimers[channelId];
+    if (!this.channels[channelId].typing) return;
+    this.channels[channelId].typing = false;
+    if (emit) this.emit();
   }
 
   private async handleAssignment(message: DecodedMessage<unknown>): Promise<void> {
@@ -1023,6 +1058,7 @@ function channel(channelId: ChatChannel, status: ChannelStatus): MutableChannel 
     unread: 0,
     hasMore: false,
     retentionVerified: false,
+    typing: false,
     readConversationIds: [],
     historyByConversation: new Map(),
   };

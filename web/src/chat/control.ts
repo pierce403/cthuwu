@@ -17,6 +17,12 @@ export const ASSIGNMENT_CONTENT_TYPE = {
   versionMajor: 1,
   versionMinor: 0,
 } as const satisfies ContentTypeId;
+export const TYPING_CONTENT_TYPE = {
+  authorityId: "cthuwu.app",
+  typeId: "typing",
+  versionMajor: 1,
+  versionMinor: 0,
+} as const satisfies ContentTypeId;
 const HEX_32 = /^[0-9a-f]{32}$/u;
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const DECIMAL = /^(0|[1-9][0-9]{0,77})$/u;
@@ -51,6 +57,11 @@ export interface AssignmentControl {
   global: GlobalControlBinding;
   retention: typeof EXPECTED_RETENTION;
 }
+export interface TypingControl {
+  type: "cthuwu.typing.v1";
+  active: boolean;
+  expiresAtNs: string;
+}
 
 export type ControlMessage = JoinControl | AssignmentControl;
 export const INVALID_CONTROL = Object.freeze({ invalidControl: true });
@@ -71,7 +82,11 @@ export const assignmentCodec: ContentCodec<unknown> = createCodec(
   ASSIGNMENT_CONTENT_TYPE,
   (value) => parseAssignment(value),
 );
-export const CONTROL_CODECS = [joinCodec, assignmentCodec] as const;
+export const typingCodec: ContentCodec<unknown> = createCodec(
+  TYPING_CONTENT_TYPE,
+  (value) => parseTyping(value),
+);
+export const CONTROL_CODECS = [joinCodec, assignmentCodec, typingCodec] as const;
 
 export function encodeJoinControl(message: JoinControl): EncodedContent {
   return joinCodec.encode(message);
@@ -86,7 +101,15 @@ export function isAssignmentContentType(value: ContentTypeId | undefined): boole
 }
 
 export function isControlContentType(value: ContentTypeId | undefined): boolean {
-  return isJoinContentType(value) || isAssignmentContentType(value);
+  return isJoinContentType(value) || isAssignmentContentType(value) || isTypingContentType(value);
+}
+
+export function isTypingContentType(value: ContentTypeId | undefined): boolean {
+  return exactContentType(value, TYPING_CONTENT_TYPE);
+}
+
+export function isTypingControl(value: unknown): value is TypingControl {
+  return isRecord(value) && parseTyping(value) !== undefined;
 }
 
 function parseJoin(value: Record<string, unknown>): JoinControl | undefined {
@@ -147,7 +170,18 @@ function parseAssignment(value: Record<string, unknown>): AssignmentControl | un
   };
 }
 
-function createCodec<T extends ControlMessage>(
+function parseTyping(value: Record<string, unknown>): TypingControl | undefined {
+  if (
+    !hasExactKeys(value, ["active", "expiresAtNs", "type"]) ||
+    value.type !== "cthuwu.typing.v1" ||
+    typeof value.active !== "boolean" ||
+    typeof value.expiresAtNs !== "string" ||
+    !/^[1-9][0-9]{0,19}$/u.test(value.expiresAtNs)
+  ) return undefined;
+  return { type: "cthuwu.typing.v1", active: value.active, expiresAtNs: value.expiresAtNs };
+}
+
+function createCodec<T extends ControlMessage | TypingControl>(
   contentType: ContentTypeId,
   validate: (value: Record<string, unknown>) => T | undefined,
 ): ContentCodec<unknown> {

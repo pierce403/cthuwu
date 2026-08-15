@@ -35,6 +35,7 @@ function initialSnapshot(): WorkspaceSnapshot {
     unread: id === "acolytes" ? 3 : 0,
     hasMore: id === "direct",
     retentionVerified: true,
+    typing: false,
     readConversationIds: [`${id}-conversation`],
     writeConversationId: `${id}-conversation`,
   });

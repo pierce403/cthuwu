@@ -11,6 +11,8 @@ import {
   JoinCodec,
   RETENTION_FROM_NS,
   RETENTION_IN_NS,
+  TYPING_CONTENT_TYPE,
+  TypingCodec,
   acolytesAppData,
   bootstrapGlobalGroup,
   classifyInboundMessage,
@@ -357,7 +359,16 @@ describe("custom control codecs", () => {
   it("classifies all group traffic away from personal inference", () => {
     expect(classifyInboundMessage(false, contentTypeText())).toBe("group");
     expect(classifyInboundMessage(false, JOIN_CONTENT_TYPE)).toBe("control");
+    expect(classifyInboundMessage(true, TYPING_CONTENT_TYPE)).toBe("control");
     expect(classifyInboundMessage(true, contentTypeText())).toBe("direct");
+  });
+
+  it("round-trips bounded non-push typing controls", () => {
+    const codec = new TypingCodec();
+    const typing = { type: "cthuwu.typing.v1", active: true, expiresAtNs: "1800000000000000000" } as const;
+    expect(codec.decode(codec.encode(typing))).toEqual(typing);
+    expect(codec.shouldPush(typing)).toBe(false);
+    expect(() => codec.encode({ ...typing, expiresAtNs: "0" })).toThrow(/invalid/u);
   });
 
   it("dispatches only DM text to the personal bridge", () => {

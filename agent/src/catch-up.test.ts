@@ -25,6 +25,7 @@ describe("startup DM catch-up", () => {
         message("reply", "tentacle", 2n),
         message("old", "acolyte", 1n),
       ]),
+      send: vi.fn(async () => undefined),
       sendText: vi.fn(async () => undefined),
     };
     const listDms = vi.fn(() => [conversation]);

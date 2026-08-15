@@ -802,3 +802,6 @@ The original manual milestone was:
   provider-specific reasoning field, sometimes without tags or with an unterminated `<think>` after
   truncation. Public response policy must reject and repair tagged or opening-plan reasoning rather
   than forwarding it over XMTP.
+- Typing state uses the non-push `cthuwu.app/typing:1.0` control with a bounded expiry and refresh;
+  it is authenticated by the XMTP envelope, never rendered or counted as a message, and must not
+  make inference or reply delivery depend on the best-effort indicator send succeeding.

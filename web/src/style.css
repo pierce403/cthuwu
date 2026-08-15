@@ -803,6 +803,35 @@ h1 .uwu {
   text-align: right;
 }
 
+.typing-indicator {
+  display: flex;
+  width: fit-content;
+  margin: 0.72rem 0 0.72rem 2.2rem;
+  padding: 0.78rem 0.95rem;
+  gap: 0.3rem;
+  border: 1px solid #a88ac63d;
+  border-radius: 1.2rem 1.2rem 1.2rem 0.3rem;
+  background: linear-gradient(145deg, #3b2650, #2a1b3b);
+}
+
+.typing-indicator span {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  background: var(--mint);
+  animation: typing-pulse 1.1s ease-in-out infinite;
+}
+
+.typing-indicator span:nth-child(2) { animation-delay: 0.14s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.28s; }
+
+@keyframes typing-pulse {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-0.18rem); }
+}
+
+html[data-motion="paused"] .typing-indicator span { animation: none; }
+
 .theirs {
   margin-left: 2.2rem;
   border-color: #a88ac63d;

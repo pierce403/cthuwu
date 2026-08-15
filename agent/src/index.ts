@@ -6,6 +6,7 @@ import {
   ChatControlService,
   FileChatStateStore,
   JoinCodec,
+  TypingCodec,
   bootstrapGlobalGroup,
   classifyInboundMessage,
   dispatchPersonalText,
@@ -17,6 +18,7 @@ import {
   resolveFreshSenderAddress,
   type GroupDirectory,
   type GroupLike,
+  type TypingControl,
 } from "./chat-control.js";
 import { catchUpDirectMessages, type CatchUpDm, type CatchUpMessage } from "./catch-up.js";
 import { runErc8004Stdio } from "./erc8004.js";
@@ -25,6 +27,8 @@ import { resolveOperatorIdentity } from "./operator-identity.js";
 import { JsonlBridge, parseTimeout } from "./protocol.js";
 
 const MAX_INBOUND_TEXT_BYTES = 16 * 1024;
+const TYPING_TTL_MS = 15_000;
+const TYPING_REFRESH_MS = 8_000;
 
 function diagnostic(message: string): void {
   process.stderr.write(`[cthuwu-xmtp] ${message.replace(/[\r\n]+/gu, " ")}\n`);
@@ -127,7 +131,7 @@ async function main(): Promise<void> {
       : { gatewayHost: process.env.XMTP_GATEWAY_HOST }),
     appVersion: "cthuwu-agent/0.1.0",
     loggingLevel: "Off" as LogLevel,
-    codecs: [new JoinCodec(), new AssignmentCodec()],
+    codecs: [new JoinCodec(), new AssignmentCodec(), new TypingCodec()],
   });
 
   const groupDirectory: GroupDirectory = {
@@ -235,6 +239,7 @@ async function main(): Promise<void> {
   }
 
   const assignmentCodec = new AssignmentCodec();
+  const typingCodec = new TypingCodec();
   agent.use(async (context, next) => {
     const contentType = context.message.contentType;
     const disposition = classifyInboundMessage(context.isDm(), contentType);
@@ -310,9 +315,31 @@ async function main(): Promise<void> {
       if (!quietReplay) {
         diagnostic(`received direct XMTP message (${inboundBytes} bytes); waiting for uwubot`);
       }
-      const result = await (inboundBytes > MAX_INBOUND_TEXT_BYTES
-        ? bridge.rejectOversized(metadata)
-        : bridge.request({ ...metadata, text }));
+      const sendTyping = async (active: boolean): Promise<void> => {
+        const value: TypingControl = {
+          type: "cthuwu.typing.v1",
+          active,
+          expiresAtNs: (BigInt(Date.now() + (active ? TYPING_TTL_MS : 1)) * 1_000_000n).toString(),
+        };
+        await conversation.send(typingCodec.encode(value), { shouldPush: false });
+      };
+      if (!quietReplay) {
+        await sendTyping(true).catch(() => diagnostic("failed to start XMTP typing indicator"));
+      }
+      const refresh = quietReplay ? undefined : setInterval(() => {
+        void sendTyping(true).catch(() => diagnostic("failed to refresh XMTP typing indicator"));
+      }, TYPING_REFRESH_MS);
+      let result;
+      try {
+        result = await (inboundBytes > MAX_INBOUND_TEXT_BYTES
+          ? bridge.rejectOversized(metadata)
+          : bridge.request({ ...metadata, text }));
+      } finally {
+        if (refresh) clearInterval(refresh);
+        if (!quietReplay) {
+          await sendTyping(false).catch(() => diagnostic("failed to clear XMTP typing indicator"));
+        }
+      }
       if (result.type === "reply") {
         diagnostic("uwubot finished; delivering XMTP reply");
         await conversation.sendText(result.text);

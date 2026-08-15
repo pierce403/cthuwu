@@ -108,6 +108,18 @@ export const ASSIGNMENT_CONTENT_TYPE: ContentTypeId = {
   versionMajor: 1,
   versionMinor: 0,
 };
+export const TYPING_CONTENT_TYPE: ContentTypeId = {
+  authorityId: "cthuwu.app",
+  typeId: "typing",
+  versionMajor: 1,
+  versionMinor: 0,
+};
+
+export type TypingControl = {
+  type: "cthuwu.typing.v1";
+  active: boolean;
+  expiresAtNs: string;
+};
 
 function isRecord(value: unknown): value is RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -271,13 +283,48 @@ function contentTypeEquals(actual: ContentTypeId | undefined, expected: ContentT
 
 function encodePayload(
   contentType: ContentTypeId,
-  value: JoinControl | AssignmentControl,
+  value: JoinControl | AssignmentControl | TypingControl,
 ): EncodedContent {
   const content = new TextEncoder().encode(JSON.stringify(value));
   if (content.byteLength > MAX_CONTROL_BYTES) {
     throw new Error("control payload exceeds its encoded bound");
   }
   return { type: contentType, parameters: {}, content };
+}
+
+function parseTyping(value: RecordValue): TypingControl | undefined {
+  if (
+    !hasExactKeys(value, ["active", "expiresAtNs", "type"]) ||
+    value.type !== "cthuwu.typing.v1" ||
+    typeof value.active !== "boolean" ||
+    typeof value.expiresAtNs !== "string" ||
+    !/^[1-9][0-9]{0,19}$/u.test(value.expiresAtNs)
+  ) return undefined;
+  return { type: "cthuwu.typing.v1", active: value.active, expiresAtNs: value.expiresAtNs };
+}
+
+export class TypingCodec implements ContentCodec<unknown> {
+  readonly contentType = TYPING_CONTENT_TYPE;
+
+  encode(content: unknown): EncodedContent {
+    const parsed = isRecord(content) ? parseTyping(content) : undefined;
+    if (!parsed) throw new Error("invalid cthuwu.typing.v1 content");
+    return encodePayload(this.contentType, parsed);
+  }
+
+  decode(content: EncodedContent): unknown {
+    try {
+      assertEncodedEnvelope(content, this.contentType);
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(content.content)) as unknown;
+      if (isRecord(value)) return parseTyping(value) ?? INVALID_CONTROL;
+    } catch {
+      // Hostile typing payloads are ignored by registered clients.
+    }
+    return INVALID_CONTROL;
+  }
+
+  fallback(_content: unknown): undefined { return undefined; }
+  shouldPush(_content: unknown): boolean { return false; }
 }
 
 function assertEncodedEnvelope(content: EncodedContent, expected: ContentTypeId): void {
@@ -366,6 +413,10 @@ export function isExactAssignmentContentType(value: ContentTypeId): boolean {
   return contentTypeEquals(value, ASSIGNMENT_CONTENT_TYPE);
 }
 
+export function isExactTypingContentType(value: ContentTypeId): boolean {
+  return contentTypeEquals(value, TYPING_CONTENT_TYPE);
+}
+
 export type InboundDisposition = "control" | "direct" | "group";
 
 export function classifyInboundMessage(
@@ -374,7 +425,8 @@ export function classifyInboundMessage(
 ): InboundDisposition {
   if (
     isExactJoinContentType(contentType) ||
-    isExactAssignmentContentType(contentType)
+    isExactAssignmentContentType(contentType) ||
+    isExactTypingContentType(contentType)
   ) {
     return "control";
   }

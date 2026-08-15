@@ -3,10 +3,12 @@ import {
   ASSIGNMENT_CONTENT_TYPE,
   INVALID_CONTROL,
   JOIN_CONTENT_TYPE,
+  TYPING_CONTENT_TYPE,
   assignmentCodec,
   createJoinControl,
   isAssignmentContentType,
   joinCodec,
+  typingCodec,
   type AssignmentControl,
 } from "./control";
 
@@ -41,6 +43,10 @@ describe("XMTP v1 control codecs", () => {
     expect(assignmentCodec.decode(assignmentCodec.encode(assignment()))).toEqual(assignment());
     expect(joinCodec.shouldPush(join)).toBe(false);
     expect(joinCodec.fallback(join)).toBeUndefined();
+    const typing = { type: "cthuwu.typing.v1", active: true, expiresAtNs: "1800000000000000000" } as const;
+    expect(typingCodec.decode(typingCodec.encode(typing))).toEqual(typing);
+    expect(typingCodec.shouldPush(typing)).toBe(false);
+    expect(TYPING_CONTENT_TYPE.typeId).toBe("typing");
   });
 
   it("rejects forged type, environment, authority fields, and versions", () => {

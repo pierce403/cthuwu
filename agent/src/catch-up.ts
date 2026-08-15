@@ -15,6 +15,7 @@ export interface CatchUpMessage {
 
 export interface CatchUpDm {
   messages(options: { limit: number }): Promise<CatchUpMessage[]>;
+  send(content: unknown, options?: { shouldPush?: boolean }): Promise<unknown>;
   sendText(text: string): Promise<unknown>;
 }
 

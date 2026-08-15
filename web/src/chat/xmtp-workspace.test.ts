@@ -354,6 +354,18 @@ describe("multi-channel XMTP workspace", () => {
     expect(workspace.snapshot().channels.global.writeConversationId).toBe(globalId);
     expect(workspace.snapshot().channels.global.messages).toHaveLength(40);
 
+    value.streams.messages.push({
+      ...textMessage("typing", directId, 1_400n),
+      contentType: { authorityId: "cthuwu.app", typeId: "typing", versionMajor: 1, versionMinor: 0 },
+      content: {
+        type: "cthuwu.typing.v1",
+        active: true,
+        expiresAtNs: (BigInt(Date.now() + 15_000) * 1_000_000n).toString(),
+      },
+    } as never);
+    await vi.waitFor(() => expect(workspace.snapshot().channels.direct.typing).toBe(true));
+    expect(workspace.snapshot().channels.direct.messages.some(({ id }) => id === "typing")).toBe(false);
+
     value.streams.messages.push(textMessage("direct-in", directId, 1_500n));
     value.streams.messages.push(textMessage("acolytes-in", acolytesId, 1_501n));
     value.streams.messages.push(textMessage("global-in", globalId, 1_502n));
@@ -361,6 +373,7 @@ describe("multi-channel XMTP workspace", () => {
       workspace.snapshot().channels.direct.messages.some(({ id }) => id === "direct-in") &&
       workspace.snapshot().channels.acolytes.messages.some(({ id }) => id === "acolytes-in") &&
       workspace.snapshot().channels.global.messages.some(({ id }) => id === "global-in"));
+    expect(workspace.snapshot().channels.direct.typing).toBe(false);
     await workspace.send("direct", "direct out");
     await workspace.send("acolytes", "acolytes out");
     await workspace.send("global", "global out");
