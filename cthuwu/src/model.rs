@@ -1133,7 +1133,36 @@ pub(crate) fn violates_public_identity(value: &str) -> bool {
 }
 
 fn violates_public_response(value: &str) -> bool {
-    violates_public_identity(value) || advertises_slash_command(value) || !has_uwu_voice(value)
+    violates_public_identity(value)
+        || exposes_model_reasoning(value)
+        || advertises_slash_command(value)
+        || !has_uwu_voice(value)
+}
+
+fn exposes_model_reasoning(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let trimmed = lower.trim_start();
+
+    // OpenAI-compatible providers disagree on whether reasoning is returned in a
+    // separate field or embedded in `content`. Never forward embedded reasoning,
+    // including an unterminated tag caused by a provider/output-token cutoff.
+    if ["<think", "</think>", "<analysis", "</analysis>"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+
+    // Some reasoning models omit tags entirely and emit a planning preamble.
+    // Keep this deliberately anchored to the opening so ordinary explanations
+    // containing these phrases are not rejected.
+    trimmed.starts_with("the user just ")
+        || trimmed.starts_with("the user said ")
+        || trimmed.starts_with("we need answer")
+        || trimmed.starts_with("we need to answer")
+        || (trimmed.starts_with("i should:") || trimmed.starts_with("i need to:"))
+        || ((trimmed.starts_with("the user ") || trimmed.starts_with("this is a "))
+            && (lower.contains("\ni should:") || lower.contains("\ni need to:")))
 }
 
 fn advertises_slash_command(value: &str) -> bool {
@@ -1271,6 +1300,25 @@ mod tests {
         ));
         assert!(!violates_public_response(
             "hewwo fwiend, read https://example.com/help and /api/status uwu"
+        ));
+    }
+
+    #[test]
+    fn catches_tagged_and_plaintext_reasoning_leaks() {
+        assert!(exposes_model_reasoning(
+            "<think>The user said hi, so I should greet them.</think>hewwo :3"
+        ));
+        assert!(exposes_model_reasoning(
+            "<think>The user said hi, so I should greet them."
+        ));
+        assert!(exposes_model_reasoning(
+            "The user just said \"hi\". This is a casual greeting.\n\nI should:\n- greet them warmly\n\nhewwo :3"
+        ));
+        assert!(!exposes_model_reasoning(
+            "the user guide explains why Rust ownership works this way, fwiend :3"
+        ));
+        assert!(!exposes_model_reasoning(
+            "i should mention that this is normal Rust behavior, fwiend :3"
         ));
     }
 
@@ -1820,6 +1868,30 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0]["max_tokens"], MAX_PUBLIC_OUTPUT_TOKENS);
         assert_eq!(requests[1]["max_tokens"], MAX_PUBLIC_OUTPUT_TOKENS);
+        assert!(requests[1].to_string().contains("previous draft violated"));
+    }
+
+    #[tokio::test]
+    async fn provider_reasoning_leak_is_repaired_before_public_delivery() {
+        let leaked = "The user just said \"hi\". This is a casual greeting. I'm a Tentacle of Cthuwu.\n\nI should:\n- Greet them warmly in my eld\n\nhewwo fwiend :3";
+        let (endpoint, requests, server) = chat_server(vec![
+            json!({"choices":[{"message":{"content":leaked}}]}),
+            json!({"choices":[{"message":{"content":"hewwo fwiend, good to see u :3"}}]}),
+        ]);
+        let model = OpenAiCompatibleModel::new(endpoint, None, "reasoning-model").unwrap();
+        let response = model
+            .respond(ModelRequest {
+                profile: "nothing shared",
+                message: "hi",
+            })
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(response, "hewwo fwiend, good to see u :3");
+        assert!(!response.contains("The user"));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
         assert!(requests[1].to_string().contains("previous draft violated"));
     }
 

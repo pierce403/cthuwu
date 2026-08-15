@@ -798,3 +798,7 @@ The original manual milestone was:
   contribution recognition is field-independent and the site renders bounded reward/Branding UI
   metadata as a pending reward card and one-time decision modal; modal acceptance is not mint consent.
   Sanitize model-produced `[[cthuwu:` prefixes before appending compiled UI markers.
+- OpenAI-compatible reasoning models may place hidden analysis in `message.content` instead of a
+  provider-specific reasoning field, sometimes without tags or with an unterminated `<think>` after
+  truncation. Public response policy must reject and repair tagged or opening-plan reasoning rather
+  than forwarding it over XMTP.
