@@ -83,9 +83,9 @@ test signer is implemented; no production signature claim is made.
 The simulator's combined snapshot carries a schema version and rejects incompatible state. Council
 snapshot version 2 and `LocalRegistry` version 2 explicitly migrate a version-1 legacy profile only
 when it maps unambiguously to exactly one Tentacle, and retain migration provenance; ambiguous
-multi-Tentacle ownership shapes fail closed. The runtime ERC-8004 snapshot similarly migrates only a
-matching canonical-chain, wallet-bound version-1 record. Unknown newer state must fail closed rather
-than be partially loaded. Replay markers and greatest lease generations survive migration unchanged
+multi-Tentacle ownership shapes fail closed. Runtime ERC-8004 snapshot version 3 similarly migrates
+only matching canonical-chain, wallet-bound version-1/version-2 records and persists one generated
+default or explicitly first-boot-seeded public name. Unknown newer state must fail closed rather than be partially loaded. Replay markers and greatest lease generations survive migration unchanged
 so an upgrade cannot reapply old effects or revive stale authority.
 
 ## Existing deployment compatibility

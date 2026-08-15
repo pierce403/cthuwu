@@ -31,6 +31,30 @@ same `#t=` fragment. Once assignment resolves, the main chat page can copy a rec
 that assigned Tentacle as `t` and the current local browser identity as `r`; neither address enters
 the HTTP request.
 
+## Acolyte names
+
+The random browser EOA deterministically maps through the frozen, versioned `acolyte-v1` table to a
+stable British-style compound surname and estate name. Its four 64-entry components provide
+16,777,216 labels; collisions remain possible, so the address is always identity authority. The
+table has a pinned test fingerprint, and any future table change requires a new scheme rather than
+silently renaming existing wallets. The label requires no additional secret or backup field. Chat
+and identity settings show it.
+
+The exact V1 NFT representation is the existing owner-controlled custom trait `Acolyte Name`.
+`tokenURI` already includes bounded custom traits. `/acolytes/` computes the expected name from the
+subject address, labels the exact trait as matching, missing, or mismatched, and never lets hostile
+owner metadata replace the authoritative address-derived card title. The ordinary Branding
+acceptance message carries the generated value and asks the controlling Tentacle to correct a
+mismatch; it is not a typed or on-chain receipt.
+
+This is not yet a live write guarantee. The immutable deployed V1 cannot add the name atomically to
+`mintBranding`, and this repository still lacks the EIP-712 signing and mint transaction executor.
+The eventual controller workflow must wait for the confirmed mint, call
+`setCustomTrait(tokenId, "Acolyte Name", generatedName)` as the current owner, verify its receipt,
+and repair later drift before claiming synchronization. The V1 top-level metadata name remains
+`Cthuwu Acolyte Branding #<tokenId>`; making that field immutable or consent-bound would require a
+separate V2 deployment and migration design.
+
 ## Roles and on-chain boundary
 
 Every Branding has four distinct roles:
@@ -43,8 +67,10 @@ Every Branding has four distinct roles:
 | Referrer | The immutable, nonzero address chosen at mint and signed by the acolyte; it receives 10% of every paid sale and weekly upkeep payment. |
 
 Several ERC-8004 agents may share one wallet, so the contract stores the exact controller agent ID.
-Wallet ownership alone does not select an agent. The subject never becomes an operator, never gains
-control of the Tentacle, and cannot be replaced by transferring or repricing the token.
+Wallet ownership alone does not select an agent. Branding never makes the subject an operator or
+grants control of the Tentacle, and the subject cannot be replaced by transferring or repricing the
+token. The same authenticated XMTP inbox may be independently authorized by a Tentacle's local
+operator ACL, including when its Branding points to a different Tentacle.
 
 The contract may expose the acolyte address, owner, exact controller agent ID, immutable referrer,
 declared price, pending-price state, paid-through time, and owner-selected public avatar and traits.

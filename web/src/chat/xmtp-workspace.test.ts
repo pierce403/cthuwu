@@ -1,4 +1,5 @@
 import {
+  Client,
   ConsentState,
   GroupPermissionsOptions,
   IdentifierKind,
@@ -15,7 +16,12 @@ import {
   type AssignmentControl,
 } from "./control";
 import { createChatUiStateStore } from "./storage";
-import { XmtpMultiChannelWorkspace, acquireXmtpDatabaseLease, recoverRegisteredClient } from "./xmtp-workspace";
+import {
+  XmtpMultiChannelWorkspace,
+  acquireXmtpDatabaseLease,
+  ensureXmtpIdentityRegistration,
+  recoverRegisteredClient,
+} from "./xmtp-workspace";
 
 const own = "1".repeat(64);
 const tentacle = "2".repeat(64);
@@ -288,17 +294,56 @@ describe("multi-channel XMTP workspace", () => {
     expect(client.register).toHaveBeenCalledTimes(2);
   });
 
+  it("registers the Acolyte inbox without opening a conversation and closes the client", async () => {
+    let occupied = false;
+    const request = vi.fn(async (_name: string, _options: LockOptions, callback: (lock: Lock | null) => Promise<void>) => {
+      if (occupied) return callback(null);
+      occupied = true;
+      try {
+        return await callback({} as Lock);
+      } finally {
+        occupied = false;
+      }
+    });
+    vi.stubGlobal("navigator", { ...navigator, locks: { request } });
+    const client = {
+      inboxId: own,
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn(async () => undefined),
+      revokeAllOtherInstallations: vi.fn(async () => undefined),
+      close: vi.fn(),
+      conversations: { createDmWithIdentifier: vi.fn(), createDm: vi.fn() },
+    };
+    const create = vi.spyOn(Client, "create").mockResolvedValue(client as never);
+
+    await expect(ensureXmtpIdentityRegistration(config, identity)).resolves.toBe(own);
+    expect(client.register).toHaveBeenCalledOnce();
+    expect(client.conversations.createDmWithIdentifier).not.toHaveBeenCalled();
+    expect(client.conversations.createDm).not.toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(occupied).toBe(false);
+    const reacquired = await acquireXmtpDatabaseLease("production", identity.address);
+    await reacquired();
+    create.mockRestore();
+  });
+
   it("fails before OPFS open when another tab owns the identity database lease", async () => {
     let occupied = false;
     const request = vi.fn(async (_name: string, _options: LockOptions, callback: (lock: Lock | null) => Promise<void>) => {
       if (occupied) return callback(null);
       occupied = true;
-      return callback({} as Lock);
+      try {
+        return await callback({} as Lock);
+      } finally {
+        occupied = false;
+      }
     });
     vi.stubGlobal("navigator", { ...navigator, locks: { request } });
     const release = await acquireXmtpDatabaseLease("production", identity.address);
     await expect(acquireXmtpDatabaseLease("production", identity.address)).rejects.toThrow(/another tab/u);
-    release();
+    await release();
+    const reacquired = await acquireXmtpDatabaseLease("production", identity.address);
+    await reacquired();
   });
 
   it("keeps unconfigured deployment on legacy intro Direct without inventing group bindings", async () => {
@@ -308,6 +353,12 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
     await workspace.start();
+    expect(value.client.conversations.createDmWithIdentifier).toHaveBeenCalledWith(
+      { identifier: address, identifierKind: IdentifierKind.Ethereum },
+      { messageDisappearingSettings: { fromNs: 1n, inNs: 1_209_600_000_000_000n } },
+    );
+    expect(value.client.conversations.createDm).not.toHaveBeenCalled();
+    expect(value.client.preferences.fetchInboxStates).toHaveBeenCalled();
     expect(value.sentControls).toEqual([]);
     expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
     expect(workspace.snapshot().channels.acolytes.status).toBe("awaiting-assignment");

@@ -9,6 +9,7 @@ export default defineConfig({
         chat: fileURLToPath(new URL("index.html", import.meta.url)),
         tentacles: fileURLToPath(new URL("tentacles/index.html", import.meta.url)),
         acolytes: fileURLToPath(new URL("acolytes/index.html", import.meta.url)),
+        operator: fileURLToPath(new URL("operator/index.html", import.meta.url)),
       },
     },
   },

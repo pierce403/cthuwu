@@ -52,6 +52,43 @@ The same value may be supplied as `UWUBOT_OPERATOR`. It is resolved to the canon
 before transport starts. Restarting with the same operator is idempotent; a different active
 operator is rejected. The console reports `Tentacle has imprinted on 0x...` after resolution.
 
+### Browser operator console
+
+`https://cthuwu.app/operator/#t=<tentacle-wallet>` is a separate direct-only XMTP console. It uses
+the same local Acolyte EOA and XMTP inbox as public Chat. Operators using another XMTP client need
+not be Acolytes. The console does not consult Branding, rotate to another Tentacle, request group
+membership, send a role claim, or execute a command automatically. That deliberate separation lets
+an Acolyte assigned to Tentacle A directly operate Tentacle B, and lets any authorized operator
+reach a new or underfunded Tentacle before its ERC-8004 profile is healthy. The browser resolves the
+explicit Ethereum target through XMTP and verifies that the resulting peer inbox contains that
+wallet identifier.
+
+The page first registers the Acolyte's production XMTP inbox, then enables two commands. For an
+existing stopped node, use its exact data directory and restart afterward:
+
+```bash
+./uwu.sh --data-dir /path/to/the-same-data-dir --xmtp-env production operator add <acolyte-public-address> --label WebAcolyte
+```
+
+For a fresh production Tentacle, the page provides this one-shot form:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/pierce403/cthuwu/main/install.sh | bash -s -- --operator <acolyte-public-address>
+```
+
+Both commands contain only the Acolyte's public EOA. Its private key stays in the browser. The root
+installer validates the EOA, refuses root and existing source/Tentacle-state paths, clones Cthuwu,
+then runs the normal safe launcher with an explicit fresh `--data-dir`, `--xmtp-env production`,
+and `--operator <address>`. It cannot silently reuse an older node. Review the mutable `main`
+installer before piping it to Bash and run it under an isolated, unprivileged OS account.
+
+Only a newly authored message after the local grant boundary can enter the operator lane. The page
+cannot authorize itself: Rust's exact full-inbox ACL and authenticated `sentAtNs` remain the only
+role evidence. The same Browser SDK database cannot safely open in two tabs for one identity, so
+close every other Cthuwu tab using this Acolyte before opening `/operator/`. Every valid XMTP
+installation and restored backup for the authorized inbox inherits operator authority. Revoke the
+inbox locally plus its XMTP installations after compromise.
+
 If neither the flag nor any prior operator record exists, the first DM sender with an Ethereum
 address resolved from the authenticated XMTP envelope is atomically imprinted. That first message
 remains public and cannot execute tools; only messages authored after its `sentAtNs` fence enter the

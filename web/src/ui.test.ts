@@ -80,6 +80,7 @@ describe("application shell", () => {
     expect(document.querySelector("#tentacles")).toBeNull();
     expect(document.querySelector<HTMLAnchorElement>('a[href="/tentacles/"]')).not.toBeNull();
     expect(document.querySelector<HTMLAnchorElement>('a[href="/acolytes/"]')).not.toBeNull();
+    expect(document.querySelector<HTMLAnchorElement>('a[href="/operator/"]')).not.toBeNull();
     expect(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/pierce403/cthuwu"]')?.textContent).toContain("GitHub");
     expect(document.querySelector("#identity-dialog")?.textContent).toContain("Base balances");
     expect(document.querySelector("#identity-dialog")?.textContent).toContain("export encrypted key");

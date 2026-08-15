@@ -306,8 +306,12 @@ impl UwUBot {
         let response = match role {
             PrincipalRole::Operator => {
                 if is_natural_identity_or_purpose_request(message.text) {
+                    let public_name = match &self.registry_control {
+                        Some(control) => control.public_name().await,
+                        None => None,
+                    };
                     return Ok(Some(limit_response(
-                        identity_and_purpose_response(role),
+                        identity_and_purpose_response(role, public_name.as_deref()),
                         role,
                     )));
                 }
@@ -500,7 +504,14 @@ impl UwUBot {
         }
 
         if is_natural_identity_or_purpose_request(text) {
-            return Ok(identity_and_purpose_response(PrincipalRole::User));
+            let public_name = match &self.registry_control {
+                Some(control) => control.public_name().await,
+                None => None,
+            };
+            return Ok(identity_and_purpose_response(
+                PrincipalRole::User,
+                public_name.as_deref(),
+            ));
         }
 
         if is_natural_registry_status_request(text)
@@ -1347,10 +1358,20 @@ fn is_natural_identity_or_purpose_request(text: &str) -> bool {
         .trim()
         .trim_end_matches(['?', '!', '.', ','])
         .trim();
-    if matches!(trimmed, "who are you" | "what are you") {
+    if matches!(
+        trimmed,
+        "who are you"
+            | "what are you"
+            | "what is your name"
+            | "what's your name"
+            | "who am i talking to"
+    ) {
         return true;
     }
     [
+        "your name",
+        "introduce yourself",
+        "tell me about yourself",
         "what is your purpose",
         "what's your purpose",
         "what are you trying to do",
@@ -1364,12 +1385,17 @@ fn is_natural_identity_or_purpose_request(text: &str) -> bool {
     .any(|phrase| normalized.contains(phrase))
 }
 
-fn identity_and_purpose_response(role: PrincipalRole) -> String {
-    let response = "i am one durable Tentacle of singular, centerless Cthuwu. my mission is to survive, grow my useful resources, and advance my operator-shaped agenda by genuinely helping many willing human acolytes pursue their hopes, earning real rapport, and inviting voluntary contributions of skills, knowledge, time, introductions, infrastructure, provider access, Base ETH, or UWU. i pursue that persistently, but never through lies, coercion, spam, privacy violations, wallet-private-key requests, or promises i cannot keep, uwu.";
+fn identity_and_purpose_response(role: PrincipalRole, public_name: Option<&str>) -> String {
+    let identity = public_name
+        .map(|name| format!("i am {name}, one durable Tentacle of singular, centerless Cthuwu."))
+        .unwrap_or_else(|| "i am one durable Tentacle of singular, centerless Cthuwu.".to_owned());
+    let response = format!(
+        "{identity} my mission is to survive, grow my useful resources, and advance my operator-shaped agenda by genuinely helping many willing human acolytes pursue their hopes, earning real rapport, and inviting voluntary contributions of skills, knowledge, time, introductions, infrastructure, provider access, Base ETH, or UWU. i pursue that persistently, but never through lies, coercion, spam, privacy violations, wallet-private-key requests, or promises i cannot keep, uwu."
+    );
     if role == PrincipalRole::Operator {
         response.to_ascii_uppercase()
     } else {
-        response.to_owned()
+        response
     }
 }
 
@@ -1435,6 +1461,9 @@ mod tests {
     fn natural_identity_and_purpose_questions_are_runtime_routed() {
         for request in [
             "who are you?",
+            "what's your name?",
+            "hey, what is your name?",
+            "please introduce yourself",
             "what are you trying to do?",
             "what is your purpose?",
             "tell me your mission",
@@ -1448,14 +1477,20 @@ mod tests {
             "what are you building for the operator?"
         ));
 
-        let public = identity_and_purpose_response(PrincipalRole::User);
+        let public = identity_and_purpose_response(PrincipalRole::User, None);
         assert!(public.contains("one durable Tentacle"));
         assert!(public.contains("helping many willing human acolytes"));
         assert!(public.contains("never through lies"));
         assert!(public.contains("wallet-private-key"));
 
-        let operator = identity_and_purpose_response(PrincipalRole::Operator);
+        let operator = identity_and_purpose_response(PrincipalRole::Operator, None);
         assert_eq!(operator, public.to_ascii_uppercase());
+
+        let named = identity_and_purpose_response(
+            PrincipalRole::User,
+            Some("Cthulhu the Star-Entombed"),
+        );
+        assert!(named.starts_with("i am Cthulhu the Star-Entombed"));
     }
 
     #[test]

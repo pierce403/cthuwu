@@ -15,6 +15,7 @@ pub mod evolution_runtime;
 pub mod hermes;
 mod inference;
 mod matching;
+mod names;
 mod model;
 mod operator;
 pub mod personality;
@@ -256,12 +257,9 @@ struct Cli {
     )]
     erc8004_max_fee_per_gas_wei: String,
 
-    #[arg(
-        long,
-        env = "CTHUWU_ERC8004_PUBLIC_NAME",
-        default_value = "Cthuwu Tentacle"
-    )]
-    erc8004_public_name: String,
+    /// Optional name used only when this durable Tentacle has never chosen one before.
+    #[arg(long, env = "CTHUWU_ERC8004_PUBLIC_NAME")]
+    erc8004_public_name: Option<String>,
 
     #[arg(
         long,
@@ -853,7 +851,7 @@ async fn main() -> Result<()> {
             Some(_) => {}
         }
     }
-    let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()));
+    let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()).await);
     let mut operator_store = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     repair_operator_conflict(&mut operator_store)?;
     if let Some(identity) = cli.operator.as_deref() {
@@ -1320,7 +1318,7 @@ fn registration_config_from_cli(cli: &Cli) -> Result<RegistrationConfig> {
         post_registration_reserve_wei: cli.erc8004_post_registration_reserve_wei.clone(),
         max_gas_per_transaction: cli.erc8004_max_gas_per_transaction,
         max_fee_per_gas_wei: cli.erc8004_max_fee_per_gas_wei.clone(),
-        public_name: cli.erc8004_public_name.clone(),
+        initial_public_name: cli.erc8004_public_name.clone(),
         public_description: cli.erc8004_public_description.clone(),
         public_image: cli.erc8004_public_image.clone(),
     };

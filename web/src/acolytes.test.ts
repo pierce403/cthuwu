@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { acolyteName } from "./acolyte-name";
+
+const acolyte = "0x0000000000000000000000000000000000000011";
 
 const catalog = vi.hoisted(() => ({
   fetch: vi.fn(async () => ({
@@ -21,7 +24,10 @@ const catalog = vi.hoisted(() => ({
         pendingPriceValidAfter: "0",
         status: "Active",
         avatarUri: "javascript:alert(document.cookie)",
-        traits: [{ traitType: "<img src=x>", value: "<script>boom()</script>" }],
+        traits: [
+          { traitType: "Acolyte Name", value: "Pemberton-Smythe" },
+          { traitType: "<img src=x>", value: "<script>boom()</script>" },
+        ],
         mintBlockNumber: "49852729",
         mintTransactionHash: `0x${"cd".repeat(32)}`,
       },
@@ -49,6 +55,8 @@ describe("Acolyte catalog page", () => {
     expect(card?.textContent).toContain("javascript:alert(document.cookie)");
     expect(card?.textContent).toContain("<img src=x>");
     expect(card?.textContent).toContain("<script>boom()</script>");
+    expect(card?.querySelector("h2")?.textContent).toBe(`Acolyte ${acolyteName(acolyte)}`);
+    expect(card?.textContent).toContain("NFT name mismatch");
     expect(card?.querySelector("script")).toBeNull();
     expect(card?.querySelector('a[href^="javascript:"]')).toBeNull();
     expect(card?.querySelector("img")).toBeNull();

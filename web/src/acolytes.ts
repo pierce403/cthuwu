@@ -6,6 +6,7 @@ import {
   type AcolyteCatalogSnapshot,
 } from "./acolyte-data";
 import { parseConfig } from "./config";
+import { acolyteName, nftAcolyteName } from "./acolyte-name";
 
 const BASE_EXPLORER = "https://basescan.org";
 const MAX_RENDERED_ACOLYTES = 5_000;
@@ -118,11 +119,21 @@ function renderAcolyte(item: AcolyteCatalogItem): HTMLElement {
 
   const heading = createElement("div", "acolyte-card-heading");
   const title = document.createElement("h2");
-  title.textContent = `Acolyte ${shortAddress(item.acolyte)}`;
+  const expectedName = acolyteName(item.acolyte);
+  const observedName = nftAcolyteName(item.traits);
+  const nameMatches = observedName === expectedName;
+  // The address-derived name is authoritative for this UI. The owner-controlled NFT trait is
+  // displayed below as hostile metadata and contributes only a match/mismatch status badge.
+  title.textContent = `Acolyte ${expectedName}`;
   const badges = createElement("div", "tentacle-badges");
   badges.append(
     textElement("span", item.status, `tentacle-badge ${item.status === "Active" ? "good" : "warn"}`),
     textElement("span", `token ${item.tokenId}`, "tentacle-badge"),
+    textElement(
+      "span",
+      nameMatches ? "NFT name matches" : observedName ? "NFT name mismatch" : "NFT name missing",
+      `tentacle-badge ${nameMatches ? "good" : "warn"}`,
+    ),
   );
   heading.append(title, badges);
 

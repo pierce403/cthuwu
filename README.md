@@ -19,7 +19,7 @@ groups never become Council traffic.
 
 Cthuwu has two user-facing pieces:
 
-- `web/`: a static browser client that recovers one dedicated local identity and presents fixed
+- `web/`: a static browser client that recovers one local Acolyte identity and presents fixed
   Direct, assigned-Tentacle Acolytes, and Cthuwu-wide Global channels;
 - `cthuwu/`: the single Rust command, `uwubot`, which owns contact memory, consent, matching policy, and model access.
 
@@ -113,6 +113,10 @@ committed, so local intents and core records must not be described as completed 
 - A node operator can authorize an exact XMTP inbox immediately with a local CLI command.
   Active operator DMs enter a separate all-caps operator harness with bounded file/search tools and
   intentionally privileged shell execution; public, stale, and revoked messages cannot reach it.
+  The static `/operator/` console reuses the app's Acolyte identity, opens a direct-only route to one
+  explicit Tentacle, and prepares existing-node and new-node public-address commands; it never
+  grants itself a role or sends group/role controls. Branding assignment does not confer or limit
+  operator authority.
 - Structured, versioned legacy Council coordination profiles include deterministic Archivist,
   Hermit, Merchant, Wanderer, Oracle, and Trickster personas with different local policy positions
   without an LLM. Their retained `CthulhuId` wire namespace is compatibility data for a Tentacle
@@ -122,6 +126,11 @@ committed, so local intents and core records must not be described as completed 
   requires an operator. An optional authenticated operator can inspect or adjust it later. Nature
   supplies bounded response/resource policy and local relationship signals. Those relationship
   values remain local and are omitted from profiles sent to remote models.
+- Each durable Tentacle derives and persists an expanded launcher-inspired eldritch name, publishes
+  it in the ERC-8004 registration-v1 profile, and automatically repairs profile drift when funded.
+  Random browser Acolytes receive stable address-derived British-style surname/estate labels; Branding V1 can
+  carry one as the exact owner trait `Acolyte Name`, while live mint/name execution remains a
+  separate unfinished gate.
 - The Scales core accumulates aggregate metrics, keeps open-period snapshots provisional, and makes
   final judgments binding. Public wallets remain entity-scoped tier/Engagement inputs, while the
   XMTP-derived treasury address plus fresh balance/stake observations and accepted reward/spend
@@ -417,6 +426,22 @@ environment it uses:
 ./uwu.sh operator add dean.eth --label Dean
 # or: ./uwu.sh operator add 0x0123...abcd --label Dean
 ```
+
+The `/operator/` page registers the same Acolyte identity used by browser Chat and can copy a fresh
+launch command containing only that public EOA:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/pierce403/cthuwu/main/install.sh | bash -s -- --operator 0xACOLYTE_PUBLIC_ADDRESS
+```
+
+The installer refuses root, validates the public address, refuses existing source or Tentacle-state
+paths, clones a new checkout, and passes an explicit fresh data directory to
+`./uwu.sh --xmtp-env production --operator <address>`. It never accepts or transmits an Acolyte
+private key. Review the mutable `main` installer before piping it to Bash, and run the Tentacle under
+an isolated unprivileged OS account. Operators using other XMTP clients need not use the Cthuwu app
+or be Acolytes. Within the app, Branding and operator routing are deliberately independent: an
+Acolyte assigned to one Tentacle can directly operate another after that second Tentacle authorizes
+the Acolyte's canonical XMTP inbox.
 
 The command fails without changing the ACL if the name has no Ethereum address or that address has
 no inbox on XMTP production. It otherwise writes an active ACL record and exits; there is no XMTP

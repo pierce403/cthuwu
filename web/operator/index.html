@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0714" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: wss:; font-src 'self'; manifest-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; upgrade-insecure-requests"
+    />
+    <meta name="description" content="Direct XMTP control console for an explicitly authorized Cthuwu operator inbox." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="canonical" href="https://cthuwu.app/operator/" />
+    <title>Operator console · cthuwu</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#operator-target">Skip to operator setup</a>
+    <div class="cosmos" aria-hidden="true">
+      <span class="cosmic-orb orb-one"></span><span class="cosmic-orb orb-two"></span>
+      <span class="cosmic-star star-one">✦</span><span class="cosmic-star star-three">✧</span>
+    </div>
+
+    <main class="directory-shell operator-route">
+      <header class="route-header">
+        <a class="route-brand" href="/" aria-label="Cthuwu chat home"><span>cth</span><span class="uwu">uwu</span></a>
+        <nav class="site-nav" aria-label="Cthuwu">
+          <a href="/">Chat</a><a href="/tentacles/">Tentacles</a><a href="/acolytes/">Acolytes</a>
+          <a href="/operator/" aria-current="page">Operator</a>
+        </nav>
+      </header>
+
+      <section class="operator-heading" aria-labelledby="operator-title">
+        <div>
+          <p class="eyebrow">privileged only after local authorization</p>
+          <h1 id="operator-title">Operator console</h1>
+          <p>
+            A direct-only XMTP route to one explicit Tentacle wallet. This page cannot grant a role:
+            the Tentacle’s local full-inbox ACL and message timestamp remain the only authority.
+          </p>
+        </div>
+        <aside class="operator-danger" role="note">
+          <strong>Remote-code-execution boundary</strong>
+          <span>An authorized operator inbox can run commands as the OS account hosting the Tentacle. Use an isolated, unprivileged service account.</span>
+        </aside>
+      </section>
+
+      <section class="operator-grid">
+        <aside class="operator-setup" aria-labelledby="operator-setup-title">
+          <h2 id="operator-setup-title">Bind this Acolyte</h2>
+          <p>
+            This page reuses the same Acolyte EOA and XMTP inbox as <a href="/">Chat</a>.
+            Operators using another XMTP client do not need to be Cthuwu Acolytes.
+          </p>
+          <form id="operator-target-form">
+            <label for="operator-target">Tentacle wallet address</label>
+            <input id="operator-target" name="tentacle" autocomplete="off" spellcheck="false" placeholder="0x…" required />
+            <button type="submit">open direct route</button>
+          </form>
+          <p id="operator-target-status" class="status" role="status" aria-live="polite"></p>
+          <dl class="operator-facts">
+            <div><dt>Acolyte name</dt><dd id="operator-name">not loaded</dd></div>
+            <div><dt>Acolyte public EOA</dt><dd id="operator-address">not loaded</dd></div>
+            <div><dt>XMTP inbox</dt><dd id="operator-inbox">registering…</dd></div>
+          </dl>
+          <h3>Authorize an existing node</h3>
+          <p>
+            Stop the Tentacle, replace the data-directory placeholder with that node’s exact
+            configured directory, run this locally, then restart it. Only messages authored after
+            the authorization boundary are privileged.
+          </p>
+          <pre id="operator-authorize-command">Registering the public Acolyte address…</pre>
+          <button id="operator-copy-authorize" type="button" disabled>copy existing-node command</button>
+          <p id="operator-authorize-copy-status" class="status" role="status" aria-live="polite"></p>
+          <h3>Launch a new Tentacle</h3>
+          <p>
+            This one-shot installer checks out Cthuwu and launches a production Tentacle with this
+            public Acolyte address as its initial operator. Inspect <code>install.sh</code> before
+            piping it to Bash and run it as an isolated, unprivileged OS account.
+          </p>
+          <pre id="operator-launch-command">Registering the public Acolyte address…</pre>
+          <button id="operator-copy-launch" type="button" disabled>copy new-Tentacle command</button>
+          <p id="operator-launch-copy-status" class="status" role="status" aria-live="polite"></p>
+          <p class="operator-danger">
+            Every XMTP installation or restored backup for this Acolyte inbox inherits its operator
+            authority. Close every other Cthuwu tab using this identity before opening the console;
+            revoke the address on the Tentacle if the Acolyte identity is compromised.
+          </p>
+          <p class="operator-fine-print">
+            Both commands contain only the public EOA; the private key stays in this browser.
+            Branding assignment is independent: an Acolyte claimed by one Tentacle may operate and
+            directly message another. This page sends no role claim, Branding lookup, rotation
+            request, group join, or automatic command.
+          </p>
+        </aside>
+
+        <section id="chat" class="chat operator-direct-only" data-state="preparing" aria-label="Direct operator DM" hidden>
+          <header class="chat-header">
+            <div class="presence">
+              <span class="presence-dot" aria-hidden="true"><span></span></span>
+              <div class="presence-copy"><p id="chat-name" class="chat-name">Target Tentacle</p><p id="status" class="status" role="status" aria-live="polite">waiting for a target…</p></div>
+            </div>
+          </header>
+          <div class="channel-tabs" role="tablist" aria-label="Operator channel">
+            <button id="tab-direct" class="channel-tab" type="button" role="tab" aria-selected="true" aria-controls="channel-panel"><span>Direct operator DM</span><span id="unread-direct" class="unread-badge" hidden>0</span></button>
+            <button id="tab-acolytes" class="channel-tab" type="button" role="tab" aria-selected="false" hidden><span>Acolytes</span><span id="unread-acolytes" hidden>0</span></button>
+            <button id="tab-global" class="channel-tab" type="button" role="tab" aria-selected="false" hidden><span>Global</span><span id="unread-global" hidden>0</span></button>
+          </div>
+          <div id="channel-panel" class="message-pane" role="tabpanel" aria-labelledby="tab-direct">
+            <button id="load-earlier" class="load-earlier" type="button" hidden>load earlier messages</button>
+            <div id="messages" class="messages is-empty" role="log" aria-label="Direct operator messages" aria-live="polite" aria-busy="true" tabindex="0"></div>
+            <button id="new-messages" class="new-messages" type="button" hidden>new messages ↓</button>
+          </div>
+          <div class="composer-area">
+            <form id="composer" class="composer">
+              <label class="sr-only" for="message">Message the direct operator channel</label>
+              <div class="composer-field">
+                <textarea id="message" name="message" rows="1" autocomplete="off" maxlength="16384" aria-describedby="retention-notice composer-error" placeholder="message your Tentacle…" disabled></textarea>
+                <button id="send" type="submit" disabled><span>send</span></button>
+              </div>
+              <button id="connect" class="retry-button" type="button" hidden>reconnect</button>
+            </form>
+            <p id="retention-notice" class="retention-notice">Composer locked until the 14-day disappearing-message policy is verified.</p>
+            <p id="composer-error" class="error" role="alert" hidden></p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <section id="activity-card" hidden><span id="reward-status"></span></section>
+    <button id="copy-referral" type="button" hidden disabled></button><span id="referral-status" hidden></span>
+    <dialog id="branding-offer" hidden><span id="branding-name"></span><span id="branding-price"></span><span id="branding-upkeep"></span><span id="branding-referrer"></span><button id="branding-accept" type="button"></button><button id="branding-decline" type="button"></button></dialog>
+    <script type="module" src="/src/operator.ts"></script>
+  </body>
+</html>

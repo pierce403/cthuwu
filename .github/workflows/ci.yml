@@ -50,6 +50,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: bash ../scripts/test-uwu.sh
+      - run: bash ../scripts/test-install.sh
 
   erc8004-mainnet-fork:
     runs-on: ubuntu-latest

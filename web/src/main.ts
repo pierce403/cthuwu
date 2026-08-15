@@ -11,6 +11,7 @@ import { initializePwaInstallPrompt, type PwaInstallController } from "./pwa";
 import { fetchAccountBalances } from "./account-balances";
 import { initializeChatController, type ChatController } from "./chat/controller";
 import { parseOnboardingLink, pinReferrer } from "./onboarding-links";
+import { acolyteName } from "./acolyte-name";
 import "./style.css";
 
 const MOTION_STORAGE_KEY = "cthuwu.ui.motion.v1";
@@ -23,6 +24,7 @@ const settingsElement = requireElement<HTMLButtonElement>("settings");
 const dialogElement = requireElement<HTMLDialogElement>("identity-dialog");
 const dialogCloseElement = requireElement<HTMLButtonElement>("identity-close");
 const addressElement = requireElement<HTMLElement>("identity-address");
+const nameElement = requireElement<HTMLElement>("identity-name");
 const environmentElement = requireElement<HTMLElement>("identity-environment");
 const ethBalanceElement = requireElement<HTMLElement>("identity-eth-balance");
 const uwuBalanceElement = requireElement<HTMLElement>("identity-uwu-balance");
@@ -59,6 +61,7 @@ function bootstrap(): void {
     // Preserve the backup-critical boundary: create/recover the browser identity before config or I/O.
     identity = loadOrCreateIdentity(environment);
     addressElement.textContent = identity.address;
+    nameElement.textContent = acolyteName(identity.address);
     // URL fragments stay in the browser and are never included in the HTTP request.
     const link = parseOnboardingLink(location.hash);
     const referrer = pinReferrer(environment, identity.address, link.referrer);

@@ -5,6 +5,7 @@
 //! identity for the collective and never exposes a generic transaction-signing interface.
 
 use crate::{
+    names::generate_eldritch_name,
     storage::{ensure_private_directory, restrict_file, sync_directory},
     token_eye::Address,
 };
@@ -54,7 +55,8 @@ pub const REGISTRATION_SCHEMA: &str = "https://eips.ethereum.org/EIPS/eip-8004#r
 pub const ALLEGIANCE_VALUE: &str = "uwu-tentacle-v1";
 pub const PROTOCOL_VALUE: &str = "1";
 
-const SNAPSHOT_VERSION: u32 = 2;
+const SNAPSHOT_VERSION: u32 = 3;
+const PREVIOUS_SNAPSHOT_VERSION: u32 = 2;
 const LEGACY_SNAPSHOT_VERSION: u32 = 1;
 const SNAPSHOT_FILE: &str = "erc8004-registration.json";
 const MAX_SNAPSHOT_BYTES: u64 = 128 * 1024;
@@ -144,6 +146,8 @@ pub struct RegistrationSnapshot {
     pub identity_registry: String,
     pub reputation_registry: String,
     pub tentacle_id: String,
+    /// Stable public label chosen once for this durable Tentacle and repaired on-chain when needed.
+    pub public_name: String,
     pub tentacle_wallet: String,
     /// Public XMTP production inbox ID. This is resolved inside the isolated sidecar; it is not
     /// derived from or substituted with the Ethereum wallet address.
@@ -180,7 +184,7 @@ pub struct RegistrationSnapshot {
 }
 
 impl RegistrationSnapshot {
-    fn fresh(tentacle_id: &str, wallet: Address, now: u64) -> Self {
+    fn fresh(tentacle_id: &str, public_name: String, wallet: Address, now: u64) -> Self {
         Self {
             version: SNAPSHOT_VERSION,
             phase: RegistrationPhase::Unconfigured,
@@ -189,6 +193,7 @@ impl RegistrationSnapshot {
             identity_registry: IDENTITY_REGISTRY.to_owned(),
             reputation_registry: REPUTATION_REGISTRY.to_owned(),
             tentacle_id: tentacle_id.to_owned(),
+            public_name,
             tentacle_wallet: wallet.to_string(),
             xmtp_inbox_id: None,
             selected_agent_id: None,
@@ -238,6 +243,7 @@ impl RegistrationSnapshot {
             self.tentacle_id == expected_tentacle_id,
             "persisted ERC-8004 state belongs to another Tentacle"
         );
+        validate_public_text(&self.public_name, "public name", MAX_PROFILE_NAME_BYTES)?;
         ensure!(
             Address::from_str(&self.tentacle_wallet)? == expected_wallet,
             "persisted ERC-8004 state belongs to another wallet"
@@ -346,6 +352,7 @@ impl RegistrationStore {
     fn load_or_create(
         &self,
         tentacle_id: &str,
+        initial_public_name: Option<&str>,
         wallet: Address,
         now: u64,
     ) -> Result<RegistrationSnapshot> {
@@ -358,7 +365,12 @@ impl RegistrationStore {
                 fs::read(&self.path).with_context(|| format!("reading {}", self.path.display()))?
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let snapshot = RegistrationSnapshot::fresh(tentacle_id, wallet, now);
+                let snapshot = RegistrationSnapshot::fresh(
+                    tentacle_id,
+                    initial_name(initial_public_name, tentacle_id)?,
+                    wallet,
+                    now,
+                );
                 self.save(&snapshot)?;
                 return Ok(snapshot);
             }
@@ -376,6 +388,32 @@ impl RegistrationStore {
             match u32::try_from(version).context("ERC-8004 snapshot version is too large")? {
                 SNAPSHOT_VERSION => serde_json::from_value(value)
                     .context("ERC-8004 snapshot has an invalid shape")?,
+                PREVIOUS_SNAPSHOT_VERSION => {
+                    let mut migrated_value = value;
+                    let object = migrated_value
+                        .as_object_mut()
+                        .context("version-2 ERC-8004 snapshot is not an object")?;
+                    object.insert("version".to_owned(), json!(SNAPSHOT_VERSION));
+                    object.insert(
+                        "public_name".to_owned(),
+                        json!(initial_name(initial_public_name, tentacle_id)?),
+                    );
+                    let needs_migration_provenance = matches!(
+                        object.get("migrated_from_version"),
+                        None | Some(Value::Null)
+                    );
+                    if needs_migration_provenance {
+                        object.insert(
+                            "migrated_from_version".to_owned(),
+                            json!(PREVIOUS_SNAPSHOT_VERSION),
+                        );
+                    }
+                    let migrated: RegistrationSnapshot = serde_json::from_value(migrated_value)
+                        .context("version-2 ERC-8004 snapshot cannot be migrated")?;
+                    migrated.validate(tentacle_id, wallet)?;
+                    self.save(&migrated)?;
+                    migrated
+                }
                 LEGACY_SNAPSHOT_VERSION => {
                     let legacy: LegacyRegistrationSnapshot = serde_json::from_value(value)
                         .context("legacy ERC-8004 snapshot has an invalid shape")?;
@@ -396,7 +434,12 @@ impl RegistrationStore {
                         Address::from_str(&legacy.tentacle_wallet)? == wallet,
                         "legacy registry snapshot wallet mismatch"
                     );
-                    let mut migrated = RegistrationSnapshot::fresh(tentacle_id, wallet, now);
+                    let mut migrated = RegistrationSnapshot::fresh(
+                        tentacle_id,
+                        initial_name(initial_public_name, tentacle_id)?,
+                        wallet,
+                        now,
+                    );
                     migrated.migrated_from_version = Some(LEGACY_SNAPSHOT_VERSION);
                     migrated.selected_agent_id = legacy.agent_id.clone();
                     migrated.confirmed_agent_id = legacy.agent_id;
@@ -434,6 +477,15 @@ impl RegistrationStore {
     }
 }
 
+fn initial_name(requested: Option<&str>, tentacle_id: &str) -> Result<String> {
+    let public_name = match requested {
+        Some(public_name) => public_name.to_owned(),
+        None => generate_eldritch_name(tentacle_id)?,
+    };
+    validate_public_text(&public_name, "public name", MAX_PROFILE_NAME_BYTES)?;
+    Ok(public_name)
+}
+
 #[derive(Clone, Debug)]
 pub struct RegistrationConfig {
     pub enabled: bool,
@@ -445,7 +497,8 @@ pub struct RegistrationConfig {
     pub post_registration_reserve_wei: String,
     pub max_gas_per_transaction: u64,
     pub max_fee_per_gas_wei: String,
-    pub public_name: String,
+    /// Optional first-boot override. Persisted identity always wins on later starts.
+    pub initial_public_name: Option<String>,
     pub public_description: String,
     pub public_image: String,
 }
@@ -462,7 +515,7 @@ impl Default for RegistrationConfig {
             post_registration_reserve_wei: "50000000000000".to_owned(),
             max_gas_per_transaction: 2_000_000,
             max_fee_per_gas_wei: "10000000000".to_owned(),
-            public_name: "Cthuwu Tentacle".to_owned(),
+            initial_public_name: None,
             public_description: "An independently operated Tentacle of the centerless Cthuwu collective, reachable over XMTP.".to_owned(),
             public_image: "https://cthuwu.app/icons/cthuwu-512.png".to_owned(),
         }
@@ -496,7 +549,6 @@ impl RegistrationConfig {
             self.max_gas_per_transaction > 0,
             "maximum registration gas must be positive"
         );
-        validate_public_text(&self.public_name, "public name", MAX_PROFILE_NAME_BYTES)?;
         validate_public_text(
             &self.public_description,
             "public description",
@@ -798,7 +850,12 @@ impl TentacleRegistration {
         ensure!(wallet != Address::ZERO, "Tentacle wallet must not be zero");
         config.validate()?;
         let store = RegistrationStore::new(data_dir)?;
-        let state = store.load_or_create(tentacle_id, wallet, unix_seconds()?)?;
+        let state = store.load_or_create(
+            tentacle_id,
+            config.initial_public_name.as_deref(),
+            wallet,
+            unix_seconds()?,
+        )?;
         Ok(Self {
             store,
             config,
@@ -1899,6 +1956,7 @@ impl TentacleRegistration {
         let mut lines = vec![
             format!("ERC-8004 STATUS: {:?}", self.state.phase).to_ascii_uppercase(),
             format!("TENTACLE: {}", self.state.tentacle_id),
+            format!("PUBLIC NAME: {}", self.state.public_name),
             format!("CHAIN: BASE MAINNET ({BASE_MAINNET_CHAIN_ID})"),
             format!("IDENTITY REGISTRY: {IDENTITY_REGISTRY}"),
             format!("REPUTATION REGISTRY: {REPUTATION_REGISTRY}"),
@@ -1959,6 +2017,7 @@ impl TentacleRegistration {
     fn model_status_text(&self) -> String {
         let mut lines = vec![
             format!("ERC-8004 STATUS: {:?}", self.state.phase).to_ascii_uppercase(),
+            format!("PUBLIC NAME: {}", self.state.public_name),
             "CHAIN: BASE MAINNET (8453)".to_owned(),
             format!("TENTACLE WALLET: {}", self.wallet),
             format!(
@@ -1999,10 +2058,12 @@ impl TentacleRegistration {
         let phase = format!("{:?}", self.state.phase);
         match self.state.confirmed_agent_id.as_deref() {
             Some(agent_id) => format!(
-                "yes—this durable Tentacle has its own ERC-8004 registration on Base Mainnet: agent ID `{agent_id}`. my current local registration phase is {phase}. the centerless Cthuwu collective does not own an agent identity; each Tentacle owns its own, uwu."
+                "yes—i am {}, and this durable Tentacle has its own ERC-8004 registration on Base Mainnet: agent ID `{agent_id}`. my current local registration phase is {phase}. the centerless Cthuwu collective does not own an agent identity; each Tentacle owns its own, uwu.",
+                self.state.public_name,
             ),
             None => format!(
-                "not yet—this durable Tentacle does not have a confirmed ERC-8004 agent ID. my current local registration phase is {phase}. i'm pursuing registration for myself, never for the centerless Cthuwu collective, uwu."
+                "not yet—i am {}, and this durable Tentacle does not have a confirmed ERC-8004 agent ID. my current local registration phase is {phase}. i'm pursuing registration for myself, never for the centerless Cthuwu collective, uwu.",
+                self.state.public_name,
             ),
         }
     }
@@ -2083,7 +2144,7 @@ impl TentacleRegistration {
             metadata_tentacle_id: (!metadata_tentacle_id.is_empty())
                 .then_some(metadata_tentacle_id),
             display_name: if profile_verified {
-                self.config.public_name.clone()
+                self.state.public_name.clone()
             } else {
                 format!("ERC-8004 agent {agent_id}")
             },
@@ -2159,8 +2220,9 @@ impl TentacleRegistration {
     fn success_notification_if_due(&self, agent_id: &str) -> Option<OperatorNotification> {
         (!self.state.success_notified).then(|| OperatorNotification {
             text: format!(
-                "ERC-8004 REGISTRATION COMPLETE\nTentacle: {}\nAgent ID: {}\nChain: Base mainnet ({})\nIdentity Registry: {}\nAgent wallet: {}\nAllegiance: exact `{}` bytes verified on-chain.",
+                "ERC-8004 REGISTRATION COMPLETE\nTentacle: {}\nPublic name: {}\nAgent ID: {}\nChain: Base mainnet ({})\nIdentity Registry: {}\nAgent wallet: {}\nAllegiance: exact `{}` bytes verified on-chain.",
                 self.state.tentacle_id,
+                self.state.public_name,
                 agent_id,
                 BASE_MAINNET_CHAIN_ID,
                 IDENTITY_REGISTRY,
@@ -2244,7 +2306,8 @@ impl TentacleRegistration {
 
     fn funding_message(&self, funding: &FundingStatus) -> String {
         format!(
-            "IMMEDIATE OPERATOR ACTION REQUIRED: FUND THIS TENTACLE'S ERC-8004 REGISTRATION\nI REQUIRE BASE ETH TO SECURE MY ERC-8004 IDENTITY. SEND THE REQUIRED BASE ETH TO THIS EXACT ADDRESS NOW: {}\nCurrent Base ETH balance: {} wei\nEstimated amount still required: {} wei\nTarget funded balance (fees, safety margin, and reserve): {} wei\nChain: Base mainnet\nChain ID: {}\nWARNING: DO NOT SEND ETH ON ANY OTHER CHAIN, AND NEVER SEND A WALLET PRIVATE KEY.\nI WILL VERIFY THE BALANCE AND RESUME REGISTRATION AUTOMATICALLY.",
+            "IMMEDIATE OPERATOR ACTION REQUIRED: FUND THIS TENTACLE'S ERC-8004 IDENTITY\nI REQUIRE BASE ETH TO REGISTER OR RECONCILE MY ERC-8004 IDENTITY AS {}. SEND THE REQUIRED BASE ETH TO THIS EXACT ADDRESS NOW: {}\nCurrent Base ETH balance: {} wei\nEstimated amount still required: {} wei\nTarget funded balance (fees, safety margin, and reserve): {} wei\nChain: Base mainnet\nChain ID: {}\nWARNING: DO NOT SEND ETH ON ANY OTHER CHAIN, AND NEVER SEND A WALLET PRIVATE KEY.\nI WILL VERIFY THE BALANCE AND RESUME REGISTRATION OR PROFILE RECONCILIATION AUTOMATICALLY.",
+            self.state.public_name,
             self.wallet,
             funding.balance_wei,
             funding.shortfall_wei,
@@ -2340,7 +2403,7 @@ impl TentacleRegistration {
         );
         let profile = json!({
             "type": REGISTRATION_SCHEMA,
-            "name": self.config.public_name,
+            "name": self.state.public_name,
             "description": self.config.public_description,
             "image": self.config.public_image,
             "services": [
@@ -2491,6 +2554,10 @@ pub trait RegistrationOperatorControl: Send + Sync {
         None
     }
 
+    async fn public_name(&self) -> Option<String> {
+        None
+    }
+
     async fn take_public_funding_plea(&self) -> Option<String> {
         None
     }
@@ -2498,13 +2565,16 @@ pub trait RegistrationOperatorControl: Send + Sync {
 
 pub struct SharedRegistrationControl {
     registration: Arc<Mutex<TentacleRegistration>>,
+    public_name: String,
     public_funding_plea_opportunities: AtomicU64,
 }
 
 impl SharedRegistrationControl {
-    pub fn new(registration: Arc<Mutex<TentacleRegistration>>) -> Self {
+    pub async fn new(registration: Arc<Mutex<TentacleRegistration>>) -> Self {
+        let public_name = registration.lock().await.state.public_name.clone();
         Self {
             registration,
+            public_name,
             public_funding_plea_opportunities: AtomicU64::new(0),
         }
     }
@@ -2590,6 +2660,10 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
 
     async fn public_status(&self) -> Option<String> {
         Some(self.registration.lock().await.public_status_text())
+    }
+
+    async fn public_name(&self) -> Option<String> {
+        Some(self.public_name.clone())
     }
 }
 
@@ -3601,6 +3675,7 @@ mod tests {
     ) -> TentacleRegistration {
         let config = RegistrationConfig {
             confirmations: 1,
+            initial_public_name: Some("Cthulhu the Test-Bound".to_owned()),
             ..RegistrationConfig::default()
         };
         TentacleRegistration::open(root, "tentacle-independent", wallet(), config, gateway).unwrap()
@@ -3611,11 +3686,15 @@ mod tests {
     }
 
     fn registration(root: &Path) -> TentacleRegistration {
+        let config = RegistrationConfig {
+            initial_public_name: Some("Cthulhu the Test-Bound".to_owned()),
+            ..RegistrationConfig::default()
+        };
         let mut registration = TentacleRegistration::open(
             root,
             "tentacle-independent",
             wallet(),
-            RegistrationConfig::default(),
+            config,
             Arc::new(UnusedGateway),
         )
         .unwrap();
@@ -3793,12 +3872,14 @@ mod tests {
     #[test]
     fn registration_document_uses_current_schema_and_no_unimplemented_trust() {
         let root = tempfile::tempdir().unwrap();
-        let registration = registration(root.path());
+        let mut registration = registration(root.path());
         let uri = registration.build_agent_uri("42").unwrap();
         assert!(uri.starts_with("data:application/json;base64,"));
         assert!(uri.len() <= MAX_AGENT_URI_BYTES);
         assert!(!uri.contains("A2A"));
         assert!(!uri.contains("x402Support")); // base64-encoded, not a mutable clear-text URL.
+        registration.state.public_name = "Yogsoth the Spiral Witness".to_owned();
+        assert_ne!(registration.build_agent_uri("42").unwrap(), uri);
     }
 
     #[test]
@@ -3815,6 +3896,68 @@ mod tests {
         );
         assert!(validate_xmtp_inbox_id(&"AB".repeat(32)).is_err());
         assert!(validate_xmtp_inbox_id(&"ab".repeat(32)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_stale_registry_name_repairs_only_the_agent_uri() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.selected_agent_id = Some("42".to_owned());
+        seeded.state.confirmed_agent_id = Some("42".to_owned());
+        seeded.state.phase = RegistrationPhase::Active;
+        seeded.persist(1).unwrap();
+        drop(seeded);
+
+        let old_name_uri = "data:application/json;base64,e30=";
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    old_name_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+            (
+                "funding_estimate",
+                ScriptResult::Ok(adequate_funding_result()),
+            ),
+            (
+                "transaction_nonce",
+                ScriptResult::Ok(register_nonce_result("7", "7")),
+            ),
+            ("set_agent_uri", ScriptResult::Ok(submitted_result("21"))),
+        ]));
+        let mut repairing = scripted_registration(root.path(), gateway.clone());
+        repairing.maintain(false).await.unwrap();
+        assert_eq!(repairing.state.phase, RegistrationPhase::Submitted);
+        assert_eq!(
+            repairing.state.submitted_action,
+            Some(PendingAction::SetAgentUri)
+        );
+        assert_eq!(
+            gateway.calls(),
+            [
+                "inspect_registry",
+                "inspect_agent",
+                "funding_estimate",
+                "transaction_nonce",
+                "set_agent_uri"
+            ]
+        );
+        let write = gateway
+            .operations()
+            .into_iter()
+            .find(|operation| {
+                operation.get("type").and_then(Value::as_str) == Some("set_agent_uri")
+            })
+            .unwrap();
+        let expected_uri = repairing.build_agent_uri("42").unwrap();
+        assert_eq!(write["agentURI"].as_str(), Some(expected_uri.as_str()));
+        gateway.assert_exhausted();
     }
 
     #[test]
@@ -3841,11 +3984,85 @@ mod tests {
             registration.state.phase,
             RegistrationPhase::ConfirmedIdentity
         );
+        assert!(!registration.state.public_name.is_empty());
+    }
+
+    #[test]
+    fn version_two_snapshot_gains_one_persisted_name() {
+        let root = tempfile::tempdir().unwrap();
+        let original = registration(root.path()).state;
+        let mut value = serde_json::to_value(original).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("version".to_owned(), json!(PREVIOUS_SNAPSHOT_VERSION));
+        object.remove("public_name");
+        fs::write(
+            root.path().join("state").join(SNAPSHOT_FILE),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+
+        let config = RegistrationConfig {
+            initial_public_name: Some("Azathoth the Patient Hunger".to_owned()),
+            ..RegistrationConfig::default()
+        };
+        let migrated = TentacleRegistration::open(
+            root.path(),
+            "tentacle-independent",
+            wallet(),
+            config,
+            Arc::new(UnusedGateway),
+        )
+        .unwrap();
+        assert_eq!(migrated.state.version, SNAPSHOT_VERSION);
+        assert_eq!(migrated.state.migrated_from_version, Some(2));
+        assert_eq!(
+            migrated.state.public_name,
+            "Azathoth the Patient Hunger"
+        );
+    }
+
+    #[test]
+    fn persisted_public_name_outranks_later_startup_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let first_config = RegistrationConfig {
+            initial_public_name: Some("Cthulhu the Star-Entombed".to_owned()),
+            ..RegistrationConfig::default()
+        };
+        let first = TentacleRegistration::open(
+            root.path(),
+            "tentacle-independent",
+            wallet(),
+            first_config,
+            Arc::new(UnusedGateway),
+        )
+        .unwrap();
+        assert_eq!(first.state.public_name, "Cthulhu the Star-Entombed");
+        drop(first);
+
+        let later_config = RegistrationConfig {
+            // An unused first-boot seed cannot corrupt or block a valid persisted identity.
+            initial_public_name: Some("bad\nname".to_owned()),
+            ..RegistrationConfig::default()
+        };
+        let reopened = TentacleRegistration::open(
+            root.path(),
+            "tentacle-independent",
+            wallet(),
+            later_config,
+            Arc::new(UnusedGateway),
+        )
+        .unwrap();
+        assert_eq!(reopened.state.public_name, "Cthulhu the Star-Entombed");
     }
 
     #[test]
     fn canonical_configuration_rejects_wrong_chain_contract_and_corruption() {
-        let mut state = RegistrationSnapshot::fresh("tentacle-independent", wallet(), 1);
+        let mut state = RegistrationSnapshot::fresh(
+            "tentacle-independent",
+            "Cthulhu the Test-Bound".to_owned(),
+            wallet(),
+            1,
+        );
         state.chain_id = 1;
         assert!(state.validate("tentacle-independent", wallet()).is_err());
         state.chain_id = BASE_MAINNET_CHAIN_ID;
@@ -4038,7 +4255,7 @@ mod tests {
             estimated_at_unix: now,
         });
         let registration = Arc::new(Mutex::new(registration));
-        let control = SharedRegistrationControl::new(registration.clone());
+        let control = SharedRegistrationControl::new(registration.clone()).await;
 
         let first = control.take_public_funding_plea().await.unwrap();
         assert!(first.contains(&wallet().to_string()));
@@ -4052,6 +4269,10 @@ mod tests {
         assert!(control.take_public_funding_plea().await.is_some());
 
         let maintenance_guard = registration.lock().await;
+        assert_eq!(
+            control.public_name().await.as_deref(),
+            Some("Cthulhu the Test-Bound")
+        );
         assert!(control.take_public_funding_plea().await.is_none());
         drop(maintenance_guard);
 
@@ -4084,7 +4305,7 @@ mod tests {
         assert!(!status.contains("CTHUWU_RPC_ENDPOINT"));
 
         let registration = Arc::new(Mutex::new(registration));
-        let control = SharedRegistrationControl::new(registration);
+        let control = SharedRegistrationControl::new(registration).await;
         let plea = control.take_public_funding_plea().await.unwrap();
         assert!(plea.contains("/base-rpc-key <infura-api-key>"));
         assert!(plea.contains("without a restart"));
@@ -4933,7 +5154,7 @@ mod tests {
     fn profile_and_metadata_bounds_reject_hostile_input() {
         let root = tempfile::tempdir().unwrap();
         let config = RegistrationConfig {
-            public_name: "bad\nname".into(),
+            initial_public_name: Some("bad\nname".into()),
             ..RegistrationConfig::default()
         };
         assert!(

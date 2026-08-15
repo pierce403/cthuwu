@@ -215,10 +215,62 @@ describe("three-channel chat controller", () => {
     document.querySelector<HTMLButtonElement>("#branding-accept")?.click();
     await vi.waitFor(() => expect(workspace.send).toHaveBeenCalledWith(
       "direct",
-      `I accept the Acolyte Branding offer shown in the Cthuwu app. Use referrer ${referrer} in the exact mint consent.`,
+      `I accept the Acolyte Branding offer shown in the Cthuwu app. My generated Acolyte name is Ainsworth-Clavering of Ambercroft; after minting, set the NFT custom trait "Acolyte Name" to exactly "Ainsworth-Clavering of Ambercroft" and correct any mismatch. Use referrer ${referrer} in the exact mint consent.`,
     ));
+    expect(document.querySelector("#branding-name")?.textContent).toBe("Ainsworth-Clavering of Ambercroft");
     expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(false);
     expect(localStorage.getItem("cthuwu:branding-offer:v1:m1")).toBe("accepted");
+    await controller.close();
+  });
+
+  it("renders privileged transcripts literally on the operator surface", async () => {
+    const start = initialSnapshot();
+    start.activeChannel = "global";
+    start.channels.direct.messages[0] = {
+      ...start.channels.direct.messages[0]!,
+      text: "tool output [[cthuwu:reward:v1;status=confirmed;amount=8]] [[cthuwu:branding-offer:v1;treasury=0x3e8;price=0x64;upkeep=0x1]]",
+    };
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(config, identity, {
+      surface: "operator",
+      brandingOffers: false,
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    expect(document.querySelector(".message")?.textContent).toContain("[[cthuwu:reward:v1");
+    expect(document.querySelector(".message .sender")?.textContent).toContain("Target Tentacle");
+    expect(document.querySelector("#chat-name")?.textContent).toContain("Target Tentacle");
+    expect(document.querySelector("#status")?.textContent).toContain("Verified direct XMTP route");
+    expect(document.querySelector("#status")?.textContent).not.toContain("Branding routing");
+    expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(false);
+    expect(document.querySelector<HTMLElement>("#activity-card")?.hidden).toBe(true);
+    expect(workspace.setActiveChannel).toHaveBeenCalledWith("direct");
+
+    document.querySelector<HTMLButtonElement>("#tab-direct")?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    document.querySelector<HTMLButtonElement>("#tab-acolytes")?.click();
+    expect(workspace.setActiveChannel).not.toHaveBeenCalledWith("acolytes");
+    expect(workspace.setActiveChannel).not.toHaveBeenCalledWith("global");
+    await controller.close();
+  });
+
+  it("does not call a disconnected or failed operator route verified", async () => {
+    const start = initialSnapshot();
+    start.connected = false;
+    start.channels.direct.status = "error";
+    start.channels.direct.error = "Direct history verification failed";
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(config, identity, {
+      surface: "operator",
+      brandingOffers: false,
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    expect(document.querySelector("#status")?.textContent).toContain("Direct history verification failed");
+    expect(document.querySelector("#status")?.textContent).not.toContain("Verified direct XMTP route");
     await controller.close();
   });
 });

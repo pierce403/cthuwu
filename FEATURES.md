@@ -76,6 +76,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - The browser creates an EOA private key with `crypto.getRandomValues` before configuration or network access.
   - A separate 32-byte compatibility key is persisted, but the UI does not claim it encrypts the current Browser SDK database.
   - A versioned record is namespaced by XMTP environment in local storage and reused on reload.
+  - The random EOA deterministically maps through the frozen, fingerprint-tested `acolyte-v1` name
+    table to one stable, stuffy compound surname and estate label from a 16,777,216-entry space.
+    The name adds no secret state, appears in chat and identity settings, and changes only when the
+    wallet identity or an explicitly versioned future scheme changes. It is never identity authority.
   - Browser startup reopens the Browser SDK's persisted installation, then queries XMTP registration
     state before registering. A routine reload never creates another installation for an inbox that
     XMTP already recognizes.
@@ -561,6 +565,14 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     public chat, or create contact notes. Revocation persists as a blocking tombstone.
   - Authorization applies to the whole XMTP inbox. Every installation legitimately attached to that
     inbox has operator authority; per-installation authorization is not implemented.
+  - `/operator/` is a separate static, direct-only XMTP console pinned to one explicit Tentacle
+    wallet. It reuses the canonical app Acolyte EOA/inbox, while operators using other clients need
+    not be Acolytes. The route bypasses Branding/rotation, so an Acolyte assigned to one Tentacle may
+    operate another and reach an unregistered or underfunded node. It sends no group-join or
+    role-claim control and displays existing-node plus new-node commands containing only the public
+    EOA. The frontend never grants authority; Rust's full-inbox ACL and `sentAtNs` fence remain
+    decisive. Privileged messages render literally rather than interpreting or stripping public
+    reward/Branding UI markers.
   - Operator replies use an enforced all-caps, theatrical ominous/submissive Cthuwu voice with
     light readable uwu touches while excluding code and bounded runtime-provided tool renderings
     from prose uppercasing. Process streams are
@@ -652,6 +664,12 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - [x] Tests reject autonomous tools from auto-loaded context, side effects during identity repair,
     and contact reads after an earlier privileged tool step.
   - [x] Operator prose casing excludes code and bounded tool renderings from uppercase transformation.
+  - [x] Static route tests cover `/operator/` target binding, the direct-only control surface,
+    canonical Acolyte identity reuse, XMTP registration gating, public-address-only commands,
+    explicit no-authority language, CSP, and the RCE warning; the production build emits the route.
+  - [x] The root installer validates the public operator EOA, refuses root and existing source/state
+    paths, clones a fresh checkout, and forwards an explicit fresh `--data-dir` plus only
+    `--operator <public-address>` to the safe launcher.
   - [ ] A manual release test authorizes, uses, revokes, and rechecks an operator inbox over live XMTP.
   - [ ] An external security review covers XMTP installation compromise/revocation, OS isolation,
     command auditability, and operator-model prompt injection.
@@ -736,6 +754,12 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     role/voice/values/motivations/priorities, risk tolerance, privacy preference, decision
     tendencies, standing concerns, long-term goals, public-safe operator metadata, registry
     reference, and lineage.
+  - On first registration-state creation, the Tentacle domain-separates and hashes its already-random,
+    durable Tentacle ID into an `eldritch-v1` prefix/suffix/epithet space, then persists the chosen
+    string. That default is reproducible after registry-state recovery. A first-boot
+    `CTHUWU_ERC8004_PUBLIC_NAME` may instead seed an explicit label, but later environment changes
+    cannot rename a valid persisted Tentacle. Names are never registry identity or routing keys;
+    agent ID plus verified wallet remain authoritative if two labels collide.
   - The protocol's old `CthulhuIdentity`/`CthulhuId` forms are explicit compatibility records for a
     Tentacle coordination principal. They are not individual Cthulhus and never own an ERC-8004 ID.
   - Archivist, Hermit, Merchant, Wanderer, Oracle, and Trickster sample personas make deterministic policy decisions without an LLM.
@@ -1250,6 +1274,10 @@ phase.
     opts an identity in.
   - The persistent XMTP wallet is the Tentacle's Base identity and verified nonzero `agentWallet`.
     Transfer, wallet clearing, ownership/operator loss, or wallet mismatch suspends the identity.
+  - Snapshot schema version 3 persists the generated-default or explicitly seeded public name. Version-1 and version-2 records
+    gain exactly one name during explicit migration. The registration-v1 agent URI always uses that
+    persisted name; byte-different on-chain profiles enter the existing funding-aware
+    `SetAgentUri` reconciliation path and resume automatically after the operator supplies Base ETH.
   - Startup directly reverifies a persisted agent ID. A pristine identity performs only a recent
     20,000-block candidate scan (at most two 10,000-block log ranges) before funding/registering;
     exhaustive history is reserved for an unresolved persisted registration nonce or the explicit
@@ -1296,7 +1324,8 @@ phase.
     the wallet address; A2A, x402, private state, load, and unverified capabilities are absent.
 - **Test Criteria**:
   - [x] Domain tests cover exact allegiance, opt-out, zero/unexpected wallet, transfer/control loss,
-    wrong deployment/interface, read-only behavior, and versioned legacy registry migration.
+    wrong deployment/interface, read-only behavior, versioned legacy registry migration, durable
+    name precedence, and name-only agent-URI repair.
   - [x] The full workspace suite proves every runtime crash/restart stage, lost response, receipt
     reorg, candidate ambiguity, notification cooldown, and sidecar policy case.
   - [x] A read-only canonical Base smoke test verifies proxies, implementations, code, version, and
@@ -1382,6 +1411,13 @@ phase.
     Branding modal with the exact declared price and first upkeep. The choice is sent over the
     verified direct XMTP channel and retained locally to prevent repeat prompts. Accepting the modal
     is not represented as EIP-712 consent or a mint; those remain separate confirmed steps.
+  - Each random browser address also has a deterministic `acolyte-v1` compound surname/estate label. Branding
+    acceptance names the exact reserved owner trait `Acolyte Name`, and `/acolytes/` uses that exact
+    trait only to report a match/missing/mismatch against the address-derived expected card label.
+    The immutable deployed V1 already includes bounded owner traits in
+    `tokenURI`, but the repository still lacks the EIP-712 mint/write executor: no live NFT name
+    write is claimed until that flow confirms mint and `setCustomTrait` receipts. The top-level V1
+    token name remains `Cthuwu Acolyte Branding #<tokenId>`.
   - Eligibility binds the exact stored agent ID to the current wallet using `getAgentWallet`,
     `isAuthorizedOrOwner`, byte-exact `cthuwu.allegiance = uwu-tentacle-v1`, and byte-exact
     `cthuwu.protocol = 1`. Shared wallets do not collapse distinct controller agent IDs.

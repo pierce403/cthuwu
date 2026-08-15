@@ -46,7 +46,7 @@ Last reviewed: 2026-08-12
 
 ## Architecture
 
-- Browser: `@xmtp/browser-sdk`, static Vite output, dedicated browser identity by default.
+- Browser: `@xmtp/browser-sdk`, static Vite output, one local Acolyte identity reused across app routes.
 - Runtime: Rust `uwubot` supervisor with companion, model, and state boundaries; private official Agent SDK sidecar for XMTP transport.
 - Persistence: encrypted XMTP database plus an application state store for processed-message idempotency.
 - Model access: adapter boundary; local models should be first-class.
@@ -223,6 +223,13 @@ Last reviewed: 2026-08-12
   triggering message stays public at the authorization fence, and only later messages are
   privileged. Revocation never reopens automatic imprinting. The console records the authenticated
   `0x` imprint address without message text. Local add/list/revoke remains available while stopped.
+- `/operator/` is a separate static direct-DM console for one explicit Tentacle wallet. It uses a
+  canonical app Acolyte identity, deliberately bypasses Branding/rotation and group joins, and
+  displays both stop/authorize/restart and fresh-launch commands containing only that public EOA.
+  Operators on other XMTP clients need not be Acolytes; Branding never grants or restricts the
+  independently authorized operator role. The console never asserts a role; Rust's full-inbox ACL
+  and authenticated `sentAtNs` boundary remain the sole authority. Operator/tool output renders
+  literally; public reward and Branding markers have no privileged-console meaning.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
   readable uwu voice. Each turn's prompt inventory is derived from its actual closed schema: bounded
   `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base; an explicit
@@ -274,6 +281,9 @@ Last reviewed: 2026-08-12
   credentials, and immediate local plus XMTP installation revocation after compromise.
 - Matching is bilateral opt-in, explainable, and suggestion-only; chosen names and matching terms may be shown, but inbox IDs are not disclosed.
 - Browser identity exports are passphrase-encrypted wallet backups. The Browser SDK database is unencrypted and is not included in that export.
+- Each random browser EOA deterministically receives one `acolyte-v1` British-style compound
+  surname/estate label from a frozen, fingerprint-tested 16,777,216-entry table. The address remains
+  identity authority; names can collide, and the label adds no key state.
 - Backend secrets are atomically persisted at `state/xmtp-identity.json`; XMTP databases are environment-specific below `state/xmtp/`.
 - `@xmtp/agent-sdk@2.3.0` is the supported first transport. Direct libxmtp remains a later option because its Rust crates are unpublished internal APIs.
 
@@ -535,10 +545,13 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
   Tentacle/XMTP wallet. Never substitute the ERC-721 owner for a missing wallet. Zero or unverified
   wallet is suspended. Shared wallets form one ranking/influence group, with the lowest agent ID as
   representative and all identities shown.
-- `state/erc8004-registration.json` schema version 2 persists action intent before broadcast,
+- `state/erc8004-registration.json` schema version 3 persists action intent before broadcast,
   transaction/receipt canonicality, selected agent, remaining stages, verified metadata/wallet,
-  funding status, cooldown, and failures. Restart always reconciles a known transaction before
-  another write; discovery and ambiguous-candidate selection prevent duplicate minting.
+  funding status, cooldown, failures, and the Tentacle's public name. The generated default is a
+  domain-separated derivation from the already-random durable Tentacle ID; an explicit first-boot
+  seed is also supported. Version-1/version-2 migration chooses and saves one name. Restart always reconciles a known
+  transaction before another write; discovery and ambiguous-candidate selection prevent duplicate minting.
+  Public names can collide and are never substituted for the agent ID plus verified wallet.
 - Registration defaults on. Provider estimation covers the complete remaining sequence plus a
   configurable 125% safety factor and post-registration reserve. Funding requests contain trusted
   exact Base values. Operator notices are persisted-cooldown-limited (24 hours by default), while a
@@ -555,6 +568,8 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
   production XMTP direct messaging at the positively resolved, persisted 64-hex inbox ID—not the
   wallet address—and a public CTHUWU manifest. It publishes no DMs, contacts,
   operators, credentials, paths, prompts, load, private model or Evolution state, A2A, or x402.
+  Its `name` is always the persisted Tentacle name. A different on-chain URI is automatically
+  repaired through the existing funding-aware `SetAgentUri` state machine.
 - The static leaderboard queries Agent0 for current ERC-8004 metadata, checks `_meta`, requires
   complete same-block pagination, verifies the indexed block through Base RPC, reads UWU `balanceOf`
   at that block, and atomically replaces `cthuwu:leaderboard:v1` only with a fully validated snapshot.
@@ -576,6 +591,11 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   set from exact `BrandingMinted` logs at or after canonical deployment block `49,852,729`, pins a
   finalized block, and reads current state there. Historical mint ownership/status is never treated
   as current, and owner avatar URIs and traits remain hostile text rather than auto-loaded media.
+- `Acolyte Name` is the exact reserved V1 owner-trait key. `/acolytes/` compares it with the
+  address-derived expected card label and exposes match/missing/mismatch without trusting owner
+  metadata as identity; Branding acceptance carries the deterministic local label. The immutable V1 contract
+  already includes that trait in `tokenURI`, but current code has no EIP-712 mint/write executor;
+  do not claim a live NFT name write until mint plus `setCustomTrait` receipts are confirmed.
 - The zero-argument constructor binds the canonical registry and UWU constants, rejects non-`8453`
   chains, and verifies registry `2.0.0` plus UWU `18` decimals. Solidity is pinned to `0.8.28`.
 - The exact controller agent ID is stored because several ERC-8004 agents may share one wallet.

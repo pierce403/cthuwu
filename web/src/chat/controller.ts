@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
+import { ACOLYTE_NAME_TRAIT, acolyteName } from "../acolyte-name";
 import { recruitmentUrl } from "../onboarding-links";
 import { createXmtpWorkspace } from "./xmtp-workspace";
 import {
@@ -30,6 +31,8 @@ export interface ChatController {
 
 interface ControllerDependencies {
   createWorkspace?: typeof createXmtpWorkspace;
+  brandingOffers?: boolean;
+  surface?: "public" | "operator";
 }
 
 interface ChatElements {
@@ -55,6 +58,7 @@ interface ChatElements {
   copyReferral: HTMLButtonElement;
   referralStatus: HTMLElement;
   brandingDialog: HTMLDialogElement;
+  brandingName: HTMLElement;
   brandingPrice: HTMLElement;
   brandingUpkeep: HTMLElement;
   brandingReferrer: HTMLElement;
@@ -79,10 +83,15 @@ export function initializeChatController(
   let sending = false;
   let loadingEarlier = false;
   let currentBrandingOffer: BrandingOffer | undefined;
+  const localAcolyteName = acolyteName(identity.address);
+  const operatorSurface = dependencies.surface === "operator";
+  const operatorTarget = `Target Tentacle · ${shortId(config.botAddress)}`;
+  const activeChannel = (snapshot: WorkspaceSnapshot): ChatChannel =>
+    operatorSurface ? "direct" : snapshot.activeChannel;
 
   const updateComposerControls = (): void => {
     if (!latest) return;
-    const channel = latest.channels[latest.activeChannel];
+    const channel = latest.channels[activeChannel(latest)];
     const canSend = latest.connected && channel.retentionVerified &&
       (channel.status === "ready" || channel.status === "empty") &&
       Boolean(channel.writeConversationId);
@@ -94,7 +103,7 @@ export function initializeChatController(
   const render = (snapshot: WorkspaceSnapshot): void => {
     const previous = latest;
     latest = snapshot;
-    const channelId = snapshot.activeChannel;
+    const channelId = activeChannel(snapshot);
     const channel = snapshot.channels[channelId];
     const switched = renderedChannel !== channelId;
     const wasNearBottom = isNearBottom(elements.messages);
@@ -103,14 +112,23 @@ export function initializeChatController(
     renderedChannel = channelId;
 
     elements.root.dataset.state = snapshot.connected ? "connected" : "retryable-error";
-    elements.status.textContent = `${snapshot.assignmentNotice} · inbox ${shortId(snapshot.inboxId)}`;
-    elements.name.textContent = channelId === "direct"
+    const verifiedOperatorDirect = snapshot.connected && channelId === "direct" &&
+      channel.retentionVerified && Boolean(channel.writeConversationId) &&
+      (channel.status === "ready" || channel.status === "empty");
+    elements.status.textContent = operatorSurface
+      ? `${verifiedOperatorDirect ? "Verified direct XMTP route; 14-day retention active" : channel.error ?? (snapshot.connected ? STATUS_COPY[channel.status as keyof typeof STATUS_COPY] ?? "Direct route unavailable" : "Direct XMTP route disconnected")} · operator inbox ${shortId(snapshot.inboxId)}`
+      : `${snapshot.assignmentNotice} · inbox ${shortId(snapshot.inboxId)}`;
+    elements.name.textContent = operatorSurface ? operatorTarget : channelId === "direct"
       ? snapshot.tentacleName
       : channelId === "acolytes" ? `${snapshot.tentacleName} · acolytes` : "Cthuwu · global";
-    elements.copyReferral.disabled = !snapshot.assignedTentacleAddress;
+    elements.copyReferral.disabled = operatorSurface || !snapshot.assignedTentacleAddress;
     elements.panel.setAttribute("aria-labelledby", `tab-${channelId}`);
-    elements.messages.setAttribute("aria-label", `${CHANNEL_LABELS[channelId]} channel messages`);
-    elements.composerLabel.textContent = `Message the ${CHANNEL_LABELS[channelId]} channel`;
+    elements.messages.setAttribute("aria-label", operatorSurface
+      ? "Direct operator messages"
+      : `${CHANNEL_LABELS[channelId]} channel messages`);
+    elements.composerLabel.textContent = operatorSurface
+      ? "Message the direct operator channel"
+      : `Message the ${CHANNEL_LABELS[channelId]} channel`;
 
     for (const id of CHAT_CHANNELS) {
       const selected = id === channelId;
@@ -142,15 +160,20 @@ export function initializeChatController(
       const sender = document.createElement("span");
       sender.className = "sender";
       sender.textContent = message.mine
-        ? "You · acolyte"
-        : channelId === "direct" ? snapshot.tentacleName : shortId(message.senderInboxId);
+        ? operatorSurface ? `You · ${localAcolyteName} · operator` : `You · ${localAcolyteName}`
+        : operatorSurface ? operatorTarget
+          : channelId === "direct" ? snapshot.tentacleName : shortId(message.senderInboxId);
       const time = document.createElement("time");
       time.dateTime = nanosecondsToIso(message.sentAtNs);
       time.textContent = new Date(Number(message.sentAtNs / 1_000_000n)).toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       });
-      const control = parseTentacleUi(message.id, message.text, message.mine, channelId);
+      // Operator/tool output is literal text. Public UI markers have no control meaning here and
+      // must never be removed from an auditable privileged transcript.
+      const control = operatorSurface
+        ? { text: message.text }
+        : parseTentacleUi(message.id, message.text, message.mine, channelId);
       bubble.append(sender, document.createTextNode(control.text), time);
       elements.messages.append(bubble);
       if (control.reward) {
@@ -159,7 +182,11 @@ export function initializeChatController(
           ? `${control.reward.amount.toLocaleString()} UWU reward confirmed on Base`
           : `${control.reward.amount.toLocaleString()} UWU reward queued · awaiting confirmed Base transfer`;
       }
-      if (control.branding && !brandingDecision(control.branding.messageId)) {
+      if (
+        dependencies.brandingOffers !== false &&
+        control.branding &&
+        !brandingDecision(control.branding.messageId)
+      ) {
         currentBrandingOffer = control.branding;
       }
     }
@@ -168,7 +195,7 @@ export function initializeChatController(
       indicator.className = "typing-indicator";
       indicator.setAttribute("role", "status");
       indicator.setAttribute("aria-live", "polite");
-      indicator.setAttribute("aria-label", `${snapshot.tentacleName} is typing`);
+      indicator.setAttribute("aria-label", `${operatorSurface ? operatorTarget : snapshot.tentacleName} is typing`);
       indicator.append(document.createElement("span"), document.createElement("span"), document.createElement("span"));
       elements.messages.append(indicator);
     }
@@ -201,10 +228,11 @@ export function initializeChatController(
     }
 
     updateComposerControls();
-    if (currentBrandingOffer && !elements.brandingDialog.hasAttribute("open")) {
+    if (!operatorSurface && currentBrandingOffer && !elements.brandingDialog.hasAttribute("open")) {
       elements.brandingPrice.textContent = `${currentBrandingOffer.price.toLocaleString()} base units`;
       elements.brandingUpkeep.textContent = `${currentBrandingOffer.upkeep.toLocaleString()} base units`;
       elements.brandingReferrer.textContent = config.referrer ?? "not supplied";
+      elements.brandingName.textContent = localAcolyteName;
       elements.brandingDialog.hidden = false;
       elements.brandingDialog.setAttribute("open", "");
     }
@@ -227,6 +255,7 @@ export function initializeChatController(
       try {
         await closeWorkspace();
         workspace = await createWorkspace(config, identity);
+        if (operatorSurface) workspace.setActiveChannel("direct");
         unsubscribe = workspace.subscribe(render);
         if (focusComposer && !elements.input.disabled) elements.input.focus();
       } catch (error) {
@@ -240,11 +269,12 @@ export function initializeChatController(
   };
 
   const activate = (channelId: ChatChannel, focus = false): void => {
+    if (operatorSurface && channelId !== "direct") return;
     if (focus) elements.tabs[channelId].focus();
     if (!workspace) return;
     if (latest) {
       workspace.setViewport(
-        latest.activeChannel,
+        activeChannel(latest),
         elements.messages.scrollTop,
         isNearBottom(elements.messages),
       );
@@ -255,6 +285,7 @@ export function initializeChatController(
   for (const id of CHAT_CHANNELS) {
     elements.tabs[id].addEventListener("click", () => activate(id));
     elements.tabs[id].addEventListener("keydown", (event) => {
+      if (operatorSurface) return;
       const current = CHAT_CHANNELS.indexOf(id);
       let next: number | undefined;
       if (event.key === "ArrowRight") next = (current + 1) % CHAT_CHANNELS.length;
@@ -269,7 +300,7 @@ export function initializeChatController(
   elements.messages.addEventListener("scroll", () => {
     if (!workspace || !latest) return;
     const atBottom = isNearBottom(elements.messages);
-    workspace.setViewport(latest.activeChannel, elements.messages.scrollTop, atBottom);
+    workspace.setViewport(activeChannel(latest), elements.messages.scrollTop, atBottom);
     if (atBottom) elements.newMessages.hidden = true;
   }, { passive: true });
   elements.newMessages.addEventListener("click", () => {
@@ -282,7 +313,7 @@ export function initializeChatController(
     const priorTop = elements.messages.scrollTop;
     loadingEarlier = true;
     elements.loadEarlier.disabled = true;
-    void workspace.loadEarlier(latest.activeChannel).then(() => {
+    void workspace.loadEarlier(activeChannel(latest)).then(() => {
       requestAnimationFrame(() => {
         elements.messages.scrollTop = priorTop + (elements.messages.scrollHeight - priorHeight);
       });
@@ -313,7 +344,7 @@ export function initializeChatController(
     sending = true;
     setComposerError();
     render(latest);
-    void workspace.send(latest.activeChannel, text).then(() => {
+    void workspace.send(activeChannel(latest), text).then(() => {
       elements.input.value = "";
       resize(elements.input);
     }).catch((error) => setComposerError(publicError(error))).finally(() => {
@@ -333,7 +364,7 @@ export function initializeChatController(
     void workspace.send(
       "direct",
       accepted
-        ? `I accept the Acolyte Branding offer shown in the Cthuwu app.${config.referrer ? ` Use referrer ${config.referrer} in the exact mint consent.` : ""}`
+        ? `I accept the Acolyte Branding offer shown in the Cthuwu app. My generated Acolyte name is ${localAcolyteName}; after minting, set the NFT custom trait "${ACOLYTE_NAME_TRAIT}" to exactly "${localAcolyteName}" and correct any mismatch.${config.referrer ? ` Use referrer ${config.referrer} in the exact mint consent.` : ""}`
         : "I decline the Acolyte Branding offer for now.",
     ).catch((error) => setComposerError(publicError(error)));
   };
@@ -418,6 +449,7 @@ function chatElements(): ChatElements {
     copyReferral: required("copy-referral"),
     referralStatus: required("referral-status"),
     brandingDialog: required("branding-offer"),
+    brandingName: required("branding-name"),
     brandingPrice: required("branding-price"),
     brandingUpkeep: required("branding-upkeep"),
     brandingReferrer: required("branding-referrer"),
