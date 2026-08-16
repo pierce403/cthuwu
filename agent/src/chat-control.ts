@@ -2127,6 +2127,113 @@ export class ChatControlService {
   }
 }
 
+export type InboundControlConversation = ConversationLike & {
+  send(content: EncodedContent, options: { shouldPush: false }): Promise<unknown>;
+};
+
+export type InboundControlResult =
+  | { kind: "ignored" }
+  | { kind: "liveness-unavailable" }
+  | { kind: "liveness-target-mismatch"; targetAgentId: string }
+  | { kind: "liveness-sender-unresolved" }
+  | { kind: "liveness-response-sent" }
+  | { kind: "liveness-response-failed" }
+  | { kind: "enrollment-unavailable" }
+  | { kind: "enrollment-sender-unresolved" }
+  | { kind: "enrollment-no-assignment" }
+  | { kind: "assignment-sent" };
+
+/**
+ * Handle one already-decoded Cthuwu control without coupling liveness discovery to group
+ * enrollment. A verified local ERC-8004 registration is enough to answer a liveness query;
+ * ChatControl remains mandatory for join processing and the resulting group assignment.
+ */
+export async function handleInboundChatControl(options: {
+  isDm: boolean;
+  contentType: ContentTypeId;
+  content: unknown;
+  senderInboxId: string;
+  conversation: InboundControlConversation;
+  localTentacleAgentId?: string;
+  chatControl?: Pick<ChatControlService, "enroll">;
+  livenessGate: LivenessControlGate;
+  resolveSenderAddress: () => Promise<Address | undefined>;
+}): Promise<InboundControlResult> {
+  if (!options.isDm) return { kind: "ignored" };
+
+  if (isExactLivenessQueryContentType(options.contentType)) {
+    if (!isLivenessQueryControl(options.content)) return { kind: "ignored" };
+    if (options.localTentacleAgentId === undefined) {
+      return { kind: "liveness-unavailable" };
+    }
+    if (options.content.targetAgentId !== options.localTentacleAgentId) {
+      return {
+        kind: "liveness-target-mismatch",
+        targetAgentId: options.content.targetAgentId,
+      };
+    }
+    // Only a valid query for this exact local agent consumes admission budget. Wrong-target and
+    // unavailable-runtime traffic stays a cheap, silent drop and cannot starve real probes.
+    if (!options.livenessGate.admitQuery(options.senderInboxId, options.content)) {
+      return { kind: "ignored" };
+    }
+    const senderAddress = await options.resolveSenderAddress().catch(() => undefined);
+    if (senderAddress === undefined) return { kind: "liveness-sender-unresolved" };
+    if (!options.livenessGate.issueGrant({
+      senderInboxId: options.senderInboxId,
+      senderAddress,
+      query: options.content,
+      tentacleAgentId: options.localTentacleAgentId,
+    })) {
+      return { kind: "ignored" };
+    }
+    try {
+      await options.conversation.send(
+        new LivenessResponseCodec().encode({
+          type: "cthuwu.liveness-response.v1",
+          requestId: options.content.requestId,
+          environment: CHAT_ENVIRONMENT,
+          phrase: "fhtagn!",
+          tentacleAgentId: options.localTentacleAgentId,
+        }),
+        { shouldPush: false },
+      );
+      return { kind: "liveness-response-sent" };
+    } catch {
+      options.livenessGate.revokeGrant(
+        options.senderInboxId,
+        options.content.requestId,
+      );
+      return { kind: "liveness-response-failed" };
+    }
+  }
+
+  const isJoin = isExactJoinContentType(options.contentType);
+  const isLivenessJoin = isExactLivenessJoinContentType(options.contentType);
+  if (!isJoin && !isLivenessJoin) return { kind: "ignored" };
+  const join =
+    isJoin && isJoinControl(options.content)
+      ? options.content
+      : isLivenessJoin && isLivenessJoinControl(options.content)
+        ? options.content
+        : undefined;
+  if (join === undefined) return { kind: "ignored" };
+  if (options.chatControl === undefined) return { kind: "enrollment-unavailable" };
+  const senderAddress = await options.resolveSenderAddress().catch(() => undefined);
+  if (senderAddress === undefined) return { kind: "enrollment-sender-unresolved" };
+  const assignment = await options.chatControl.enroll({
+    join,
+    senderInboxId: options.senderInboxId,
+    senderAddress,
+    directConversation: options.conversation,
+  });
+  if (assignment === undefined) return { kind: "enrollment-no-assignment" };
+  await options.conversation.send(new AssignmentCodec().encode(assignment), {
+    shouldPush: false,
+  });
+  return { kind: "assignment-sent" };
+}
+
 export async function bootstrapGlobalGroup(options: {
   action: "create" | "inspect";
   directory: GroupDirectory;

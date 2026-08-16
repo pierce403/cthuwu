@@ -215,13 +215,16 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     that policy instead of remaining in an indefinite pending state.
   - A new `Unminted` acolyte without `#t=` or a retained route reads rank order only from the last
     completely validated leaderboard snapshot, refreshing one complete pinned Agent0/Base snapshot
-    when absent. It probes at most the first five funded, profile-active, protocol-1, single-agent
-    endpoints concurrently for 15 seconds. The first exact `fhtagn!` response bound to the expected
-    DM, inbox, agent, request, and deadline wins. Before handoff the browser freshly revalidates the
-    unchanged Base block, Branding status, canonical registry/runtime, agent wallet/authorization,
-    allegiance/protocol, and production registration endpoint. Existing active Branding is never
-    probed or rotated; no-response is a visible retryable state rather than an intro or other silent
-    dead route, and deliberate Retry opens a fresh workspace for a new bounded race.
+    when absent or older than the configured leaderboard freshness interval. It prepares bounded
+    Direct streams for at most the first five funded, profile-active, protocol-1, single-agent
+    endpoints before starting one common 15-second send/response window. The first exact `fhtagn!`
+    response bound to the expected DM, inbox, agent, fresh request, and browser-local receipt
+    deadline wins; cross-host message timestamps are not treated as synchronized clocks. Before
+    handoff the browser freshly revalidates the unchanged Base block, Branding status, canonical
+    registry/runtime, agent wallet/authorization, allegiance/protocol, and production registration
+    endpoint. Existing active Branding is never probed or rotated; no-response is a visible
+    retryable state rather than an intro or other silent dead route, and deliberate Retry opens a
+    fresh workspace for a new bounded race.
   - `Expired` and positively verified `Ineligible` preserve service through the configured intro
     Tentacle. An `Unminted` first-connect race with no response remains explicitly unavailable and
     does not select an unprobed route. `RegistryUnavailable`, a
@@ -239,7 +242,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     intercepts them before Rust, operator classification, inference, contact memory, onboarding,
     rewards, Branding, or ordinary history. The liveness payload visibly carries `fhtagn?`, has no
     text fallback or push, and a non-intro Unminted join needs its one-use sender/address/agent-bound
-    short-lived grant. Replay and response amplification are bounded per sender and globally.
+    short-lived grant. A verified production ERC-8004/XMTP identity may answer the liveness query
+    without a configured Global group; `CTHUWU_GLOBAL_GROUP_ID` remains mandatory only for the
+    subsequent join/assignment. Replay and response amplification are bounded per sender and
+    globally.
   - Direct inference emits non-push `cthuwu.app/typing:1.0` controls with a short expiry, refreshes
     them while work continues, and explicitly clears them before the reply. The browser accepts
     Direct typing only from the currently assigned Tentacle, auto-expires stale state, renders an
@@ -263,7 +269,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, whose production default is the
     checked-in public, origin-restricted Infura Base endpoint, plus canonical-default
     `VITE_CTHUWU_BRANDING_CONTRACT`, and `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` (default 600000 ms,
-    bounded 60000–3600000). Tentacle enrollment separately uses `CTHUWU_RPC_ENDPOINT`,
+    bounded 60000–3600000). Tentacle liveness uses its locally verified production ERC-8004/XMTP
+    identity. Three-channel enrollment separately uses `CTHUWU_RPC_ENDPOINT`,
     canonical-default `CTHUWU_BRANDING_CONTRACT`, required `CTHUWU_GLOBAL_GROUP_ID`,
     `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`, and `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` (default 900 s,
     bounded 60–86400). The two revalidation settings are independent.
@@ -278,11 +285,14 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     creation/persistence crash-window candidate and refuses a drifted replacement.
   - [x] Browser assignment tests cover `NotConfigured`, every Branding status, exact nested
     registration/manifest binding, one explicit Base block, tuple spoofing, and reorg/outage freeze.
-  - [x] Liveness tests preserve cached rank order, cap the race at five, admit only an exact
-    authenticated response within its deadline, freshly verify the winner on canonical Base,
-    persist only after a successful handoff, display its freshly verified current agentURI name (or
-    an agent-ID fallback), and never reprobe on
-    periodic/resume checks. Active Branding and explicit or retained verified routes bypass racing.
+  - [x] Liveness tests preserve cached rank order, refresh stale discovery, cap the race at five,
+    prepare candidate streams before the common response deadline, prevent late setup from sending
+    an orphan query, tolerate cross-host clock skew, and admit only an exact authenticated response
+    within the browser-local deadline. They freshly verify the winner on canonical Base, persist
+    only after a successful handoff, display its freshly verified current agentURI name (or an
+    agent-ID fallback), and never reprobe on periodic/resume checks. Agent dispatcher tests prove a
+    verified Tentacle answers without Global enrollment configuration while joins remain gated.
+    Active Branding and explicit or retained verified routes bypass racing.
   - [x] Agent tests prove probes never reach Rust or public/operator state, enforce replay and rate
     bounds, revoke failed-send grants, require one exact liveness grant for fresh non-intro Unminted
     enrollment, and preserve controller/intro/reconnect policy.

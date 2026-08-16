@@ -834,7 +834,8 @@ CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900
 
 The browser millisecond refresh and Tentacle second-based membership sweep are separate settings.
 If Global/enrollment configuration is unavailable, the sidecar leaves the existing Direct path
-available and does not invent a group.
+available and does not invent a group. A locally verified production Tentacle still answers the
+private liveness probe; only join/assignment processing remains disabled.
 
 An authorized bootstrap/admin operation creates or inspects Global and grants configured Tentacle
 admins. Normal enrollment never invents a Global group from its human-readable name. Trusted group

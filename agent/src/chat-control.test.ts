@@ -26,6 +26,7 @@ import {
   classifyInboundMessage,
   dispatchPersonalText,
   globalAppData,
+  handleInboundChatControl,
   isJoinControl,
   isLivenessJoinControl,
   isLivenessQueryControl,
@@ -657,6 +658,140 @@ describe("bounded liveness admission", () => {
       livenessRequestId: shortQuery.requestId,
       tentacleAgentId: AGENT_ID,
     })).toBe(false);
+  });
+});
+
+describe("inbound liveness dispatch", () => {
+  function controlConversation(send = vi.fn(async (
+    _content: unknown,
+    _options: { shouldPush: false },
+  ) => undefined)) {
+    return Object.assign(new FakeConversation("11".repeat(32)), { send });
+  }
+
+  it("answers a verified liveness query when Global enrollment is not configured", async () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    const conversation = controlConversation();
+    const resolveSenderAddress = vi.fn(async () => ADDRESS);
+
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: LIVENESS_QUERY_CONTENT_TYPE,
+      content: LIVENESS_QUERY,
+      senderInboxId: USER,
+      conversation,
+      localTentacleAgentId: AGENT_ID,
+      livenessGate: gate,
+      resolveSenderAddress,
+      // Deliberately omit ChatControl: this is the normal state before a Global group is bound.
+    })).resolves.toEqual({ kind: "liveness-response-sent" });
+
+    expect(resolveSenderAddress).toHaveBeenCalledOnce();
+    expect(conversation.send).toHaveBeenCalledOnce();
+    const [encoded, sendOptions] = conversation.send.mock.calls[0]!;
+    expect(new LivenessResponseCodec().decode(encoded as never)).toEqual({
+      type: "cthuwu.liveness-response.v1",
+      requestId: LIVENESS_QUERY.requestId,
+      environment: "production",
+      phrase: "fhtagn!",
+      tentacleAgentId: AGENT_ID,
+    });
+    expect(sendOptions).toEqual({ shouldPush: false });
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+  });
+
+  it("keeps join controls gated when Global enrollment is not configured", async () => {
+    const conversation = controlConversation();
+    const resolveSenderAddress = vi.fn(async () => ADDRESS);
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: LIVENESS_JOIN_CONTENT_TYPE,
+      content: LIVENESS_JOIN,
+      senderInboxId: USER,
+      conversation,
+      localTentacleAgentId: AGENT_ID,
+      livenessGate: new LivenessControlGate(() => 1_000_000),
+      resolveSenderAddress,
+    })).resolves.toEqual({ kind: "enrollment-unavailable" });
+    expect(resolveSenderAddress).not.toHaveBeenCalled();
+    expect(conversation.send).not.toHaveBeenCalled();
+  });
+
+  it("reports target drift and revokes the grant when the response send fails", async () => {
+    const mismatchGate = new LivenessControlGate(() => 1_000_000);
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: LIVENESS_QUERY_CONTENT_TYPE,
+      content: { ...LIVENESS_QUERY, targetAgentId: "43" },
+      senderInboxId: USER,
+      conversation: controlConversation(),
+      localTentacleAgentId: AGENT_ID,
+      livenessGate: mismatchGate,
+      resolveSenderAddress: async () => ADDRESS,
+    })).resolves.toEqual({ kind: "liveness-target-mismatch", targetAgentId: "43" });
+    // A wrong-target query must not consume this runtime's bounded admission or replay budget.
+    expect(mismatchGate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+
+    const failedGate = new LivenessControlGate(() => 1_000_000);
+    const failed = controlConversation(vi.fn(async () => {
+      throw new Error("XMTP send failed");
+    }));
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: LIVENESS_QUERY_CONTENT_TYPE,
+      content: LIVENESS_QUERY,
+      senderInboxId: USER,
+      conversation: failed,
+      localTentacleAgentId: AGENT_ID,
+      livenessGate: failedGate,
+      resolveSenderAddress: async () => ADDRESS,
+    })).resolves.toEqual({ kind: "liveness-response-failed" });
+    expect(failedGate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(false);
+  });
+
+  it("does not spend liveness budget while the local registration is unavailable", async () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: LIVENESS_QUERY_CONTENT_TYPE,
+      content: LIVENESS_QUERY,
+      senderInboxId: USER,
+      conversation: controlConversation(),
+      livenessGate: gate,
+      resolveSenderAddress: async () => ADDRESS,
+    })).resolves.toEqual({ kind: "liveness-unavailable" });
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+  });
+
+  it("still delivers assignments through configured ChatControl", async () => {
+    const conversation = controlConversation();
+    await expect(handleInboundChatControl({
+      isDm: true,
+      contentType: JOIN_CONTENT_TYPE,
+      content: JOIN,
+      senderInboxId: USER,
+      conversation,
+      localTentacleAgentId: AGENT_ID,
+      chatControl: service({ directory: new FakeDirectory([globalGroup()]) }),
+      livenessGate: new LivenessControlGate(() => 1_000_000),
+      resolveSenderAddress: async () => ADDRESS,
+    })).resolves.toEqual({ kind: "assignment-sent" });
+    expect(conversation.send).toHaveBeenCalledOnce();
+    expect(new AssignmentCodec().decode(conversation.send.mock.calls[0]![0] as never)).toMatchObject({
+      type: "cthuwu.assignment.v1",
+      requestId: JOIN.requestId,
+      tentacleAgentId: AGENT_ID,
+    });
   });
 });
 

@@ -34,7 +34,11 @@ import {
   isTypingControl,
   type AssignmentControl,
 } from "./control";
-import { loadLivenessCandidates, type LivenessCandidate } from "./liveness";
+import {
+  loadLivenessCandidates,
+  type LivenessCandidate,
+  type LivenessLogger,
+} from "./liveness";
 import {
   validateAssignedAcolytesGroup,
   validateAssignedGlobalGroups,
@@ -66,13 +70,23 @@ type ProbeDm = Dm<unknown> & {
   stream(options?: { onError?: (error: unknown) => void; onFail?: () => void }): Promise<AsyncStreamProxy<DecodedMessage<unknown>>>;
 };
 
-interface LivenessProbe {
+interface ProbeDiagnostics {
+  responsesObserved: number;
+  streamFailures: number;
+  rejections: Record<string, number>;
+}
+
+interface PreparedLivenessProbe {
   candidate: LivenessCandidate;
   conversationId: string;
-  requestId: string;
-  startedAtNs: bigint;
-  expiresAtNs: bigint;
+  dm: ProbeDm;
   stream: AsyncStreamProxy<DecodedMessage<unknown>>;
+  diagnostics: ProbeDiagnostics;
+}
+
+interface LivenessProbe extends PreparedLivenessProbe {
+  requestId: string;
+  expiresAtNs: bigint;
 }
 
 interface LivenessWinner {
@@ -94,6 +108,13 @@ class LivenessUnavailableError extends Error {
   }
 }
 
+class LivenessPreparationCancelledError extends Error {
+  constructor() {
+    super("liveness candidate preparation was cancelled");
+    this.name = "LivenessPreparationCancelledError";
+  }
+}
+
 interface MutableChannel extends ChannelSnapshot {
   historyByConversation: Map<string, { beforeNs?: bigint; hasMore: boolean; pageLimit: bigint }>;
 }
@@ -105,6 +126,7 @@ export interface WorkspaceOptions {
   verifyLivenessCandidate?: typeof verifyLivenessCandidate;
   livenessWindowMs?: number;
   nowMs?: () => number;
+  logger?: LivenessLogger;
   releaseDatabaseLease?: () => Promise<void>;
 }
 
@@ -261,6 +283,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private readonly verifyLiveCandidate: typeof verifyLivenessCandidate;
   private readonly livenessWindowMs: number;
   private readonly nowMs: () => number;
+  private readonly logger: LivenessLogger;
   private readonly storage: Storage | undefined;
   private assignmentState: AssignmentState = "checking";
   private assignmentNotice = "Checking the canonical assignment…";
@@ -304,6 +327,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.verifyLiveCandidate = options.verifyLivenessCandidate ?? verifyLivenessCandidate;
     this.livenessWindowMs = options.livenessWindowMs ?? LIVENESS_WINDOW_MS;
     this.nowMs = options.nowMs ?? Date.now;
+    this.logger = options.logger ?? console;
     this.retainedRotationAddress = config.rotationAnchor;
     this.releaseDatabaseLease = options.releaseDatabaseLease;
     this.channels = {
@@ -590,115 +614,227 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.identity.address,
       this.inboxId,
       this.storage,
+      { logger: this.logger, now: this.nowMs },
     );
     if (candidates.length === 0) {
       throw new RegistryUnavailableError("No eligible ranked Tentacle is available for the liveness check");
     }
-    this.assignmentNotice = `Whispering “fhtagn?” to ${candidates.length} ranked Tentacle${candidates.length === 1 ? "" : "s"}…`;
+    this.assignmentNotice = `Preparing a private “fhtagn?” check for ${candidates.length} ranked Tentacle${candidates.length === 1 ? "" : "s"}…`;
+    this.emit();
+    this.logger.info("[cthuwu-liveness] preparing ranked probes", {
+      candidateCount: candidates.length,
+      candidates: candidates.map(candidateDiagnostic),
+    });
+
+    const preparationCancellation = { cancelled: false };
+    const prepared: PreparedLivenessProbe[] = [];
+    const preparationTasks = candidates.map(async (candidate) => {
+      this.logger.debug("[cthuwu-liveness] preparing candidate", candidateDiagnostic(candidate));
+      try {
+        const probe = await this.prepareLivenessProbe(
+          candidate,
+          () => preparationCancellation.cancelled,
+        );
+        if (preparationCancellation.cancelled) {
+          await probe.stream.return().catch(() => undefined);
+          return;
+        }
+        prepared.push(probe);
+        this.logger.debug("[cthuwu-liveness] candidate prepared", candidateDiagnostic(candidate));
+      } catch (error) {
+        if (error instanceof LivenessPreparationCancelledError) {
+          this.logger.debug("[cthuwu-liveness] late candidate preparation cancelled", candidateDiagnostic(candidate));
+          return;
+        }
+        this.logger.warn("[cthuwu-liveness] candidate preparation failed", {
+          ...candidateDiagnostic(candidate),
+          reason: safeDiagnosticReason(error),
+        });
+      }
+    });
+    let preparationTimedOut = false;
+    let preparationTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const preparationTimeout = new Promise<void>((resolve) => {
+      preparationTimeoutId = setTimeout(() => {
+        preparationTimedOut = true;
+        preparationCancellation.cancelled = true;
+        resolve();
+      }, this.livenessWindowMs);
+    });
+    await Promise.race([Promise.allSettled(preparationTasks), preparationTimeout]);
+    if (preparationTimeoutId) clearTimeout(preparationTimeoutId);
+    preparationCancellation.cancelled = true;
+    if (preparationTimedOut) {
+      this.logger.warn("[cthuwu-liveness] candidate preparation window ended", {
+        candidateCount: candidates.length,
+        preparedCount: prepared.length,
+      });
+    }
+    if (prepared.length === 0) {
+      throw new RegistryUnavailableError(
+        `Live Tentacle selection could not prepare any probe (0/${candidates.length} candidates ready); see the browser console for safe diagnostics`,
+      );
+    }
+
+    this.assignmentNotice = `Whispering “fhtagn?” to ${prepared.length} ranked Tentacle${prepared.length === 1 ? "" : "s"}…`;
     this.emit();
     const startedAtMs = Math.floor(this.nowMs());
     if (!Number.isSafeInteger(startedAtMs) || startedAtMs < 0) {
+      await closeProbeStreams(prepared);
       throw new RegistryUnavailableError("The browser clock is unavailable for the liveness check");
     }
-    const startedAtNs = BigInt(startedAtMs) * 1_000_000n;
-    const expiresAtNs = startedAtNs + BigInt(this.livenessWindowMs) * 1_000_000n;
-    const probes: LivenessProbe[] = [];
-    const cancellation = { cancelled: false };
+    const deadlineAtMs = startedAtMs + this.livenessWindowMs;
+    const expiresAtNs = BigInt(deadlineAtMs) * 1_000_000n;
     let resolveWinner!: (winner: LivenessWinner) => void;
     const winner = new Promise<LivenessWinner>((resolve) => { resolveWinner = resolve; });
-    let resolveNoProbe!: () => void;
-    const noProbe = new Promise<void>((resolve) => { resolveNoProbe = resolve; });
     let settled = false;
     const accept = (value: LivenessWinner): void => {
       if (settled) return;
       settled = true;
+      this.livenessAttempted = true;
       resolveWinner(value);
     };
-    void Promise.allSettled(candidates.map(async (candidate) => {
-      const probe = await this.setupLivenessProbe(
-        candidate,
-        startedAtNs,
-        expiresAtNs,
-        () => cancellation.cancelled,
-      );
-      if (cancellation.cancelled) {
-        await probe.stream.return();
-        return;
-      }
-      probes.push(probe);
-      void this.consumeLivenessProbe(probe, accept);
-    })).then(() => {
-      if (probes.length === 0 && !this.livenessAttempted) resolveNoProbe();
+
+    const probes = prepared.map((candidate) => {
+      const query = createLivenessQueryControl(candidate.candidate.agentId, expiresAtNs.toString());
+      return { ...candidate, requestId: query.requestId, expiresAtNs, query };
     });
+    const consumers = probes.map(({ query: _query, ...probe }) =>
+      this.consumeLivenessProbe(probe, accept));
+    let windowClosed = false;
+    let publishedCount = 0;
+    let pendingSendCount = probes.length;
+    let resolveNoPublish!: () => void;
+    const noPublish = new Promise<void>((resolve) => { resolveNoPublish = resolve; });
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
-      timeoutId = setTimeout(() => resolve("timeout"), this.livenessWindowMs);
+      timeoutId = setTimeout(
+        () => resolve("timeout"),
+        Math.max(0, deadlineAtMs - Math.floor(this.nowMs())),
+      );
+    });
+    const sendTasks = probes.map(async ({ query, ...probe }) => {
+      try {
+        await probe.dm.send(encodeLivenessQueryControl(query), { shouldPush: false });
+        const withinResponseWindow =
+          !windowClosed && Math.floor(this.nowMs()) <= deadlineAtMs;
+        if (withinResponseWindow) {
+          publishedCount += 1;
+          this.livenessAttempted = true;
+        }
+        this.logger.info("[cthuwu-liveness] query published", {
+          ...candidateDiagnostic(probe.candidate),
+          withinResponseWindow,
+        });
+      } catch (error) {
+        this.logger.warn("[cthuwu-liveness] query publish failed", {
+          ...candidateDiagnostic(probe.candidate),
+          reason: safeDiagnosticReason(error),
+        });
+        await probe.stream.return().catch(() => undefined);
+      } finally {
+        pendingSendCount -= 1;
+        if (pendingSendCount === 0 && publishedCount === 0 && !settled && !windowClosed) {
+          resolveNoPublish();
+        }
+      }
     });
     const outcome = await Promise.race([
       winner.then((value) => ({ type: "winner" as const, value })),
       timeout.then(() => ({ type: "timeout" as const })),
-      noProbe.then(() => ({ type: "no-probe" as const })),
+      noPublish.then(() => ({ type: "no-publish" as const })),
     ]);
+    windowClosed = true;
     if (timeoutId) clearTimeout(timeoutId);
-    cancellation.cancelled = true;
-    await Promise.allSettled(probes.map((probe) => probe.stream.return()));
-    if (outcome.type === "no-probe" || !this.livenessAttempted) {
-      // No query crossed XMTP, so an explicit user retry may still make this workspace's first
-      // actual attempt. Automatic resume/periodic retries remain governed by the registry cooldown.
-      throw new RegistryUnavailableError("Live Tentacle selection is unavailable before any liveness query could be sent");
+    await closeProbeStreams(prepared);
+    await Promise.allSettled(consumers);
+    if (outcome.type === "no-publish") {
+      await Promise.allSettled(sendTasks);
+      throw new RegistryUnavailableError(
+        `Live Tentacle selection could not publish a liveness query (0/${prepared.length} prepared probes sent); see the browser console for safe diagnostics`,
+      );
     }
     if (outcome.type !== "winner") {
-      this.livenessFailure = "No ranked Tentacle answered the one-time liveness check";
+      if (pendingSendCount > 0) {
+        // A send that outlives the response window may still cross XMTP, but its embedded query is
+        // already expired and therefore inert. Treat this workspace's bounded attempt as consumed.
+        this.livenessAttempted = true;
+      }
+      const responsesObserved = prepared.reduce(
+        (total, probe) => total + probe.diagnostics.responsesObserved,
+        0,
+      );
+      const rejections = mergeRejectionCounts(prepared);
+      this.logger.warn("[cthuwu-liveness] ranked probe window ended without a winner", {
+        candidateCount: candidates.length,
+        preparedCount: prepared.length,
+        publishedCount,
+        responsesObserved,
+        streamFailures: prepared.reduce(
+          (total, probe) => total + probe.diagnostics.streamFailures,
+          0,
+        ),
+        rejections,
+      });
+      this.livenessFailure =
+        `No ranked Tentacle answered with a compatible liveness response (${publishedCount}/${candidates.length} probes sent; ${responsesObserved} response${responsesObserved === 1 ? "" : "s"} observed). Tentacles may be offline or need the current sidecar.`;
       throw new LivenessUnavailableError(this.livenessFailure);
     }
     const selected = outcome.value;
+    this.logger.info("[cthuwu-liveness] accepted ranked response", candidateDiagnostic(selected.candidate));
     this.pendingLivenessRequestId = selected.requestId;
     this.unpersistedLivenessCandidate = selected.candidate;
     return this.verifyLiveCandidate(this.config, this.identity, selected.candidate);
   }
 
-  private async setupLivenessProbe(
+  private async prepareLivenessProbe(
     candidate: LivenessCandidate,
-    startedAtNs: bigint,
-    expiresAtNs: bigint,
     cancelled: () => boolean,
-  ): Promise<LivenessProbe> {
+  ): Promise<PreparedLivenessProbe> {
     await verifyPeerInboxState(this.client, candidate.inboxId, candidate.wallet);
-    if (cancelled()) throw new Error("the liveness window ended before DM creation");
+    if (cancelled()) throw new LivenessPreparationCancelledError();
+    if (this.closed) throw new Error("the workspace closed before DM creation");
     const disappearing = { fromNs: RETENTION_FROM_NS, inNs: RETENTION_IN_NS };
     const dm = await this.client.conversations.createDm(candidate.inboxId, {
       messageDisappearingSettings: disappearing,
     });
+    if (cancelled()) throw new LivenessPreparationCancelledError();
     if (await dm.peerInboxId() !== candidate.inboxId) {
       throw new Error("XMTP resolved a different liveness candidate inbox");
     }
+    if (cancelled()) throw new LivenessPreparationCancelledError();
     await repairDirectRetention(dm);
-    if (cancelled()) throw new Error("the liveness window ended before stream creation");
+    if (cancelled()) throw new LivenessPreparationCancelledError();
+    if (this.closed) throw new Error("the workspace closed before stream creation");
+    const diagnostics: ProbeDiagnostics = {
+      responsesObserved: 0,
+      streamFailures: 0,
+      rejections: {},
+    };
     const stream = await (dm as ProbeDm).stream({
-      onError: () => undefined,
-      onFail: () => undefined,
+      onError: (error) => {
+        diagnostics.streamFailures += 1;
+        this.logger.warn("[cthuwu-liveness] candidate stream error", {
+          ...candidateDiagnostic(candidate),
+          reason: safeDiagnosticReason(error),
+        });
+      },
+      onFail: () => {
+        diagnostics.streamFailures += 1;
+        this.logger.warn("[cthuwu-liveness] candidate stream failed", candidateDiagnostic(candidate));
+      },
     });
-    const query = createLivenessQueryControl(candidate.agentId, expiresAtNs.toString());
-    if (cancelled()) {
+    if (cancelled() || this.closed) {
       await stream.return();
-      throw new Error("the liveness window ended before the query could be sent");
+      if (cancelled()) throw new LivenessPreparationCancelledError();
+      throw new Error("the workspace closed before the candidate was ready");
     }
-    try {
-      await dm.send(encodeLivenessQueryControl(query), { shouldPush: false });
-    } catch (error) {
-      await stream.return();
-      throw error;
-    }
-    // A successful XMTP publish is the workspace's one real attempt. Local/pre-publish failures do
-    // not consume it, so one deliberate retry can still make the first actual probe.
-    this.livenessAttempted = true;
     return {
       candidate,
       conversationId: dm.id,
-      requestId: query.requestId,
-      startedAtNs,
-      expiresAtNs,
+      dm: dm as ProbeDm,
       stream,
+      diagnostics,
     };
   }
 
@@ -708,21 +844,31 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   ): Promise<void> {
     try {
       for await (const message of probe.stream) {
-        if (
-          message.conversationId !== probe.conversationId ||
-          message.senderInboxId !== probe.candidate.inboxId ||
-          !isLivenessResponseContentType(message.contentType) ||
-          !isLivenessResponseControl(message.content) ||
-          message.content.requestId !== probe.requestId ||
-          message.content.tentacleAgentId !== probe.candidate.agentId ||
-          message.sentAtNs < probe.startedAtNs ||
-          message.sentAtNs > probe.expiresAtNs ||
-          BigInt(Math.floor(this.nowMs())) * 1_000_000n > probe.expiresAtNs
-        ) continue;
+        // A probe DM can also carry the query's own echo or ordinary existing traffic. Only an
+        // actual liveness-response envelope counts as an observed response in diagnostics.
+        if (!isLivenessResponseContentType(message.contentType)) continue;
+        probe.diagnostics.responsesObserved += 1;
+        const rejection = livenessRejectionReason(message, probe, this.nowMs);
+        if (rejection) {
+          const count = (probe.diagnostics.rejections[rejection] ?? 0) + 1;
+          probe.diagnostics.rejections[rejection] = count;
+          if (count === 1) {
+            this.logger.debug("[cthuwu-liveness] rejected candidate response", {
+              ...candidateDiagnostic(probe.candidate),
+              reason: rejection,
+            });
+          }
+          continue;
+        }
         accept({ candidate: probe.candidate, requestId: probe.requestId });
         return;
       }
-    } catch {
+    } catch (error) {
+      probe.diagnostics.streamFailures += 1;
+      this.logger.warn("[cthuwu-liveness] candidate stream stopped", {
+        ...candidateDiagnostic(probe.candidate),
+        reason: safeDiagnosticReason(error),
+      });
       // Another candidate may still answer. A dead probe is not permission to select it.
     }
   }
@@ -1330,6 +1476,57 @@ async function repairDirectRetention(conversation: Conversation<unknown>): Promi
   if (policy?.fromNs !== RETENTION_FROM_NS || policy.inNs !== RETENTION_IN_NS) {
     throw new Error("Direct chat could not verify its 14-day message policy");
   }
+}
+
+function livenessRejectionReason(
+  message: DecodedMessage<unknown>,
+  probe: LivenessProbe,
+  nowMs: () => number,
+): string | undefined {
+  if (message.conversationId !== probe.conversationId) return "conversation-mismatch";
+  if (message.senderInboxId !== probe.candidate.inboxId) return "sender-mismatch";
+  if (!isLivenessResponseContentType(message.contentType)) return "content-type-mismatch";
+  if (!isLivenessResponseControl(message.content)) return "invalid-control";
+  if (message.content.requestId !== probe.requestId) return "request-mismatch";
+  if (message.content.tentacleAgentId !== probe.candidate.agentId) return "agent-mismatch";
+  // The response is bound to an unguessable fresh request and must arrive before the local
+  // deadline. Do not compare sentAtNs to the browser clock in either direction: the responder is a
+  // different host and ordinary NTP skew must not turn a live Tentacle into a false negative.
+  const currentMs = Math.floor(nowMs());
+  if (!Number.isSafeInteger(currentMs) || currentMs < 0) return "browser-clock-unavailable";
+  if (BigInt(currentMs) * 1_000_000n > probe.expiresAtNs) return "received-after-local-deadline";
+  return undefined;
+}
+
+function candidateDiagnostic(candidate: LivenessCandidate): Record<string, unknown> {
+  return {
+    rank: candidate.rank,
+    agentId: candidate.agentId,
+    directoryBlock: candidate.blockNumber,
+  };
+}
+
+function safeDiagnosticReason(error: unknown): string {
+  const value = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+  return value
+    .replace(/https?:\/\/[^\s)\]}]+/giu, "<redacted-endpoint>")
+    .replace(/(?:0x)?[0-9a-f]{64}/giu, "<redacted-id>")
+    .replace(/[\r\n]+/gu, " ")
+    .slice(0, 512);
+}
+
+async function closeProbeStreams(probes: PreparedLivenessProbe[]): Promise<void> {
+  await Promise.allSettled(probes.map((probe) => probe.stream.return()));
+}
+
+function mergeRejectionCounts(probes: PreparedLivenessProbe[]): Record<string, number> {
+  const merged: Record<string, number> = {};
+  for (const probe of probes) {
+    for (const [reason, count] of Object.entries(probe.diagnostics.rejections)) {
+      merged[reason] = (merged[reason] ?? 0) + count;
+    }
+  }
+  return merged;
 }
 
 function decodeChatMessage(

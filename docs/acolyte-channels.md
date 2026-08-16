@@ -80,13 +80,15 @@ Assignment outcomes are intentionally asymmetric:
   configuration always selects the pinned canonical Branding deployment.
 - `Unminted` without an explicit verified `#t=` or retained eligible winner races non-push liveness
   queries against at most the top five funded profile-active, protocol-1, single-agent wallets in
-  the last completely validated leaderboard snapshot. When absent, the browser first obtains one
-  complete pinned, indexing-error-free Agent0 plus same-block Base UWU snapshot. The first exact
-  authenticated response within 15 seconds wins only after fresh canonical Branding, registry,
-  wallet/authorization, allegiance/protocol, and production agentURI endpoint verification. The
-  route is persisted only after the Direct handoff and liveness-bound join publish succeed. No
-  response is explicit and never selects the unprobed intro Tentacle; deliberate Retry opens a fresh
-  workspace for one new bounded race.
+  the last completely validated leaderboard snapshot. When absent or stale, the browser first
+  obtains one complete pinned, indexing-error-free Agent0 plus same-block Base UWU snapshot. It
+  prepares candidate Direct streams before starting one common 15-second send/response window. The
+  first exact authenticated response bound to the expected conversation, inbox, agent, request, and
+  browser-local arrival deadline wins only after fresh canonical Branding, registry,
+  wallet/authorization, allegiance/protocol, and production agentURI endpoint verification. Remote
+  `sentAtNs` is not used as a synchronized-clock assumption. The route is persisted only after the
+  Direct handoff and liveness-bound join publish succeed. No response is explicit and never selects
+  the unprobed intro Tentacle; deliberate Retry opens a fresh workspace for one new bounded race.
 - An explicit `#t=` wallet selects its sole active protocol-1 identity from that same complete Agent0
   directory. Multiple eligible identities remain ambiguous and fail closed. Before Direct opens,
   the selected identity receives the same fresh same-block canonical Base verification as a liveness
@@ -104,6 +106,16 @@ a Council heartbeat, long-term availability promise, or new central coordinator.
 attempts it only during first connection (or the first explicit retry after a pre-probe failure),
 never on periodic/resume refresh. Operators should still confirm `/registry-allegiance off` before
 planned shutdown so an offline Tentacle leaves discovery.
+
+If an explicit Tentacle link can exchange ordinary text but automatic selection reports no
+compatible liveness reply, first update and restart that Tentacle: old processes do not gain newly
+registered XMTP codecs from a repository or Pages deployment. On the Tentacle stderr, a current
+healthy identity reports `enabled authenticated liveness responses`; an absent Global group may
+separately disable three-channel enrollment while explicitly leaving Direct and liveness available.
+`uwubot registry status` diagnoses a missing local verified registration. In the browser console,
+filter on `[cthuwu-liveness]` to see stale-cache refresh, candidate preparation, query publication,
+response rejection, stream failure, and final count diagnostics without message bodies or private
+keys.
 
 Assignment is revalidated on connect, PWA resume, and a bounded periodic interval. A controller
 change advances the assignment revision, stops sends through the old Direct and Acolytes bindings,
@@ -354,8 +366,10 @@ CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<64-lowercase-hex-inbox-id>,<64-lowercase-hex-inbo
 CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900
 ```
 
-`CTHUWU_GLOBAL_GROUP_ID` is required to enable authenticated three-channel enrollment. The local
-Tentacle inbox is included in the admin set even when omitted from
+`CTHUWU_GLOBAL_GROUP_ID` is required to enable authenticated three-channel enrollment, not to answer
+liveness. A production sidecar with a locally verified matching ERC-8004/XMTP identity answers the
+exact liveness query independently; join and assignment controls remain unavailable until Global is
+configured. The local Tentacle inbox is included in the admin set even when omitted from
 `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`. If enrollment configuration or the local verified ERC-8004
 registration is absent, the sidecar leaves the existing Direct message path available rather than
 creating a group implicitly.

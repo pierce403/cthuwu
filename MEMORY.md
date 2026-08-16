@@ -690,7 +690,14 @@ The channel configuration names are `VITE_CTHUWU_BASE_RPC_ENDPOINT`,
 `CTHUWU_BRANDING_CONTRACT`, `CTHUWU_GLOBAL_GROUP_ID`, `CTHUWU_GLOBAL_ADMIN_INBOX_IDS`, and
 `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS`. Browser refresh defaults to 600000 ms and is bounded to
 60000–3600000; the independent Tentacle membership sweep defaults to 900 seconds and is bounded to
-60–86400. No implicit contract, Global group, or admin set may be inferred when absent.
+60–86400. No implicit contract, Global group, or admin set may be inferred when absent. Liveness is
+not group enrollment: any production sidecar with a locally verified matching ERC-8004/XMTP
+identity answers the exact non-push probe even when `CTHUWU_GLOBAL_GROUP_ID` is absent, while join
+and assignment remain disabled until that group is configured. Ordinary Direct text working does
+not prove liveness compatibility; a process built before the liveness codecs landed must be updated
+and restarted. The browser refreshes stale leaderboard discovery before probing, prepares streams
+before its common response window, and uses its local receipt deadline instead of assuming the
+browser and Tentacle clocks are identical.
 The checked-in browser Base default is the public Infura endpoint supplied for this static app;
 treat its project ID as public, restrict it by origin/product at the provider, monitor it, and rotate
 it if abused.

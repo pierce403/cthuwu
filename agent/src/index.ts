@@ -14,12 +14,7 @@ import {
   bootstrapGlobalGroup,
   classifyInboundMessage,
   dispatchPersonalText,
-  isExactJoinContentType,
-  isExactLivenessJoinContentType,
-  isExactLivenessQueryContentType,
-  isJoinControl,
-  isLivenessJoinControl,
-  isLivenessQueryControl,
+  handleInboundChatControl,
   loadVerifiedRegistration,
   parseChatControlConfig,
   parseGlobalAdminInboxIds,
@@ -40,6 +35,11 @@ const TYPING_REFRESH_MS = 8_000;
 
 function diagnostic(message: string): void {
   process.stderr.write(`[cthuwu-xmtp] ${message.replace(/[\r\n]+/gu, " ")}\n`);
+}
+
+function diagnosticError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  return message.replace(/[\r\n]+/gu, " ").slice(0, 512);
 }
 
 function isolateProtocolOutput(): void {
@@ -218,48 +218,61 @@ async function main(): Promise<void> {
   let localTentacleAgentId: string | undefined;
   let chatRevalidateSeconds = 900;
   if (identity.environment === "production") {
+    let localRegistration: Awaited<ReturnType<typeof loadVerifiedRegistration>> | undefined;
     try {
       const selfInboxId = agent.client.inboxId;
-      const localRegistration = await loadVerifiedRegistration(
+      localRegistration = await loadVerifiedRegistration(
         process.env.UWUBOT_DATA_DIR ?? ".",
         identity.walletAddress,
         selfInboxId,
       );
       localTentacleAgentId = localRegistration.agentId;
-      const config = parseChatControlConfig(process.env, selfInboxId);
-      chatRevalidateSeconds = config.assignmentRevalidateSeconds;
-      chatControl = new ChatControlService({
-        directory: groupDirectory,
-        store: new FileChatStateStore(
-          process.env.UWUBOT_DATA_DIR ?? ".",
-          localRegistration.agentId,
+      diagnostic(
+        `enabled authenticated liveness responses for ERC-8004 agent ${localRegistration.agentId}`,
+      );
+    } catch (error: unknown) {
+      diagnostic(
+        `liveness responses are disabled because the local ERC-8004 registration is unavailable: ${diagnosticError(error, "registration verification failed")}`,
+      );
+    }
+    if (localRegistration !== undefined) {
+      try {
+        const selfInboxId = agent.client.inboxId;
+        const config = parseChatControlConfig(process.env, selfInboxId);
+        chatRevalidateSeconds = config.assignmentRevalidateSeconds;
+        chatControl = new ChatControlService({
+          directory: groupDirectory,
+          store: new FileChatStateStore(
+            process.env.UWUBOT_DATA_DIR ?? ".",
+            localRegistration.agentId,
+            selfInboxId,
+          ),
+          resolver: new CanonicalAssignmentResolver({
+            ...(process.env.CTHUWU_RPC_ENDPOINT === undefined
+              ? {}
+              : { rpcEndpoint: process.env.CTHUWU_RPC_ENDPOINT }),
+            ...(process.env.CTHUWU_BRANDING_CONTRACT === undefined
+              ? {}
+              : { brandingContract: process.env.CTHUWU_BRANDING_CONTRACT }),
+            localRegistration,
+          }),
+          config,
           selfInboxId,
-        ),
-        resolver: new CanonicalAssignmentResolver({
-          ...(process.env.CTHUWU_RPC_ENDPOINT === undefined
-            ? {}
-            : { rpcEndpoint: process.env.CTHUWU_RPC_ENDPOINT }),
-          ...(process.env.CTHUWU_BRANDING_CONTRACT === undefined
-            ? {}
-            : { brandingContract: process.env.CTHUWU_BRANDING_CONTRACT }),
-          localRegistration,
-        }),
-        config,
-        selfInboxId,
-        tentacleAgentId: localRegistration.agentId,
-        livenessGate,
-        resolveInboxAddress: async (inboxId) =>
-          resolveFreshSenderAddress(agent.client.preferences, inboxId),
-      });
-      diagnostic("enabled authenticated three-channel XMTP enrollment");
-    } catch (_error: unknown) {
-      diagnostic("three-channel XMTP enrollment is not configured; direct messaging remains available");
+          tentacleAgentId: localRegistration.agentId,
+          livenessGate,
+          resolveInboxAddress: async (inboxId) =>
+            resolveFreshSenderAddress(agent.client.preferences, inboxId),
+        });
+        diagnostic("enabled authenticated three-channel XMTP enrollment");
+      } catch (error: unknown) {
+        diagnostic(
+          `three-channel XMTP enrollment is disabled: ${diagnosticError(error, "enrollment configuration failed")}; Direct messaging and liveness responses remain available`,
+        );
+      }
     }
   }
 
-  const assignmentCodec = new AssignmentCodec();
   const typingCodec = new TypingCodec();
-  const livenessResponseCodec = new LivenessResponseCodec();
   agent.use(async (context, next) => {
     const contentType = context.message.contentType;
     const disposition = classifyInboundMessage(context.isDm(), contentType);
@@ -267,81 +280,48 @@ async function main(): Promise<void> {
       await next();
       return;
     }
-    const isJoin = isExactJoinContentType(contentType);
-    const isLivenessJoin = isExactLivenessJoinContentType(contentType);
-    const isLivenessQuery = isExactLivenessQueryContentType(contentType);
     // Every control type terminates here. It never enters text events, Rust, inference, contact
     // memory, or ordinary history, even when malformed, forged, or delivered in a group.
-    if (!context.isDm() || chatControl === undefined || localTentacleAgentId === undefined) {
-      return;
-    }
-    if (isLivenessQuery) {
-      const query = context.message.content;
-      if (
-        !isLivenessQueryControl(query) ||
-        query.targetAgentId !== localTentacleAgentId ||
-        !livenessGate.admitQuery(context.message.senderInboxId, query)
-      ) {
-        return;
-      }
-      const senderAddress = await resolveFreshSenderAddress(
-        context.client.preferences,
-        context.message.senderInboxId,
-      ).catch(() => undefined);
-      if (
-        senderAddress === undefined ||
-        !livenessGate.issueGrant({
-          senderInboxId: context.message.senderInboxId,
-          senderAddress,
-          query,
-          tentacleAgentId: localTentacleAgentId,
-        })
-      ) {
-        return;
-      }
-      try {
-        await context.conversation.send(
-          livenessResponseCodec.encode({
-            type: "cthuwu.liveness-response.v1",
-            requestId: query.requestId,
-            environment: "production",
-            phrase: "fhtagn!",
-            tentacleAgentId: localTentacleAgentId,
-          }),
-          { shouldPush: false },
-        );
-      } catch {
-        livenessGate.revokeGrant(context.message.senderInboxId, query.requestId);
-      }
-      return;
-    }
-    if (!isJoin && !isLivenessJoin) {
-      return;
-    }
-    const join =
-      isJoin && isJoinControl(context.message.content)
-        ? context.message.content
-        : isLivenessJoin && isLivenessJoinControl(context.message.content)
-          ? context.message.content
-          : undefined;
-    if (join === undefined) return;
-    const senderAddress = await resolveFreshSenderAddress(
-      context.client.preferences,
-      context.message.senderInboxId,
-    );
-    if (senderAddress === undefined) {
-      return;
-    }
-    const assignment = await chatControl.enroll({
-      join,
-      senderInboxId: context.message.senderInboxId,
-      senderAddress,
-      directConversation: context.conversation,
-    });
-    if (assignment !== undefined) {
-      await context.conversation.send(assignmentCodec.encode(assignment), {
-        shouldPush: false,
+    try {
+      const result = await handleInboundChatControl({
+        isDm: context.isDm(),
+        contentType,
+        content: context.message.content,
+        senderInboxId: context.message.senderInboxId,
+        conversation: context.conversation,
+        livenessGate,
+        resolveSenderAddress: () => resolveFreshSenderAddress(
+          context.client.preferences,
+          context.message.senderInboxId,
+        ),
+        ...(localTentacleAgentId === undefined ? {} : { localTentacleAgentId }),
+        ...(chatControl === undefined ? {} : { chatControl }),
       });
+      switch (result.kind) {
+        case "liveness-sender-unresolved":
+          diagnostic("ignored a liveness query because its authenticated XMTP inbox has no unique current EVM address");
+          break;
+        case "liveness-response-sent":
+          diagnostic(`answered a liveness query for ERC-8004 agent ${localTentacleAgentId ?? "unverified"}`);
+          break;
+        case "liveness-response-failed":
+          diagnostic("failed to send a liveness response; revoked its one-use enrollment grant");
+          break;
+        case "assignment-sent":
+          diagnostic("delivered an authenticated three-channel XMTP assignment");
+          break;
+        case "liveness-unavailable":
+        case "liveness-target-mismatch":
+        case "enrollment-unavailable":
+        case "enrollment-sender-unresolved":
+        case "enrollment-no-assignment":
+        case "ignored":
+          break;
+      }
+    } catch (error: unknown) {
+      diagnostic(
+        `failed to process an authenticated XMTP control: ${diagnosticError(error, "control processing failed")}`,
+      );
     }
   });
   const bridge = new JsonlBridge({

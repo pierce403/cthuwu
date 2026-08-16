@@ -246,8 +246,13 @@ until it passes, even though the canonical contract deployment and closed implem
   chat. Race only a small rank-ordered set from a completely validated leaderboard snapshot, bind
   the first authenticated response to its exact DM/inbox/agent/request, freshly revalidate that
   winner on canonical Base, and consume one short-lived server grant for non-intro Unminted
-  enrollment. Rate-limit and replay-bound probes before Rust, inference, operator classification,
-  contacts, rewards, or Branding can observe them.
+  enrollment. Refresh a stale discovery snapshot, prepare bounded candidate streams before starting
+  the response window, and judge arrival by the browser's local deadline rather than comparing
+  clocks across hosts. A production Tentacle with a locally verified ERC-8004 identity must answer
+  liveness even when optional Global-group enrollment is not configured; keep
+  `CTHUWU_GLOBAL_GROUP_ID` mandatory only for join/assignment processing. Rate-limit and
+  replay-bound probes before Rust, inference, operator classification, contacts, rewards, or
+  Branding can observe them.
 - Disable every ordinary ERC-721 approval/transfer path. Ownership changes only through atomic mint,
   active compulsory purchase, or positively claimable `claimUnserved`, with exact agent,
   expected owner/controller tuple, price, deadline, settlement, and first-upkeep checks. Document

@@ -101,9 +101,12 @@ this boundary.
 
 ## Three-channel control plane
 
-The sidecar registers `cthuwu.app/join:1.0` and `cthuwu.app/assignment:1.0` custom content codecs.
+The sidecar registers the join/assignment and liveness query/response/join custom content codecs.
 They have no text fallback and do not request push delivery. The first Agent middleware consumes
-both types before ordinary events. A join is accepted only in a DM after a network-fresh lookup
+all of them before ordinary events. A production sidecar with a locally verified matching
+ERC-8004/XMTP identity answers an exact liveness query even when Global enrollment is not configured;
+`CTHUWU_GLOBAL_GROUP_ID` gates only the later join and assignment. A join is accepted only in a DM
+after a network-fresh lookup
 binds the envelope's `senderInboxId` to exactly one current Ethereum identifier; no identity or
 routing claim is accepted from the payload. Group messages, including forged control content, never
 enter the Rust, inference, or contact path.
