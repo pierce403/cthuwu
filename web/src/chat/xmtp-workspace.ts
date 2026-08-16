@@ -15,18 +15,26 @@ import { isLocalIdentity, type StoredIdentity } from "../identity";
 import {
   RegistryUnavailableError,
   resolveTentacleAssignment,
+  verifyLivenessCandidate,
   type TentacleAssignment,
 } from "./assignment";
 import {
   CONTROL_CODECS,
   createJoinControl,
+  createLivenessJoinControl,
+  createLivenessQueryControl,
   encodeJoinControl,
+  encodeLivenessJoinControl,
+  encodeLivenessQueryControl,
   isAssignmentContentType,
   isControlContentType,
+  isLivenessResponseContentType,
+  isLivenessResponseControl,
   isTypingContentType,
   isTypingControl,
   type AssignmentControl,
 } from "./control";
+import { loadLivenessCandidates, type LivenessCandidate } from "./liveness";
 import {
   validateAssignedAcolytesGroup,
   validateAssignedGlobalGroups,
@@ -34,7 +42,6 @@ import {
   type GroupForValidation,
 } from "./group-validation";
 import { createChatUiStateStore, type ChatUiStateStore } from "./storage";
-import { readTentacleDisplayHint } from "./tentacle-display";
 import {
   CHAT_CHANNELS,
   RETENTION_FROM_NS,
@@ -51,14 +58,39 @@ import {
 const HISTORY_PAGE_SIZE = 40n;
 const MAX_MESSAGES_PER_CHANNEL = 1_000;
 const MAX_MESSAGE_BYTES = 16 * 1024;
+const LIVENESS_WINDOW_MS = 15_000;
 
 type XmtpStream = AsyncStreamProxy<unknown>;
 type XmtpClient = Client<unknown>;
+type ProbeDm = Dm<unknown> & {
+  stream(options?: { onError?: (error: unknown) => void; onFail?: () => void }): Promise<AsyncStreamProxy<DecodedMessage<unknown>>>;
+};
+
+interface LivenessProbe {
+  candidate: LivenessCandidate;
+  conversationId: string;
+  requestId: string;
+  startedAtNs: bigint;
+  expiresAtNs: bigint;
+  stream: AsyncStreamProxy<DecodedMessage<unknown>>;
+}
+
+interface LivenessWinner {
+  candidate: LivenessCandidate;
+  requestId: string;
+}
 
 class DirectVerificationUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "DirectVerificationUnavailableError";
+  }
+}
+
+class LivenessUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LivenessUnavailableError";
   }
 }
 
@@ -69,6 +101,10 @@ interface MutableChannel extends ChannelSnapshot {
 export interface WorkspaceOptions {
   storage?: Storage;
   resolveAssignment?: typeof resolveTentacleAssignment;
+  loadLivenessCandidates?: typeof loadLivenessCandidates;
+  verifyLivenessCandidate?: typeof verifyLivenessCandidate;
+  livenessWindowMs?: number;
+  nowMs?: () => number;
   releaseDatabaseLease?: () => Promise<void>;
 }
 
@@ -221,6 +257,10 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   };
   private readonly streams: XmtpStream[] = [];
   private readonly resolveAssignment: typeof resolveTentacleAssignment;
+  private readonly loadCandidates: typeof loadLivenessCandidates;
+  private readonly verifyLiveCandidate: typeof verifyLivenessCandidate;
+  private readonly livenessWindowMs: number;
+  private readonly nowMs: () => number;
   private readonly storage: Storage | undefined;
   private assignmentState: AssignmentState = "checking";
   private assignmentNotice = "Checking the canonical assignment…";
@@ -231,6 +271,13 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private currentAssignment?: TentacleAssignment;
   private currentTentacleInboxId?: string;
   private pendingRequestId?: string;
+  private pendingLivenessRequestId?: string;
+  private retainedRotationAddress?: string;
+  private unpersistedLivenessCandidate?: LivenessCandidate;
+  private livenessAttempted = false;
+  private livenessFailure?: string;
+  private livenessPreProbeFailure?: string;
+  private livenessProbeInFlight?: Promise<TentacleAssignment>;
   private pendingGroupAssignment?: AssignmentControl;
   private trustedGroupAssignment?: AssignmentControl;
   private revalidation?: Promise<void>;
@@ -253,6 +300,11 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.storage = options.storage ?? safeLocalStorage();
     this.uiStore = createChatUiStateStore(this.storage);
     this.resolveAssignment = options.resolveAssignment ?? resolveTentacleAssignment;
+    this.loadCandidates = options.loadLivenessCandidates ?? loadLivenessCandidates;
+    this.verifyLiveCandidate = options.verifyLivenessCandidate ?? verifyLivenessCandidate;
+    this.livenessWindowMs = options.livenessWindowMs ?? LIVENESS_WINDOW_MS;
+    this.nowMs = options.nowMs ?? Date.now;
+    this.retainedRotationAddress = config.rotationAnchor;
     this.releaseDatabaseLease = options.releaseDatabaseLease;
     this.channels = {
       direct: channel("direct", "loading"),
@@ -417,12 +469,12 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       if ((this.needsStreamRestart || !this.connected) && (reason === "resume" || reason === "retry")) {
         await this.restartStreams();
       }
-      const assignment = await this.resolveAssignment(this.config, this.identity);
-      if (assignment.source === "rotation-verified") {
-        this.storage?.setItem(
-          `cthuwu.rotation.v1:${this.config.environment}:${this.identity.address}`,
-          assignment.address,
-        );
+      let assignment = await this.resolveAssignment(
+        { ...this.config, rotationAnchor: this.retainedRotationAddress },
+        this.identity,
+      );
+      if (assignment.source === "liveness-required") {
+        assignment = await this.selectLiveAssignment(reason);
       }
       this.registryFailureCount = 0;
       this.nextAutomaticRegistryAttemptAt = 0;
@@ -433,6 +485,11 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         this.assignmentState = assignment.source;
         this.assignmentNotice = assignment.notice;
         await this.requestAssignment();
+        if (assignment.source === "rotation-verified" && this.pendingLivenessRequestId) {
+          this.persistRotation(assignment.address);
+          this.retainedRotationAddress = assignment.address;
+          this.unpersistedLivenessCandidate = undefined;
+        }
       } else {
         try {
           await this.client.conversations.sync();
@@ -445,14 +502,24 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         await this.verifyCurrentDirect(assignment);
         await this.revalidateBoundGroupsIndependently();
         this.currentAssignment = assignment;
+        this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : "Intro Tentacle";
         this.assignmentState = assignment.source;
         this.assignmentNotice = assignment.notice;
         this.restoreVerifiedChannels();
         await this.requestAssignment();
+        if (assignment.source === "rotation-verified" && this.pendingLivenessRequestId) {
+          this.persistRotation(assignment.address);
+          this.retainedRotationAddress = assignment.address;
+          this.unpersistedLivenessCandidate = undefined;
+        }
       }
       this.emit();
     } catch (error) {
-      if (error instanceof RegistryUnavailableError || error instanceof DirectVerificationUnavailableError) {
+      if (
+        error instanceof RegistryUnavailableError ||
+        error instanceof DirectVerificationUnavailableError ||
+        error instanceof LivenessUnavailableError
+      ) {
         if (error instanceof RegistryUnavailableError) {
           this.registryFailureCount += 1;
           const delay = Math.min(15 * 60_000, 30_000 * 2 ** Math.min(5, this.registryFailureCount - 1));
@@ -460,7 +527,9 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         }
         this.assignmentState = error instanceof DirectVerificationUnavailableError
           ? "direct-verification-unavailable"
-          : "registry-unavailable";
+          : error instanceof LivenessUnavailableError
+            ? "liveness-unavailable"
+            : "registry-unavailable";
         this.assignmentNotice = error.message;
         // A configured canonical read outage freezes only Branding-dependent routing. Global remains
         // bound to the previously authenticated logical channel and is never reinterpreted as fallback.
@@ -482,6 +551,187 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.emit();
       throw error;
     }
+  }
+
+  private async selectLiveAssignment(
+    reason: "connect" | "resume" | "periodic" | "retry",
+  ): Promise<TentacleAssignment> {
+    if (this.unpersistedLivenessCandidate) {
+      return this.verifyLiveCandidate(this.config, this.identity, this.unpersistedLivenessCandidate);
+    }
+    if (this.livenessAttempted) {
+      throw new LivenessUnavailableError(
+        this.livenessFailure ?? "The one-time live Tentacle check has already completed without a responder",
+      );
+    }
+    if (this.livenessPreProbeFailure && reason !== "retry") {
+      throw new RegistryUnavailableError(this.livenessPreProbeFailure);
+    }
+    if (this.livenessProbeInFlight) return this.livenessProbeInFlight;
+    if (reason === "retry") this.livenessPreProbeFailure = undefined;
+    this.livenessProbeInFlight = this.runLivenessProbe()
+      .catch((error: unknown) => {
+        if (!this.livenessAttempted) {
+          this.livenessPreProbeFailure = error instanceof Error
+            ? error.message
+            : "Live Tentacle selection failed before a liveness query could be sent";
+        }
+        throw error;
+      })
+      .finally(() => {
+        this.livenessProbeInFlight = undefined;
+      });
+    return this.livenessProbeInFlight;
+  }
+
+  private async runLivenessProbe(): Promise<TentacleAssignment> {
+    const candidates = await this.loadCandidates(
+      this.config,
+      this.identity.address,
+      this.inboxId,
+      this.storage,
+    );
+    if (candidates.length === 0) {
+      throw new RegistryUnavailableError("No eligible ranked Tentacle is available for the liveness check");
+    }
+    this.assignmentNotice = `Whispering “fhtagn?” to ${candidates.length} ranked Tentacle${candidates.length === 1 ? "" : "s"}…`;
+    this.emit();
+    const startedAtMs = Math.floor(this.nowMs());
+    if (!Number.isSafeInteger(startedAtMs) || startedAtMs < 0) {
+      throw new RegistryUnavailableError("The browser clock is unavailable for the liveness check");
+    }
+    const startedAtNs = BigInt(startedAtMs) * 1_000_000n;
+    const expiresAtNs = startedAtNs + BigInt(this.livenessWindowMs) * 1_000_000n;
+    const probes: LivenessProbe[] = [];
+    const cancellation = { cancelled: false };
+    let resolveWinner!: (winner: LivenessWinner) => void;
+    const winner = new Promise<LivenessWinner>((resolve) => { resolveWinner = resolve; });
+    let resolveNoProbe!: () => void;
+    const noProbe = new Promise<void>((resolve) => { resolveNoProbe = resolve; });
+    let settled = false;
+    const accept = (value: LivenessWinner): void => {
+      if (settled) return;
+      settled = true;
+      resolveWinner(value);
+    };
+    void Promise.allSettled(candidates.map(async (candidate) => {
+      const probe = await this.setupLivenessProbe(
+        candidate,
+        startedAtNs,
+        expiresAtNs,
+        () => cancellation.cancelled,
+      );
+      if (cancellation.cancelled) {
+        await probe.stream.return();
+        return;
+      }
+      probes.push(probe);
+      void this.consumeLivenessProbe(probe, accept);
+    })).then(() => {
+      if (probes.length === 0 && !this.livenessAttempted) resolveNoProbe();
+    });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timeoutId = setTimeout(() => resolve("timeout"), this.livenessWindowMs);
+    });
+    const outcome = await Promise.race([
+      winner.then((value) => ({ type: "winner" as const, value })),
+      timeout.then(() => ({ type: "timeout" as const })),
+      noProbe.then(() => ({ type: "no-probe" as const })),
+    ]);
+    if (timeoutId) clearTimeout(timeoutId);
+    cancellation.cancelled = true;
+    await Promise.allSettled(probes.map((probe) => probe.stream.return()));
+    if (outcome.type === "no-probe" || !this.livenessAttempted) {
+      // No query crossed XMTP, so an explicit user retry may still make this workspace's first
+      // actual attempt. Automatic resume/periodic retries remain governed by the registry cooldown.
+      throw new RegistryUnavailableError("Live Tentacle selection is unavailable before any liveness query could be sent");
+    }
+    if (outcome.type !== "winner") {
+      this.livenessFailure = "No ranked Tentacle answered the one-time liveness check";
+      throw new LivenessUnavailableError(this.livenessFailure);
+    }
+    const selected = outcome.value;
+    this.pendingLivenessRequestId = selected.requestId;
+    this.unpersistedLivenessCandidate = selected.candidate;
+    return this.verifyLiveCandidate(this.config, this.identity, selected.candidate);
+  }
+
+  private async setupLivenessProbe(
+    candidate: LivenessCandidate,
+    startedAtNs: bigint,
+    expiresAtNs: bigint,
+    cancelled: () => boolean,
+  ): Promise<LivenessProbe> {
+    await verifyPeerInboxState(this.client, candidate.inboxId, candidate.wallet);
+    if (cancelled()) throw new Error("the liveness window ended before DM creation");
+    const disappearing = { fromNs: RETENTION_FROM_NS, inNs: RETENTION_IN_NS };
+    const dm = await this.client.conversations.createDm(candidate.inboxId, {
+      messageDisappearingSettings: disappearing,
+    });
+    if (await dm.peerInboxId() !== candidate.inboxId) {
+      throw new Error("XMTP resolved a different liveness candidate inbox");
+    }
+    await repairDirectRetention(dm);
+    if (cancelled()) throw new Error("the liveness window ended before stream creation");
+    const stream = await (dm as ProbeDm).stream({
+      onError: () => undefined,
+      onFail: () => undefined,
+    });
+    const query = createLivenessQueryControl(candidate.agentId, expiresAtNs.toString());
+    if (cancelled()) {
+      await stream.return();
+      throw new Error("the liveness window ended before the query could be sent");
+    }
+    try {
+      await dm.send(encodeLivenessQueryControl(query), { shouldPush: false });
+    } catch (error) {
+      await stream.return();
+      throw error;
+    }
+    // A successful XMTP publish is the workspace's one real attempt. Local/pre-publish failures do
+    // not consume it, so one deliberate retry can still make the first actual probe.
+    this.livenessAttempted = true;
+    return {
+      candidate,
+      conversationId: dm.id,
+      requestId: query.requestId,
+      startedAtNs,
+      expiresAtNs,
+      stream,
+    };
+  }
+
+  private async consumeLivenessProbe(
+    probe: LivenessProbe,
+    accept: (winner: LivenessWinner) => void,
+  ): Promise<void> {
+    try {
+      for await (const message of probe.stream) {
+        if (
+          message.conversationId !== probe.conversationId ||
+          message.senderInboxId !== probe.candidate.inboxId ||
+          !isLivenessResponseContentType(message.contentType) ||
+          !isLivenessResponseControl(message.content) ||
+          message.content.requestId !== probe.requestId ||
+          message.content.tentacleAgentId !== probe.candidate.agentId ||
+          message.sentAtNs < probe.startedAtNs ||
+          message.sentAtNs > probe.expiresAtNs ||
+          BigInt(Math.floor(this.nowMs())) * 1_000_000n > probe.expiresAtNs
+        ) continue;
+        accept({ candidate: probe.candidate, requestId: probe.requestId });
+        return;
+      }
+    } catch {
+      // Another candidate may still answer. A dead probe is not permission to select it.
+    }
+  }
+
+  private persistRotation(address: string): void {
+    if (!this.storage) return;
+    const key = `cthuwu.rotation.v1:${this.config.environment}:${this.identity.address}`;
+    this.storage.setItem(key, address);
+    if (this.storage.getItem(key) !== address) throw new Error("The live Tentacle choice could not be persisted");
   }
 
   private async handoffDirect(assignment: TentacleAssignment): Promise<void> {
@@ -536,11 +786,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.conversations.set(direct.id, direct);
     this.trustedChannelByConversation.set(direct.id, "direct");
     this.bindChannel("direct", [direct.id], direct.id, true);
-    const hint = readTentacleDisplayHint(
-      isVerifiedTentacle(assignment) ? assignment.agentId : undefined,
-      this.storage,
-    );
-    this.tentacleName = hint?.name ?? (isVerifiedTentacle(assignment) ? `Tentacle #${assignment.agentId}` : "Intro Tentacle");
+    this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : "Intro Tentacle";
     await this.loadHistory("direct", false);
   }
 
@@ -584,6 +830,18 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
 
   private async requestAssignment(): Promise<void> {
     if (!this.direct || !this.currentTentacleInboxId) return;
+    if (this.currentAssignment?.source === "anchor-verified") {
+      this.blockChannel(
+        "acolytes",
+        "Explicit Tentacle links are Direct-only while your Acolyte is Unminted; use automatic live selection or mint Branding to join Acolytes",
+      );
+      this.blockChannel(
+        "global",
+        "Explicit Tentacle links are Direct-only while your Acolyte is Unminted; Global enrollment is unavailable on this route",
+      );
+      this.emit();
+      return;
+    }
     if (this.currentAssignment?.source === "intro-unconfigured") {
       this.setChannelIssue(
         "acolytes",
@@ -596,6 +854,12 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         "Branding routing is pending deployment; Global enrollment is not configured",
       );
       this.emit();
+      return;
+    }
+    if (this.pendingLivenessRequestId && this.currentAssignment?.source === "rotation-verified") {
+      const join = createLivenessJoinControl(this.pendingLivenessRequestId);
+      this.pendingRequestId = join.requestId;
+      await this.direct.send(encodeLivenessJoinControl(join), { shouldPush: false });
       return;
     }
     const join = createJoinControl();
@@ -808,6 +1072,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       );
       this.pendingGroupAssignment = undefined;
       this.pendingRequestId = undefined;
+      this.pendingLivenessRequestId = undefined;
       this.trustedGroupAssignment = assignment;
       await Promise.all([this.loadHistory("acolytes", false), this.loadHistory("global", false)]);
     } catch (error) {
@@ -981,7 +1246,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     if (!current.readConversationIds.includes(message.conversationId)) return;
     if (current.messages.some((item) => item.id === message.id)) return;
     current.messages = mergeMessages(current.messages, [message]).slice(-MAX_MESSAGES_PER_CHANNEL);
-    current.status = "ready";
+    if (current.status !== "policy-blocked") current.status = "ready";
     if (
       !message.mine &&
       live &&

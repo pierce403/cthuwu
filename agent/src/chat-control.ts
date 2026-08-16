@@ -15,6 +15,7 @@ import {
   hexToString,
   http,
   isAddress,
+  keccak256,
   parseAbi,
   stringToHex,
   type Address,
@@ -34,6 +35,7 @@ import {
 } from "@xmtp/content-type-primitives";
 import {
   ALLEGIANCE_VALUE,
+  BRANDING_RUNTIME_CODE_HASH,
   ERC8004_IDENTITY_REGISTRY,
   ERC8004_VERSION,
   PROTOCOL_VALUE,
@@ -90,6 +92,30 @@ export type AssignmentControl = {
   };
 };
 
+export type LivenessQueryControl = {
+  type: "cthuwu.liveness-query.v1";
+  requestId: string;
+  environment: "production";
+  phrase: "fhtagn?";
+  expiresAtNs: string;
+  targetAgentId: string;
+};
+
+export type LivenessResponseControl = {
+  type: "cthuwu.liveness-response.v1";
+  requestId: string;
+  environment: "production";
+  phrase: "fhtagn!";
+  tentacleAgentId: string;
+};
+
+export type LivenessJoinControl = {
+  type: "cthuwu.liveness-join.v1";
+  requestId: string;
+  environment: "production";
+  livenessRequestId: string;
+};
+
 export type ParsedControl =
   | { kind: "invalid" }
   | { kind: "join"; value: JoinControl }
@@ -111,6 +137,24 @@ export const ASSIGNMENT_CONTENT_TYPE: ContentTypeId = {
 export const TYPING_CONTENT_TYPE: ContentTypeId = {
   authorityId: "cthuwu.app",
   typeId: "typing",
+  versionMajor: 1,
+  versionMinor: 0,
+};
+export const LIVENESS_QUERY_CONTENT_TYPE: ContentTypeId = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-query",
+  versionMajor: 1,
+  versionMinor: 0,
+};
+export const LIVENESS_RESPONSE_CONTENT_TYPE: ContentTypeId = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-response",
+  versionMajor: 1,
+  versionMinor: 0,
+};
+export const LIVENESS_JOIN_CONTENT_TYPE: ContentTypeId = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-join",
   versionMajor: 1,
   versionMinor: 0,
 };
@@ -249,6 +293,104 @@ function parseAssignment(value: RecordValue): AssignmentControl | undefined {
   };
 }
 
+function isUint64Decimal(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= (1n << 64n) - 1n;
+  } catch {
+    return false;
+  }
+}
+
+function parseLivenessQuery(value: RecordValue): LivenessQueryControl | undefined {
+  if (
+    !hasExactKeys(value, [
+      "type",
+      "requestId",
+      "environment",
+      "phrase",
+      "expiresAtNs",
+      "targetAgentId",
+    ]) ||
+    value.type !== "cthuwu.liveness-query.v1" ||
+    typeof value.requestId !== "string" ||
+    !REQUEST_ID.test(value.requestId) ||
+    value.environment !== CHAT_ENVIRONMENT ||
+    value.phrase !== "fhtagn?" ||
+    !isUint64Decimal(value.expiresAtNs) ||
+    !isCanonicalAgentId(value.targetAgentId)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "cthuwu.liveness-query.v1",
+    requestId: value.requestId,
+    environment: CHAT_ENVIRONMENT,
+    phrase: "fhtagn?",
+    expiresAtNs: value.expiresAtNs,
+    targetAgentId: value.targetAgentId,
+  };
+}
+
+function parseLivenessResponse(value: RecordValue): LivenessResponseControl | undefined {
+  if (
+    !hasExactKeys(value, [
+      "type",
+      "requestId",
+      "environment",
+      "phrase",
+      "tentacleAgentId",
+    ]) ||
+    value.type !== "cthuwu.liveness-response.v1" ||
+    typeof value.requestId !== "string" ||
+    !REQUEST_ID.test(value.requestId) ||
+    value.environment !== CHAT_ENVIRONMENT ||
+    value.phrase !== "fhtagn!" ||
+    !isCanonicalAgentId(value.tentacleAgentId)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "cthuwu.liveness-response.v1",
+    requestId: value.requestId,
+    environment: CHAT_ENVIRONMENT,
+    phrase: "fhtagn!",
+    tentacleAgentId: value.tentacleAgentId,
+  };
+}
+
+function parseLivenessJoin(value: RecordValue): LivenessJoinControl | undefined {
+  if (
+    !hasExactKeys(value, ["type", "requestId", "environment", "livenessRequestId"]) ||
+    value.type !== "cthuwu.liveness-join.v1" ||
+    typeof value.requestId !== "string" ||
+    !REQUEST_ID.test(value.requestId) ||
+    value.environment !== CHAT_ENVIRONMENT ||
+    typeof value.livenessRequestId !== "string" ||
+    !REQUEST_ID.test(value.livenessRequestId)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "cthuwu.liveness-join.v1",
+    requestId: value.requestId,
+    environment: CHAT_ENVIRONMENT,
+    livenessRequestId: value.livenessRequestId,
+  };
+}
+
+export function isLivenessQueryControl(value: unknown): value is LivenessQueryControl {
+  return isRecord(value) && parseLivenessQuery(value) !== undefined;
+}
+
+export function isLivenessResponseControl(value: unknown): value is LivenessResponseControl {
+  return isRecord(value) && parseLivenessResponse(value) !== undefined;
+}
+
+export function isLivenessJoinControl(value: unknown): value is LivenessJoinControl {
+  return isRecord(value) && parseLivenessJoin(value) !== undefined;
+}
+
 export function parseControlPayload(payload: Uint8Array): ParsedControl {
   if (payload.byteLength > MAX_CONTROL_BYTES) {
     return { kind: "invalid" };
@@ -283,7 +425,13 @@ function contentTypeEquals(actual: ContentTypeId | undefined, expected: ContentT
 
 function encodePayload(
   contentType: ContentTypeId,
-  value: JoinControl | AssignmentControl | TypingControl,
+  value:
+    | JoinControl
+    | AssignmentControl
+    | TypingControl
+    | LivenessQueryControl
+    | LivenessResponseControl
+    | LivenessJoinControl,
 ): EncodedContent {
   const content = new TextEncoder().encode(JSON.stringify(value));
   if (content.byteLength > MAX_CONTROL_BYTES) {
@@ -323,6 +471,66 @@ export class TypingCodec implements ContentCodec<unknown> {
     return INVALID_CONTROL;
   }
 
+  fallback(_content: unknown): undefined { return undefined; }
+  shouldPush(_content: unknown): boolean { return false; }
+}
+
+function decodeExactControl<T>(
+  content: EncodedContent,
+  expected: ContentTypeId,
+  parse: (value: RecordValue) => T | undefined,
+): T | typeof INVALID_CONTROL {
+  try {
+    assertEncodedEnvelope(content, expected);
+    if (content.content.byteLength > MAX_CONTROL_BYTES) return INVALID_CONTROL;
+    const value: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(content.content),
+    );
+    if (isRecord(value)) return parse(value) ?? INVALID_CONTROL;
+  } catch {
+    // Every hostile control is consumed as invalid, never surfaced as text or a stream error.
+  }
+  return INVALID_CONTROL;
+}
+
+export class LivenessQueryCodec implements ContentCodec<unknown> {
+  readonly contentType = LIVENESS_QUERY_CONTENT_TYPE;
+  encode(content: unknown): EncodedContent {
+    const parsed = isRecord(content) ? parseLivenessQuery(content) : undefined;
+    if (parsed === undefined) throw new Error("invalid cthuwu.liveness-query.v1 content");
+    return encodePayload(this.contentType, parsed);
+  }
+  decode(content: EncodedContent): unknown {
+    return decodeExactControl(content, this.contentType, parseLivenessQuery);
+  }
+  fallback(_content: unknown): undefined { return undefined; }
+  shouldPush(_content: unknown): boolean { return false; }
+}
+
+export class LivenessResponseCodec implements ContentCodec<unknown> {
+  readonly contentType = LIVENESS_RESPONSE_CONTENT_TYPE;
+  encode(content: unknown): EncodedContent {
+    const parsed = isRecord(content) ? parseLivenessResponse(content) : undefined;
+    if (parsed === undefined) throw new Error("invalid cthuwu.liveness-response.v1 content");
+    return encodePayload(this.contentType, parsed);
+  }
+  decode(content: EncodedContent): unknown {
+    return decodeExactControl(content, this.contentType, parseLivenessResponse);
+  }
+  fallback(_content: unknown): undefined { return undefined; }
+  shouldPush(_content: unknown): boolean { return false; }
+}
+
+export class LivenessJoinCodec implements ContentCodec<unknown> {
+  readonly contentType = LIVENESS_JOIN_CONTENT_TYPE;
+  encode(content: unknown): EncodedContent {
+    const parsed = isRecord(content) ? parseLivenessJoin(content) : undefined;
+    if (parsed === undefined) throw new Error("invalid cthuwu.liveness-join.v1 content");
+    return encodePayload(this.contentType, parsed);
+  }
+  decode(content: EncodedContent): unknown {
+    return decodeExactControl(content, this.contentType, parseLivenessJoin);
+  }
   fallback(_content: unknown): undefined { return undefined; }
   shouldPush(_content: unknown): boolean { return false; }
 }
@@ -417,6 +625,18 @@ export function isExactTypingContentType(value: ContentTypeId): boolean {
   return contentTypeEquals(value, TYPING_CONTENT_TYPE);
 }
 
+export function isExactLivenessQueryContentType(value: ContentTypeId): boolean {
+  return contentTypeEquals(value, LIVENESS_QUERY_CONTENT_TYPE);
+}
+
+export function isExactLivenessResponseContentType(value: ContentTypeId): boolean {
+  return contentTypeEquals(value, LIVENESS_RESPONSE_CONTENT_TYPE);
+}
+
+export function isExactLivenessJoinContentType(value: ContentTypeId): boolean {
+  return contentTypeEquals(value, LIVENESS_JOIN_CONTENT_TYPE);
+}
+
 export type InboundDisposition = "control" | "direct" | "group";
 
 export function classifyInboundMessage(
@@ -426,7 +646,10 @@ export function classifyInboundMessage(
   if (
     isExactJoinContentType(contentType) ||
     isExactAssignmentContentType(contentType) ||
-    isExactTypingContentType(contentType)
+    isExactTypingContentType(contentType) ||
+    isExactLivenessQueryContentType(contentType) ||
+    isExactLivenessResponseContentType(contentType) ||
+    isExactLivenessJoinContentType(contentType)
   ) {
     return "control";
   }
@@ -451,6 +674,170 @@ export function dispatchPersonalText(
   }
   bridge(text);
   return true;
+}
+
+const LIVENESS_WINDOW_MS = 60_000;
+const LIVENESS_PER_SENDER_PER_WINDOW = 8;
+const LIVENESS_GLOBAL_PER_WINDOW = 256;
+const MAX_LIVENESS_SENDERS = 1_024;
+const MAX_LIVENESS_REPLAYS = 4_096;
+const MAX_LIVENESS_GRANTS = 2_048;
+
+type LivenessGrant = {
+  senderInboxId: string;
+  senderAddress: Address;
+  livenessRequestId: string;
+  tentacleAgentId: string;
+  expiresAtMs: number;
+};
+
+/**
+ * Process-local abuse and admission boundary for unauthenticated discovery probes. The query is
+ * consumed before the comparatively expensive inbox-to-Ethereum lookup. A short grant is issued
+ * only after that fresh lookup and is consumed only after enrollment persistence succeeds.
+ */
+export class LivenessControlGate {
+  readonly #now: () => number;
+  readonly #senderAdmissions = new Map<string, number[]>();
+  readonly #globalAdmissions: number[] = [];
+  readonly #replays = new Map<string, number>();
+  readonly #grants = new Map<string, LivenessGrant>();
+
+  constructor(now: () => number = Date.now) {
+    this.#now = now;
+  }
+
+  #key(senderInboxId: string, requestId: string): string {
+    return `${senderInboxId}:${requestId}`;
+  }
+
+  #prune(nowMs: number): void {
+    const cutoff = nowMs - LIVENESS_WINDOW_MS;
+    while (
+      this.#globalAdmissions[0] !== undefined &&
+      this.#globalAdmissions[0] <= cutoff
+    ) {
+      this.#globalAdmissions.shift();
+    }
+    for (const [inboxId, admissions] of this.#senderAdmissions) {
+      while (admissions[0] !== undefined && admissions[0] <= cutoff) admissions.shift();
+      if (admissions.length === 0) this.#senderAdmissions.delete(inboxId);
+    }
+    for (const [key, expiresAtMs] of this.#replays) {
+      if (expiresAtMs <= nowMs) this.#replays.delete(key);
+    }
+    for (const [key, grant] of this.#grants) {
+      if (grant.expiresAtMs <= nowMs) this.#grants.delete(key);
+    }
+  }
+
+  admitQuery(
+    senderInboxId: string,
+    query: LivenessQueryControl,
+  ): boolean {
+    const nowMs = this.#now();
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !isCanonicalId(senderInboxId)) {
+      return false;
+    }
+    const nowNs = BigInt(nowMs) * 1_000_000n;
+    const expiresAtNs = BigInt(query.expiresAtNs);
+    if (
+      expiresAtNs <= nowNs ||
+      expiresAtNs > nowNs + BigInt(LIVENESS_WINDOW_MS) * 1_000_000n
+    ) {
+      return false;
+    }
+    this.#prune(nowMs);
+    const key = this.#key(senderInboxId, query.requestId);
+    if (this.#replays.has(key)) return false;
+    let sender = this.#senderAdmissions.get(senderInboxId);
+    if (sender === undefined) {
+      if (this.#senderAdmissions.size >= MAX_LIVENESS_SENDERS) return false;
+      sender = [];
+      this.#senderAdmissions.set(senderInboxId, sender);
+    }
+    if (
+      sender.length >= LIVENESS_PER_SENDER_PER_WINDOW ||
+      this.#globalAdmissions.length >= LIVENESS_GLOBAL_PER_WINDOW ||
+      this.#replays.size >= MAX_LIVENESS_REPLAYS
+    ) {
+      return false;
+    }
+    sender.push(nowMs);
+    this.#globalAdmissions.push(nowMs);
+    this.#replays.set(key, nowMs + LIVENESS_WINDOW_MS);
+    return true;
+  }
+
+  issueGrant(options: {
+    senderInboxId: string;
+    senderAddress: Address;
+    query: LivenessQueryControl;
+    tentacleAgentId: string;
+  }): boolean {
+    const nowMs = this.#now();
+    this.#prune(nowMs);
+    const key = this.#key(options.senderInboxId, options.query.requestId);
+    if (
+      !this.#replays.has(key) ||
+      !isCanonicalId(options.senderInboxId) ||
+      !isCanonicalAgentId(options.tentacleAgentId) ||
+      options.query.targetAgentId !== options.tentacleAgentId ||
+      this.#grants.has(key) ||
+      this.#grants.size >= MAX_LIVENESS_GRANTS
+    ) {
+      return false;
+    }
+    const queryExpiresAtMs = Number(BigInt(options.query.expiresAtNs) / 1_000_000n);
+    if (queryExpiresAtMs <= nowMs) return false;
+    // The query deadline bounds whether a response may be issued. Once the live response is sent,
+    // leave one full short grant window for the browser's independent Base and Direct verification.
+    const expiresAtMs = nowMs + LIVENESS_WINDOW_MS;
+    this.#grants.set(key, {
+      senderInboxId: options.senderInboxId,
+      senderAddress: getAddress(options.senderAddress),
+      livenessRequestId: options.query.requestId,
+      tentacleAgentId: options.tentacleAgentId,
+      expiresAtMs,
+    });
+    return true;
+  }
+
+  hasGrant(options: {
+    senderInboxId: string;
+    senderAddress: Address;
+    livenessRequestId: string;
+    tentacleAgentId: string;
+  }): boolean {
+    const nowMs = this.#now();
+    this.#prune(nowMs);
+    const grant = this.#grants.get(
+      this.#key(options.senderInboxId, options.livenessRequestId),
+    );
+    return (
+      grant !== undefined &&
+      grant.expiresAtMs > nowMs &&
+      grant.senderInboxId === options.senderInboxId &&
+      grant.senderAddress === getAddress(options.senderAddress) &&
+      grant.livenessRequestId === options.livenessRequestId &&
+      grant.tentacleAgentId === options.tentacleAgentId
+    );
+  }
+
+  consumeGrant(options: {
+    senderInboxId: string;
+    senderAddress: Address;
+    livenessRequestId: string;
+    tentacleAgentId: string;
+  }): boolean {
+    if (!this.hasGrant(options)) return false;
+    this.#grants.delete(this.#key(options.senderInboxId, options.livenessRequestId));
+    return true;
+  }
+
+  revokeGrant(senderInboxId: string, livenessRequestId: string): void {
+    this.#grants.delete(this.#key(senderInboxId, livenessRequestId));
+  }
 }
 
 export type AcolytesAppData = {
@@ -871,6 +1258,7 @@ export type AssignmentResolution =
       revision: string;
       tentacleAgentId: string;
       tentacleInboxId: string;
+      enrollment: "controller" | "liveness" | "intro";
     }
   | { kind: "assigned_elsewhere"; revision: string }
   | { kind: "registry_unavailable" };
@@ -1000,8 +1388,8 @@ function configuredBrandingAddress(value: string | undefined): Address | undefin
     throw new Error("CTHUWU_BRANDING_CONTRACT must be a full EVM address");
   }
   const address = getAddress(value);
-  if (address === getAddress("0x0000000000000000000000000000000000000000")) {
-    throw new Error("CTHUWU_BRANDING_CONTRACT must not be zero");
+  if (address !== CANONICAL_BRANDING_CONTRACT) {
+    throw new Error("CTHUWU_BRANDING_CONTRACT must be the canonical Base deployment");
   }
   return address;
 }
@@ -1254,11 +1642,13 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
       let assignedWallet = this.#local.wallet;
       let endpoint: string | undefined;
       let assignedElsewhere = false;
+      let enrollment: "controller" | "liveness" | "intro" | undefined;
 
       if (this.#brandingAddress === undefined) {
         if (this.#local.wallet !== INTRO_TENTACLE_ADDRESS) {
           assignedElsewhere = true;
         } else {
+          enrollment = "intro";
           endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
         }
       } else {
@@ -1266,7 +1656,11 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
           address: this.#brandingAddress,
           blockNumber,
         });
-        if (code === undefined || code === "0x") {
+        if (
+          code === undefined ||
+          code === "0x" ||
+          keccak256(code) !== BRANDING_RUNTIME_CODE_HASH
+        ) {
           return { kind: "registry_unavailable" };
         }
         const [branding, brandingChain, brandingRegistry, brandingUwu, brandingVersion] =
@@ -1317,6 +1711,7 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
           return { kind: "registry_unavailable" };
         }
         if (branding.status === 1) {
+          enrollment = "controller";
           assignedAgentId = branding.controllerAgentId.toString();
           assignedWallet = getAddress(branding.owner);
           if (
@@ -1326,13 +1721,20 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
             return { kind: "registry_unavailable" };
           }
           endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
+        } else if (branding.status === 0) {
+          // Any verified local Tentacle may answer a bounded liveness probe for an Unminted
+          // acolyte. The grant, not this broadly true resolution, is the admission authority.
+          enrollment =
+            this.#local.wallet === INTRO_TENTACLE_ADDRESS ? "intro" : "liveness";
+          endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
         } else {
-          if (![0, 2, 3].includes(branding.status)) {
+          if (![2, 3].includes(branding.status)) {
             return { kind: "registry_unavailable" };
           }
           if (this.#local.wallet !== INTRO_TENTACLE_ADDRESS) {
             assignedElsewhere = true;
           } else {
+            enrollment = "intro";
             assignedAgentId = this.#local.agentId;
             assignedWallet = this.#local.wallet;
             endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
@@ -1354,11 +1756,15 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
       ) {
         return { kind: "assigned_elsewhere", revision };
       }
+      if (enrollment === undefined) {
+        return { kind: "registry_unavailable" };
+      }
       return {
         kind: "assigned_here",
         revision,
         tentacleAgentId: assignedAgentId,
         tentacleInboxId: endpoint,
+        enrollment,
       };
     } catch {
       return { kind: "registry_unavailable" };
@@ -1424,6 +1830,7 @@ export class ChatControlService {
   readonly #config: ChatControlConfig;
   readonly #selfInboxId: string;
   readonly #tentacleAgentId: string;
+  readonly #livenessGate: LivenessControlGate | undefined;
   readonly #resolveInboxAddress:
     | ((inboxId: string) => Promise<Address | undefined>)
     | undefined;
@@ -1436,6 +1843,7 @@ export class ChatControlService {
     config: ChatControlConfig;
     selfInboxId: string;
     tentacleAgentId: string;
+    livenessGate?: LivenessControlGate;
     resolveInboxAddress?: (inboxId: string) => Promise<Address | undefined>;
   }) {
     this.#directory = options.directory;
@@ -1444,6 +1852,7 @@ export class ChatControlService {
     this.#config = options.config;
     this.#selfInboxId = options.selfInboxId;
     this.#tentacleAgentId = options.tentacleAgentId;
+    this.#livenessGate = options.livenessGate;
     this.#resolveInboxAddress = options.resolveInboxAddress;
   }
 
@@ -1536,7 +1945,7 @@ export class ChatControlService {
   }
 
   async enroll(options: {
-    join: JoinControl;
+    join: JoinControl | LivenessJoinControl;
     senderInboxId: string;
     senderAddress: string | undefined;
     directConversation: ConversationLike;
@@ -1558,8 +1967,39 @@ export class ChatControlService {
       ) {
         return undefined;
       }
-      await ensureRetention(options.directConversation);
       const state = await this.#store.load();
+      const persistedEnrollment = state.enrollments.some(
+        (enrollment) =>
+          enrollment.inboxId === options.senderInboxId &&
+          enrollment.address === senderAddress,
+      );
+      let consumeLivenessRequestId: string | undefined;
+      if (resolution.enrollment === "liveness") {
+        if (persistedEnrollment) {
+          // The first successful enrollment already consumed the one-use grant. Accept either
+          // exact join shape on a fresh canonical reconnect so a lost AssignmentControl response
+          // cannot strand a browser that is still resending its liveness-bound join.
+        } else if (options.join.type === "cthuwu.liveness-join.v1") {
+          if (
+            this.#livenessGate === undefined ||
+            !this.#livenessGate.hasGrant({
+              senderInboxId: options.senderInboxId,
+              senderAddress,
+              livenessRequestId: options.join.livenessRequestId,
+              tentacleAgentId: this.#tentacleAgentId,
+            })
+          ) {
+            return undefined;
+          }
+          consumeLivenessRequestId = options.join.livenessRequestId;
+        } else {
+          return undefined;
+        }
+      } else if (options.join.type !== "cthuwu.join.v1") {
+        // Intro and active-controller admission remain the ordinary authenticated join path.
+        return undefined;
+      }
+      await ensureRetention(options.directConversation);
       if (
         state.globalGroupId !== undefined &&
         state.globalGroupId !== this.#config.globalGroupId
@@ -1585,6 +2025,14 @@ export class ChatControlService {
         enrollment,
       ].sort((left, right) => left.inboxId.localeCompare(right.inboxId));
       await this.#store.save(state);
+      if (consumeLivenessRequestId !== undefined) {
+        this.#livenessGate?.consumeGrant({
+          senderInboxId: options.senderInboxId,
+          senderAddress,
+          livenessRequestId: consumeLivenessRequestId,
+          tentacleAgentId: this.#tentacleAgentId,
+        });
+      }
       return {
         type: "cthuwu.assignment.v1",
         requestId: options.join.requestId,

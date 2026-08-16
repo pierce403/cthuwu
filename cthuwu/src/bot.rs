@@ -1,6 +1,8 @@
 use crate::{
     base_rpc::{BASE_RPC_HELP, BaseRpcControl, VENICE_KEY_HELP},
-    branding::{DEFAULT_INITIAL_PRICE_BASIS_POINTS, quote_initial_branding},
+    branding::{
+        AcolyteBrandingControl, DEFAULT_INITIAL_PRICE_BASIS_POINTS, quote_initial_branding,
+    },
     config::BlockchainConfig,
     contact::{Contact, ContactField, ContactStore, OnboardingStage},
     dedupe::ProcessedMessages,
@@ -59,6 +61,7 @@ pub struct UwUBot {
     blockchain: BlockchainConfig,
     venice_key_reward_whole: u64,
     registry_control: Option<Arc<dyn RegistrationOperatorControl>>,
+    branding_control: Option<Arc<dyn AcolyteBrandingControl>>,
 }
 
 struct AuthenticatedMessage<'a> {
@@ -119,6 +122,7 @@ impl UwUBot {
             blockchain: BlockchainConfig::default(),
             venice_key_reward_whole: 1,
             registry_control: None,
+            branding_control: None,
         }
     }
 
@@ -152,6 +156,14 @@ impl UwUBot {
         registry_control: Arc<dyn RegistrationOperatorControl>,
     ) -> Self {
         self.registry_control = Some(registry_control);
+        self
+    }
+
+    pub fn with_branding_control(
+        mut self,
+        branding_control: Arc<dyn AcolyteBrandingControl>,
+    ) -> Self {
+        self.branding_control = Some(branding_control);
         self
     }
 
@@ -301,6 +313,25 @@ impl UwUBot {
                 }
             };
             return Ok(Some(response.to_owned()));
+        }
+
+        // Branding controls carry EIP-712 signatures and are interpreted only by the strict local
+        // parser. Consume them before public-turn accounting, contact state, or either model lane.
+        if let Some(control) = &self.branding_control {
+            match control
+                .handle_public_message(message.inbox_id, message.sender_address, message.text)
+                .await
+            {
+                Ok(Some(response)) => {
+                    return Ok(Some(limit_response(response, role)));
+                }
+                Ok(None) => {}
+                Err(error) if message.text.contains("[[cthuwu:branding-") => {
+                    warn!(%error, "rejected an invalid or stale Acolyte Branding control");
+                    return Ok(Some("that exact Branding request is stale or does not match this authenticated conversation, so it authorized nothing, fwiend.".to_owned()));
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         let response = match role {
@@ -581,11 +612,11 @@ impl UwUBot {
             }
         }
 
-        if let Some(response) = self.handle_natural_control(&mut contact, text)? {
-            return Ok(response);
-        }
-
-        let mut contribution_kind =
+        // Snapshot whether this message adds new voluntary profile information before the
+        // natural-language control handler mutates the contact. Profile-shaped controls still
+        // get their deterministic acknowledgement, but must continue through reward and
+        // Branding admission instead of returning early.
+        let voluntary_contribution =
             voluntary_contribution(text).and_then(|(field, kind, value)| {
                 let unchanged = match field {
                     ContactField::Name => contact.name.as_deref(),
@@ -597,9 +628,23 @@ impl UwUBot {
                 if unchanged {
                     return None;
                 }
-                contact.set_field(field, value);
-                Some(kind)
+                Some((field, kind, value))
             });
+        let natural_response = self.handle_natural_control(&mut contact, text)?;
+        if voluntary_contribution.is_none()
+            && let Some(response) = natural_response.as_ref()
+        {
+            return Ok(response.clone());
+        }
+
+        let mut contribution_kind = voluntary_contribution.map(|(field, kind, value)| {
+            // A deterministic natural-control response means the handler already stored the
+            // matching profile field. Other voluntary phrases are stored here.
+            if natural_response.is_none() {
+                contact.set_field(field, value);
+            }
+            kind
+        });
         if contribution_kind.is_none()
             && contact.stage != OnboardingStage::Complete
             && contact.awaiting_onboarding_answer
@@ -621,9 +666,13 @@ impl UwUBot {
         }
 
         let relationship = contact.record_nature_interaction(&turn.nature_fingerprint, !created)?;
-        let profile = contact.model_profile_markdown();
-        let mut response =
-            sanitize_model_ui_markers(self.model_reply(&profile, text, &model_policy).await);
+        let mut response = match natural_response {
+            Some(response) => response,
+            None => {
+                let profile = contact.model_profile_markdown();
+                sanitize_model_ui_markers(self.model_reply(&profile, text, &model_policy).await)
+            }
+        };
         if let Some(kind) = contribution_kind
             && let Some(reward) = self
                 .queue_information_reward(
@@ -642,13 +691,37 @@ impl UwUBot {
                 "\n[[cthuwu:reward:v1;status=pending;amount={reward}]]"
             ));
         }
-        if contribution_kind.is_some()
-            && let Some(offer) = self.branding_offer_quote().await
-        {
-            response.push_str(&format!(
-                "\n[[cthuwu:branding-offer:v1;treasury={};price={};upkeep={}]]",
-                offer.treasury_balance, offer.initial_declared_price, offer.first_week_upkeep
-            ));
+        if contribution_kind.is_some() {
+            match (self.branding_control.as_ref(), authenticated_sender_address) {
+                (None, _) => response.push_str(
+                    "\n\ni saved what u shared, but this node's Branding supervisor is unavailable, so no invitation was created. its operator needs to repair the node before i can retry, uwu.",
+                ),
+                (_, None) => response.push_str(
+                    "\n\ni saved what u shared, but XMTP did not provide a currently authenticated EVM address, so no Branding invitation was created. send a fresh wallet-authenticated Direct message to retry, uwu.",
+                ),
+                (Some(control), Some(address)) => match self.branding_offer_quote().await {
+                    None => response.push_str(
+                        "\n\ni saved what u shared, but i could not verify a positive fresh UWU treasury quote, so no Branding invitation was created. my operator must restore Base RPC access or fund this Tentacle's UWU treasury before i can retry, uwu.",
+                    ),
+                    Some(offer) => match control
+                        .enqueue_default_offer(inbox_id, address, offer)
+                        .await
+                    {
+                        Ok(true) => response.push_str(
+                            "\n\ni'm checking a precise Acolyte Branding invitation against canonical Base state too; if it is safe and still unminted, i'll send the review separately, uwu.",
+                        ),
+                        Ok(false) => response.push_str(
+                            "\n\nan exact Acolyte Branding invitation is already queued for this conversation, fwiend.",
+                        ),
+                        Err(error) => {
+                            warn!(%error, "could not queue an Acolyte Branding offer");
+                            response.push_str(
+                                "\n\ni saved what u shared, but the Branding supervisor could not queue an invitation. it will need its registration or local state repaired before a fresh retry, uwu.",
+                            );
+                        }
+                    },
+                },
+            }
         }
 
         let conversation_depth = 1_u32.saturating_add(
@@ -1121,6 +1194,9 @@ fn voluntary_contribution(text: &str) -> Option<(ContactField, AcolyteContributi
     if text.contains('?') || normalized.starts_with("i need you to ") {
         return None;
     }
+    if let Some(value) = natural_value(text, &["call me ", "my name is "]) {
+        return Some((ContactField::Name, AcolyteContributionKind::Name, value));
+    }
     if let Some(value) = natural_value(
         text,
         &[
@@ -1129,6 +1205,7 @@ fn voluntary_contribution(text: &str) -> Option<(ContactField, AcolyteContributi
             "im hoping ",
             "my hope is ",
             "my dream is ",
+            "my dreams are ",
         ],
     ) {
         return Some((ContactField::Hopes, AcolyteContributionKind::Hopes, value));
@@ -1141,6 +1218,7 @@ fn voluntary_contribution(text: &str) -> Option<(ContactField, AcolyteContributi
             "i can offer ",
             "i can share ",
             "i can help with ",
+            "one thing i can offer is ",
         ],
     ) {
         return Some((
@@ -1149,8 +1227,15 @@ fn voluntary_contribution(text: &str) -> Option<(ContactField, AcolyteContributi
             value,
         ));
     }
-    if let Some(value) = natural_value(text, &["i need ", "my need is ", "i could use help with "])
-    {
+    if let Some(value) = natural_value(
+        text,
+        &[
+            "i need ",
+            "my need is ",
+            "one thing i need is ",
+            "i could use help with ",
+        ],
+    ) {
         return Some((ContactField::Needs, AcolyteContributionKind::Needs, value));
     }
     None
@@ -1421,16 +1506,18 @@ mod tests {
     use super::*;
     use crate::agent_context::AgentContext;
     use crate::{
+        branding::BrandingQuote,
         evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions},
         model::DeterministicModel,
         operator::{DeterministicOperatorModel, OperatorToolRuntime, ToolReceipt},
         scales::ScalesStore,
+        token_eye::{TokenBalanceTransport, TokenEyeError, U256},
     };
     use std::{
         path::Path,
         sync::{
             Mutex as StdMutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
 
@@ -1486,10 +1573,8 @@ mod tests {
         let operator = identity_and_purpose_response(PrincipalRole::Operator, None);
         assert_eq!(operator, public.to_ascii_uppercase());
 
-        let named = identity_and_purpose_response(
-            PrincipalRole::User,
-            Some("Cthulhu the Star-Entombed"),
-        );
+        let named =
+            identity_and_purpose_response(PrincipalRole::User, Some("Cthulhu the Star-Entombed"));
         assert!(named.starts_with("i am Cthulhu the Star-Entombed"));
     }
 
@@ -1676,6 +1761,48 @@ mod tests {
     struct PublicFundingControl;
 
     struct PublicStatusControl;
+
+    struct StaticBalanceTransport {
+        balance: U256,
+    }
+
+    #[async_trait::async_trait]
+    impl TokenBalanceTransport for StaticBalanceTransport {
+        async fn balance_of(
+            &self,
+            _token_contract: Address,
+            _holder: Address,
+        ) -> std::result::Result<U256, TokenEyeError> {
+            Ok(self.balance)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBrandingControl {
+        offers: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl AcolyteBrandingControl for RecordingBrandingControl {
+        async fn enqueue_default_offer(
+            &self,
+            _inbox_id: &str,
+            _authenticated_sender_address: &str,
+            _quote: BrandingQuote,
+        ) -> Result<bool> {
+            self.offers.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        async fn handle_public_message(
+            &self,
+            _inbox_id: &str,
+            _authenticated_sender_address: Option<&str>,
+            _text: &str,
+        ) -> Result<Option<String>> {
+            Ok(None)
+        }
+    }
 
     #[async_trait::async_trait]
     impl RegistrationOperatorControl for PublicFundingControl {
@@ -2152,6 +2279,140 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(contact.hopes.as_deref(), Some("to build a kinder network"));
+    }
+
+    #[tokio::test]
+    async fn natural_profile_controls_continue_through_branding_offer_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let control = Arc::new(RecordingBrandingControl::default());
+        let wallet = Address::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let mut blockchain = BlockchainConfig::default();
+        let token_contract = blockchain.token_contract.unwrap();
+        blockchain.xmtp_wallet = Some(wallet);
+        let token_eye = Arc::new(TokenEye::new(
+            token_contract,
+            Arc::new(StaticBalanceTransport {
+                balance: U256::from_u64(100_000),
+            }),
+            std::time::Duration::from_secs(60),
+        ));
+        let bot = configured_bot(
+            root.path(),
+            model.clone(),
+            OperatorStore::new(root.path(), "dev").unwrap(),
+            Arc::new(RecordingTools {
+                calls: StdMutex::new(Vec::new()),
+            }),
+        )
+        .with_token_observance(Some(token_eye), blockchain)
+        .with_branding_control(control.clone());
+        let inbox_id = "aabbcc";
+        let address = wallet.to_string();
+
+        for (sequence, text, acknowledgement) in [
+            (0, "my name is Edmund", "i'll call u Edmund"),
+            (1, "my hope is safer protocols", "tucked that hope"),
+            (
+                2,
+                "one thing i can offer is Rust review",
+                "something u may want to offer",
+            ),
+            (
+                3,
+                "one thing i need is design help",
+                "need u chose to share",
+            ),
+        ] {
+            let response = bot
+                .receive_authenticated_claimed_with_address(
+                    &format!("branding-contribution-{sequence}"),
+                    inbox_id,
+                    Some(&address),
+                    "1750000000000000000",
+                    text,
+                    PrincipalRole::User,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.contains(acknowledgement));
+            assert!(response.contains("checking a precise Acolyte Branding invitation"));
+        }
+
+        assert_eq!(control.offers.load(Ordering::SeqCst), 4);
+        assert!(model.messages.lock().unwrap().is_empty());
+        let contact = ContactStore::new(root.path())
+            .unwrap()
+            .load(inbox_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(contact.name.as_deref(), Some("Edmund"));
+        assert_eq!(contact.hopes.as_deref(), Some("safer protocols"));
+        assert_eq!(contact.resources.as_deref(), Some("Rust review"));
+        assert_eq!(contact.needs.as_deref(), Some("design help"));
+    }
+
+    #[tokio::test]
+    async fn a_missing_positive_treasury_quote_is_visible_to_the_acolyte() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Arc::new(RecordingBrandingControl::default());
+        let wallet = Address::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let mut blockchain = BlockchainConfig::default();
+        let token_contract = blockchain.token_contract.unwrap();
+        blockchain.xmtp_wallet = Some(wallet);
+        let token_eye = Arc::new(TokenEye::new(
+            token_contract,
+            Arc::new(StaticBalanceTransport {
+                balance: U256::ZERO,
+            }),
+            std::time::Duration::from_secs(60),
+        ));
+        let bot = public_bot(root.path())
+            .with_token_observance(Some(token_eye), blockchain)
+            .with_branding_control(control.clone());
+        let address = wallet.to_string();
+        let response = bot
+            .receive_authenticated_claimed_with_address(
+                "branding-no-treasury",
+                "aabbcc",
+                Some(&address),
+                "1750000000000000000",
+                "my name is Edmund",
+                PrincipalRole::User,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(response.contains("no Branding invitation was created"));
+        assert!(response.contains("restore Base RPC access or fund"));
+        assert_eq!(control.offers.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn all_natural_profile_phrasings_are_voluntary_contributions() {
+        for (text, expected) in [
+            ("call me Cordelia", AcolyteContributionKind::Name),
+            ("my name is Cordelia", AcolyteContributionKind::Name),
+            ("my dreams are stranger", AcolyteContributionKind::Hopes),
+            (
+                "one thing i can offer is tea",
+                AcolyteContributionKind::Resources,
+            ),
+            (
+                "one thing i need is biscuits",
+                AcolyteContributionKind::Needs,
+            ),
+        ] {
+            assert_eq!(
+                voluntary_contribution(text).map(|(_, kind, _)| kind),
+                Some(expected),
+                "{text}"
+            );
+        }
     }
 
     #[test]

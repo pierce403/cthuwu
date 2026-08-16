@@ -1,5 +1,9 @@
 import { Interface, getAddress, keccak256 } from "ethers";
-import type { AppConfig } from "../config";
+import {
+  CANONICAL_BRANDING_CONTRACT,
+  CANONICAL_BRANDING_RUNTIME_HASH,
+  type AppConfig,
+} from "../config";
 import type { StoredIdentity } from "../identity";
 import { fetchTentacleDirectory } from "../leaderboard-data";
 import { parseLeaderboardConfig } from "../leaderboard-config";
@@ -38,6 +42,14 @@ export type BrandingStatus = "Unminted" | "Active" | "Expired" | "Ineligible";
 
 export type TentacleAssignment =
   | {
+      source: "liveness-required";
+      address: string;
+      brandingStatus: "Unminted";
+      blockNumber: bigint;
+      blockHash: string;
+      notice: string;
+    }
+  | {
       source: "intro-unconfigured";
       address: string;
       notice: string;
@@ -56,6 +68,7 @@ export type TentacleAssignment =
       inboxId: string;
       agentId: string;
       wallet: string;
+      name: string;
       blockNumber: bigint;
       blockHash: string;
       notice: string;
@@ -66,6 +79,7 @@ export type TentacleAssignment =
       inboxId: string;
       agentId: string;
       wallet: string;
+      name: string;
       blockNumber: bigint;
       blockHash: string;
       notice: string;
@@ -76,6 +90,7 @@ export type TentacleAssignment =
       inboxId: string;
       agentId: string;
       wallet: string;
+      name: string;
       blockNumber: bigint;
       blockHash: string;
       notice: string;
@@ -95,11 +110,12 @@ export interface RpcClient {
 interface AssignmentOptions {
   rpc?: RpcClient;
   fetch?: typeof fetch;
+  hashCode?: (code: string) => string;
   discoverAnchor?: (wallet: string) => Promise<RotationCandidate[]>;
   discoverRotation?: () => Promise<RotationCandidate[]>;
 }
 
-interface RotationCandidate {
+export interface RotationCandidate {
   wallet: string;
   agentId: string;
   inboxId: string;
@@ -113,12 +129,17 @@ export async function resolveTentacleAssignment(
   options: AssignmentOptions = {},
 ): Promise<TentacleAssignment> {
   if (!config.brandingContract) {
-    if (config.tentacleAnchor) return resolveAnchoredTentacle(config, options);
+    if (config.tentacleAnchor) return resolveAnchoredTentacle(config, identity, options);
     return {
       source: "intro-unconfigured",
       address: config.botAddress,
       notice: "Branding routing is pending deployment; using the configured intro Tentacle",
     };
+  }
+  if (config.brandingContract !== CANONICAL_BRANDING_CONTRACT) {
+    throw new RegistryUnavailableError(
+      "Canonical Base routing state is unavailable: Branding is not the canonical deployment",
+    );
   }
   try {
     const rpc = options.rpc ?? createJsonRpcClient(config.baseRpcEndpoint, options.fetch ?? fetch);
@@ -132,7 +153,12 @@ export async function resolveTentacleAssignment(
       rpc.request("eth_getCode", [config.brandingContract, blockTag]),
       rpc.request("eth_getCode", [IDENTITY_REGISTRY, blockTag]),
     ]);
-    if (!isCode(brandingCode) || !isCode(registryCode)) {
+    if (
+      !isCode(brandingCode) ||
+      (options.hashCode ?? keccak256)(String(brandingCode)).toLowerCase() !==
+        CANONICAL_BRANDING_RUNTIME_HASH ||
+      !isCode(registryCode)
+    ) {
       throw new Error("canonical contract code is unavailable");
     }
     const [brandingResult, brandingChain, brandingRegistry, brandingUwu, brandingVersion] =
@@ -165,10 +191,21 @@ export async function resolveTentacleAssignment(
     if (status === "RegistryUnavailable") throw new Error("Branding reports RegistryUnavailable");
     if (status !== "Active") {
       if (config.tentacleAnchor) {
-        return await resolveAnchoredTentacle(config, options);
+        return await resolveAnchoredTentacle(config, identity, options);
       }
       if (status === "Unminted") {
-        return await resolveRotatedTentacle(config, identity, status, options, blockNumber, observedBlock);
+        if (config.rotationAnchor) {
+          return await resolveRotatedTentacle(config, identity, options);
+        }
+        await verifyUnchangedBlock(rpc, blockTag, observedBlock);
+        return {
+          source: "liveness-required",
+          address: config.botAddress,
+          brandingStatus: "Unminted",
+          blockNumber,
+          blockHash: observedBlock.hash,
+          notice: "Unminted Branding; checking the highest-ranked Tentacles for a live response",
+        };
       }
       await verifyUnchangedBlock(rpc, blockTag, observedBlock);
       return {
@@ -227,14 +264,15 @@ export async function resolveTentacleAssignment(
     ) {
       throw new Error("controller eligibility changed at the verified block");
     }
-    const inboxId = endpointFromAgentUri(String(uriResult[0]), agentId);
+    const profile = verifiedProfileFromAgentUri(String(uriResult[0]), agentId);
     await verifyUnchangedBlock(rpc, blockTag, observedBlock);
     return {
       source: "branding-active",
       address: wallet,
-      inboxId,
+      inboxId: profile.inboxId,
       agentId,
       wallet,
+      name: profile.name,
       blockNumber,
       blockHash: observedBlock.hash,
       notice: `Active Branding verified at Base block ${blockNumber}`,
@@ -252,57 +290,122 @@ export async function resolveTentacleAssignment(
 async function resolveRotatedTentacle(
   config: AppConfig,
   identity: StoredIdentity,
-  brandingStatus: Exclude<BrandingStatus, "Active">,
   options: AssignmentOptions,
-  blockNumber: bigint,
-  observedBlock: BlockHeader,
 ): Promise<TentacleAssignment> {
   const discover = options.discoverRotation ?? (() => discoverDirectoryCandidates(options));
-  const candidates = (await discover()).sort((left, right) => left.wallet.localeCompare(right.wallet));
-  if (candidates.length === 0) {
-    return {
-      source: "intro-fallback", address: config.botAddress, brandingStatus,
-      blockNumber, blockHash: observedBlock.hash,
-      notice: `${brandingStatus} Branding; no eligible rotation candidates, using the intro Tentacle`,
+  const target = canonicalAddress(config.rotationAnchor, "retained Tentacle");
+  const candidates = (await discover()).filter((candidate) =>
+    canonicalAddress(candidate.wallet, "retained Tentacle candidate") === target);
+  if (candidates.length !== 1) throw new Error("the retained live Tentacle is no longer uniquely discoverable");
+  return verifyLivenessCandidate(config, identity, candidates[0]!, options);
+}
+
+export async function verifyLivenessCandidate(
+  config: AppConfig,
+  identity: StoredIdentity,
+  candidate: RotationCandidate,
+  options: Pick<AssignmentOptions, "rpc" | "fetch" | "hashCode"> = {},
+): Promise<Extract<TentacleAssignment, { source: "rotation-verified" }>> {
+  try {
+    const rpc = options.rpc ?? createJsonRpcClient(config.baseRpcEndpoint, options.fetch ?? fetch);
+    if (quantity(await rpc.request("eth_chainId", []), "Base chain ID") !== BigInt(BASE_CHAIN_ID)) {
+      throw new Error("RPC returned the wrong chain");
+    }
+    const blockNumber = quantity(await rpc.request("eth_blockNumber", []), "Base block number");
+    const blockTag = `0x${blockNumber.toString(16)}`;
+    const observedBlock = block(await rpc.request("eth_getBlockByNumber", [blockTag, false]));
+    if (observedBlock.number !== blockNumber) throw new Error("RPC returned a mismatched Base block");
+    const brandingContract = config.brandingContract;
+    if (!brandingContract) throw new Error("the canonical Branding deployment is unavailable");
+    if (brandingContract !== CANONICAL_BRANDING_CONTRACT) {
+      throw new Error("Branding is not the canonical deployment");
+    }
+    const [brandingCode, registryCode, uwuCode] = await Promise.all([
+      rpc.request("eth_getCode", [brandingContract, blockTag]),
+      rpc.request("eth_getCode", [IDENTITY_REGISTRY, blockTag]),
+      rpc.request("eth_getCode", [UWU_CONTRACT, blockTag]),
+    ]);
+    if (!isCode(brandingCode) ||
+        (options.hashCode ?? keccak256)(String(brandingCode)).toLowerCase() !== CANONICAL_BRANDING_RUNTIME_HASH ||
+        !isCode(registryCode) || !isCode(uwuCode)) {
+      throw new Error("canonical contract code is unavailable or changed");
+    }
+    const [brandingResult, brandingChain, brandingRegistry, brandingUwu, brandingVersion,
+      version, walletResult, authorizedResult, allegianceResult, protocolResult, uriResult] =
+      await Promise.all([
+        contractCall(rpc, BRANDING_INTERFACE, brandingContract, "brandingOf", [identity.address], blockTag),
+        contractCall(rpc, BRANDING_INTERFACE, brandingContract, "BASE_CHAIN_ID", [], blockTag),
+        contractCall(rpc, BRANDING_INTERFACE, brandingContract, "IDENTITY_REGISTRY", [], blockTag),
+        contractCall(rpc, BRANDING_INTERFACE, brandingContract, "UWU", [], blockTag),
+        contractCall(rpc, BRANDING_INTERFACE, brandingContract, "REGISTRY_VERSION", [], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getVersion", [], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getAgentWallet", [candidate.agentId], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "isAuthorizedOrOwner", [candidate.wallet, candidate.agentId], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getMetadata", [candidate.agentId, "cthuwu.allegiance"], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "getMetadata", [candidate.agentId, "cthuwu.protocol"], blockTag),
+        contractCall(rpc, REGISTRY_INTERFACE, IDENTITY_REGISTRY, "tokenURI", [candidate.agentId], blockTag),
+      ]);
+    const branding = brandingResult[0] as unknown as {
+      tokenId: bigint; acolyte: string; owner: string; controllerAgentId: bigint;
+      referrer: string; declaredPrice: bigint; paidThrough: bigint;
+      pendingDeclaredPrice: bigint; pendingPriceActivation: bigint; status: bigint;
     };
+    const acolyte = canonicalAddress(identity.address, "StoredIdentity address");
+    const wallet = canonicalAddress(candidate.wallet, "live Tentacle wallet");
+    if (
+      brandingChain[0] !== BigInt(BASE_CHAIN_ID) ||
+      canonicalAddress(brandingRegistry[0], "Branding identity registry") !== IDENTITY_REGISTRY ||
+      canonicalAddress(brandingUwu[0], "Branding UWU") !== UWU_CONTRACT || brandingVersion[0] !== "2.0.0" ||
+      branding.tokenId !== BigInt(acolyte) || canonicalAddress(branding.acolyte, "Branding acolyte") !== acolyte ||
+      canonicalAddress(branding.owner, "Branding owner") !== ZERO_ADDRESS || branding.controllerAgentId !== 0n ||
+      canonicalAddress(branding.referrer, "Branding referrer") !== ZERO_ADDRESS || branding.declaredPrice !== 0n ||
+      branding.paidThrough !== 0n || branding.pendingDeclaredPrice !== 0n ||
+      branding.pendingPriceActivation !== 0n || branding.status !== 0n ||
+      version[0] !== "2.0.0" || canonicalAddress(walletResult[0], "live agentWallet") !== wallet ||
+      authorizedResult[0] !== true || String(allegianceResult[0]).toLowerCase() !== ALLEGIANCE_HEX ||
+      String(protocolResult[0]).toLowerCase() !== PROTOCOL_V1_HEX
+    ) throw new Error("the live Tentacle or Acolyte is no longer canonically eligible");
+    const profile = verifiedProfileFromAgentUri(String(uriResult[0]), candidate.agentId);
+    if (profile.inboxId !== candidate.inboxId) throw new Error("the live Tentacle endpoint changed");
+    await verifyUnchangedBlock(rpc, blockTag, observedBlock);
+    return {
+      source: "rotation-verified", address: wallet, wallet, agentId: candidate.agentId,
+      inboxId: profile.inboxId, name: profile.name, blockNumber, blockHash: observedBlock.hash,
+      notice: `Live ${candidate.agentId} Tentacle verified at Base block ${blockNumber}`,
+    };
+  } catch (error) {
+    if (error instanceof RegistryUnavailableError) throw error;
+    throw new RegistryUnavailableError(error instanceof Error
+      ? `Live Tentacle verification is unavailable: ${error.message}`
+      : undefined);
   }
-  const retained = config.rotationAnchor
-    ? candidates.find((candidate) => candidate.wallet === config.rotationAnchor)
-    : undefined;
-  const index = Number(BigInt(keccak256(identity.address)) % BigInt(candidates.length));
-  const selected = retained ?? candidates[index]!;
-  return {
-    source: "rotation-verified",
-    address: selected.wallet,
-    wallet: selected.wallet,
-    agentId: selected.agentId,
-    inboxId: selected.inboxId,
-    blockNumber: BigInt(selected.blockNumber),
-    blockHash: selected.blockHash,
-    notice: `${brandingStatus} Branding; using the validated Tentacle snapshot from Base block ${selected.blockNumber}`,
-  };
 }
 
 async function resolveAnchoredTentacle(
   config: AppConfig,
+  identity: StoredIdentity,
   options: AssignmentOptions,
 ): Promise<TentacleAssignment> {
   try {
     const wallet = canonicalAddress(config.tentacleAnchor, "t link target");
     if (wallet === ZERO_ADDRESS) throw new Error("t link target is zero");
-    const discover = options.discoverAnchor ?? (async (target: string) =>
-      (await discoverDirectoryCandidates(options)).filter((candidate) => candidate.wallet === target));
-    const candidates = await discover(wallet);
+    const discover = options.discoverAnchor ?? (async () => discoverDirectoryCandidates(options));
+    const candidates = (await discover(wallet)).filter((candidate) =>
+      canonicalAddress(candidate.wallet, "t link candidate") === wallet);
     if (candidates.length !== 1) {
       throw new Error(candidates.length === 0
         ? "no discoverable Cthuwu ERC-8004 identity belongs to the t address"
         : "the t address controls more than one Tentacle and is ambiguous");
     }
     const selected = candidates[0]!;
-    return { source: "anchor-verified", address: wallet, wallet, inboxId: selected.inboxId,
-      agentId: selected.agentId, blockNumber: BigInt(selected.blockNumber), blockHash: selected.blockHash,
-      notice: `Deep-linked Tentacle found in the validated Agent0 snapshot at Base block ${selected.blockNumber}` };
+    const verified = await verifyLivenessCandidate(config, identity, selected, options);
+    return {
+      ...verified,
+      source: "anchor-verified",
+      notice: `Deep-linked Tentacle canonically verified at Base block ${verified.blockNumber}`,
+    };
   } catch (error) {
+    if (error instanceof RegistryUnavailableError) throw error;
     throw new RegistryUnavailableError(error instanceof Error ? `Tentacle link could not be verified: ${error.message}` : undefined);
   }
 }
@@ -357,6 +460,13 @@ async function verifyUnchangedBlock(
 }
 
 export function endpointFromAgentUri(agentUri: string, agentId: string): string {
+  return verifiedProfileFromAgentUri(agentUri, agentId).inboxId;
+}
+
+function verifiedProfileFromAgentUri(
+  agentUri: string,
+  agentId: string,
+): { inboxId: string; name: string } {
   const profile = decodeDataJson(agentUri, MAX_AGENT_URI_BYTES, "controller registration profile");
   if (
     !isRecord(profile) ||
@@ -418,7 +528,31 @@ export function endpointFromAgentUri(agentUri: string, agentId: string): string 
   ) {
     throw new Error("controller CTHUWU manifest does not bind its canonical identity and endpoint");
   }
-  return endpoint.slice("xmtp://".length);
+  return {
+    inboxId: endpoint.slice("xmtp://".length),
+    name: verifiedProfileName(profile.name) ?? `Tentacle #${agentId}`,
+  };
+}
+
+function verifiedProfileName(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    new TextEncoder().encode(value).length > 128
+  ) return undefined;
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x061c ||
+      (code >= 0x200b && code <= 0x200f) ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2060 && code <= 0x206f) ||
+      code === 0xfeff
+    ) return undefined;
+  }
+  return value;
 }
 
 function decodeDataJson(value: string, maximumBytes: number, label: string): unknown {

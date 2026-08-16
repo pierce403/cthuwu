@@ -6,12 +6,20 @@ import {
   ChatControlService,
   FileChatStateStore,
   JoinCodec,
+  LivenessControlGate,
+  LivenessJoinCodec,
+  LivenessQueryCodec,
+  LivenessResponseCodec,
   TypingCodec,
   bootstrapGlobalGroup,
   classifyInboundMessage,
   dispatchPersonalText,
   isExactJoinContentType,
+  isExactLivenessJoinContentType,
+  isExactLivenessQueryContentType,
   isJoinControl,
+  isLivenessJoinControl,
+  isLivenessQueryControl,
   loadVerifiedRegistration,
   parseChatControlConfig,
   parseGlobalAdminInboxIds,
@@ -131,7 +139,14 @@ async function main(): Promise<void> {
       : { gatewayHost: process.env.XMTP_GATEWAY_HOST }),
     appVersion: "cthuwu-agent/0.1.0",
     loggingLevel: "Off" as LogLevel,
-    codecs: [new JoinCodec(), new AssignmentCodec(), new TypingCodec()],
+    codecs: [
+      new JoinCodec(),
+      new AssignmentCodec(),
+      new TypingCodec(),
+      new LivenessQueryCodec(),
+      new LivenessResponseCodec(),
+      new LivenessJoinCodec(),
+    ],
   });
 
   const groupDirectory: GroupDirectory = {
@@ -199,6 +214,8 @@ async function main(): Promise<void> {
   }
 
   let chatControl: ChatControlService | undefined;
+  const livenessGate = new LivenessControlGate();
+  let localTentacleAgentId: string | undefined;
   let chatRevalidateSeconds = 900;
   if (identity.environment === "production") {
     try {
@@ -208,6 +225,7 @@ async function main(): Promise<void> {
         identity.walletAddress,
         selfInboxId,
       );
+      localTentacleAgentId = localRegistration.agentId;
       const config = parseChatControlConfig(process.env, selfInboxId);
       chatRevalidateSeconds = config.assignmentRevalidateSeconds;
       chatControl = new ChatControlService({
@@ -229,6 +247,7 @@ async function main(): Promise<void> {
         config,
         selfInboxId,
         tentacleAgentId: localRegistration.agentId,
+        livenessGate,
         resolveInboxAddress: async (inboxId) =>
           resolveFreshSenderAddress(agent.client.preferences, inboxId),
       });
@@ -240,6 +259,7 @@ async function main(): Promise<void> {
 
   const assignmentCodec = new AssignmentCodec();
   const typingCodec = new TypingCodec();
+  const livenessResponseCodec = new LivenessResponseCodec();
   agent.use(async (context, next) => {
     const contentType = context.message.contentType;
     const disposition = classifyInboundMessage(context.isDm(), contentType);
@@ -248,14 +268,63 @@ async function main(): Promise<void> {
       return;
     }
     const isJoin = isExactJoinContentType(contentType);
-    // Both control types terminate here. They never enter text events, Rust, inference, contact
+    const isLivenessJoin = isExactLivenessJoinContentType(contentType);
+    const isLivenessQuery = isExactLivenessQueryContentType(contentType);
+    // Every control type terminates here. It never enters text events, Rust, inference, contact
     // memory, or ordinary history, even when malformed, forged, or delivered in a group.
-    if (!isJoin || !context.isDm() || chatControl === undefined) {
+    if (!context.isDm() || chatControl === undefined || localTentacleAgentId === undefined) {
       return;
     }
-    if (!isJoinControl(context.message.content)) {
+    if (isLivenessQuery) {
+      const query = context.message.content;
+      if (
+        !isLivenessQueryControl(query) ||
+        query.targetAgentId !== localTentacleAgentId ||
+        !livenessGate.admitQuery(context.message.senderInboxId, query)
+      ) {
+        return;
+      }
+      const senderAddress = await resolveFreshSenderAddress(
+        context.client.preferences,
+        context.message.senderInboxId,
+      ).catch(() => undefined);
+      if (
+        senderAddress === undefined ||
+        !livenessGate.issueGrant({
+          senderInboxId: context.message.senderInboxId,
+          senderAddress,
+          query,
+          tentacleAgentId: localTentacleAgentId,
+        })
+      ) {
+        return;
+      }
+      try {
+        await context.conversation.send(
+          livenessResponseCodec.encode({
+            type: "cthuwu.liveness-response.v1",
+            requestId: query.requestId,
+            environment: "production",
+            phrase: "fhtagn!",
+            tentacleAgentId: localTentacleAgentId,
+          }),
+          { shouldPush: false },
+        );
+      } catch {
+        livenessGate.revokeGrant(context.message.senderInboxId, query.requestId);
+      }
       return;
     }
+    if (!isJoin && !isLivenessJoin) {
+      return;
+    }
+    const join =
+      isJoin && isJoinControl(context.message.content)
+        ? context.message.content
+        : isLivenessJoin && isLivenessJoinControl(context.message.content)
+          ? context.message.content
+          : undefined;
+    if (join === undefined) return;
     const senderAddress = await resolveFreshSenderAddress(
       context.client.preferences,
       context.message.senderInboxId,
@@ -264,7 +333,7 @@ async function main(): Promise<void> {
       return;
     }
     const assignment = await chatControl.enroll({
-      join: context.message.content,
+      join,
       senderInboxId: context.message.senderInboxId,
       senderAddress,
       directConversation: context.conversation,

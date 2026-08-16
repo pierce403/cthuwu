@@ -1,23 +1,31 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-12
+Last reviewed: 2026-08-16
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
   Agent0 discovery plus same-block canonical ERC-8004 and XMTP endpoint verification; an existing
   active Branding wins. The first valid `r` is pinned per browser identity and is surfaced in the
-  Branding invitation, but the invitation remains only an XMTP receipt until exact EIP-712 consent
-  and a confirmed mint are implemented.
+  Branding review. A v2 offer becomes authority only after exact EIP-712 consent and canonical
+  receipt/state verification; ordinary XMTP text is never mint consent.
 - Leaderboard wallet addresses are Direct-chat links. The root UI copies social recruitment URLs
   using the currently assigned Tentacle for `t` and the local browser identity for `r`.
-- New Unminted browser identities without explicit `#t=` use a stable address-hash rotation across
-  eligible single-agent Tentacle wallets from the validated leaderboard cache or a complete pinned,
-  indexing-error-free Agent0 directory and retain the choice locally. After Branding proves Unminted, candidate selection makes
-  no redundant live Base calls. Active Branding
-  remains absolute. This is eligibility, not runtime liveness; planned shutdown requires confirmed
-  `/registry-allegiance off` until authenticated live heartbeats ship.
-- Explicit `#t=` links now select the sole eligible identity from that same complete Agent0 directory
-  instead of repeating six public Base registry reads. XMTP still binds the inbox to the wallet.
+- A first Unminted browser connection without explicit `#t=` or a retained eligible route races
+  non-push `fhtagn?` liveness controls against at most the top five funded single-agent Tentacles in
+  the completely validated leaderboard snapshot (refreshing one complete snapshot when absent).
+  The first exact authenticated response wins only after fresh same-block Branding, registry,
+  wallet, allegiance, protocol, registration endpoint, and bounded current profile-name verification.
+  The browser persists the successful handoff, displays that freshly verified name (or `Tentacle
+  #<agentId>`), and binds non-intro enrollment to
+  a one-use short-lived liveness grant. A process does not repeat the race on periodic/resume checks.
+  No responder leaves Direct explicitly unavailable rather than selecting the unprobed intro
+  Tentacle; deliberate Retry opens a fresh workspace and one new bounded race. Active Branding
+  remains absolute.
+- Explicit `#t=` links select the sole eligible identity from that same complete Agent0 directory,
+  then require fresh same-block canonical Base verification before Direct opens. They skip the
+  liveness probe, while XMTP still binds the verified inbox to the verified wallet. A fresh
+  Unminted explicit route is Direct-only and visibly policy-blocks Acolytes/Global rather than
+  sending an ordinary join that the non-intro Tentacle cannot authorize.
 
 ## Product
 
@@ -122,10 +130,11 @@ Last reviewed: 2026-08-12
   normal admission and persists current Scales economics under that activation. No operator ACL is
   needed for ordinary conversation; operators remain optional and privileged.
 - The browser's canonical intro Tentacle is registered Base ERC-8004 agent 61608 and is hard-coded
-  to its XMTP wallet `0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90`. `NotConfigured`, unminted, expired, and positively
-  ineligible Branding states preserve that continuity path. After a Branding deployment is
-  explicitly configured, registry/endpoint unavailability freezes assignment and exposes retry;
-  it never becomes another intro fallback.
+  to its XMTP wallet `0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90`. Unminted, expired, and positively ineligible
+  Branding states preserve that continuity path. Production defaults to the pinned canonical
+  Branding deployment; registry/endpoint unavailability freezes assignment and exposes retry, and
+  never becomes another intro fallback. `NotConfigured` is retained only for injected compatibility
+  configurations.
 - The production-origin-restricted Agent0 Graph key resolves the Base subgraph without indexing
   errors. Agent 61608 appears by ID with its wallet and registration profile, but the leaderboard
   intentionally excludes it until its exact allegiance/protocol discovery metadata is indexed.
@@ -602,9 +611,13 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   as current, and owner avatar URIs and traits remain hostile text rather than auto-loaded media.
 - `Acolyte Name` is the exact reserved V1 owner-trait key. `/acolytes/` compares it with the
   address-derived expected card label and exposes match/missing/mismatch without trusting owner
-  metadata as identity; Branding acceptance carries the deterministic local label. The immutable V1 contract
-  already includes that trait in `tokenURI`, but current code has no EIP-712 mint/write executor;
-  do not claim a live NFT name write until mint plus `setCustomTrait` receipts are confirmed.
+  metadata as identity. The browser derives the deterministic label, but the Tentacle independently
+  rederives it. Exact v2 XMTP controls carry a canonical offer, EIP-712 consent, and staged receipt;
+  the narrow sidecar executor confirms mint and then reconciles `setCustomTrait`. A local/browser
+  mint/name completion still requires independent canonical consumed nonce, immutable mint tuple,
+  signed price echo, and trait readback. Mutable current price and lifecycle status do not invalidate
+  a delayed repair; a separate fresh `Active` read remains mandatory for routing. A funded live
+  production exercise remains open.
 - The zero-argument constructor binds the canonical registry and UWU constants, rejects non-`8453`
   chains, and verifies registry `2.0.0` plus UWU `18` decimals. Solidity is pinned to `0.8.28`.
 - The exact controller agent ID is stored because several ERC-8004 agents may share one wallet.
@@ -620,6 +633,14 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   do not broaden that fact into a claim that external registry governance is powerless.
 - EIP-712 acolyte consent binds the exact minter/controller, immutable referrer, positive initial
   price, one-use nonce, and deadline. `SignatureChecker` supports EOAs and ERC-1271 subjects.
+- Browser consent is a two-stage canonical Base review and signature. It validates the deployed
+  runtime, exact contract digest, nonce, quote/upkeep, minter/controller/referrer, and deadline at a
+  pinned block, then rechecks the original hash and a fresh head after the wallet prompt. Pending
+  consent is recovered from Direct history rather than persisting signatures in `localStorage`.
+- The sidecar exposes only `branding_inspect` and `complete_branding`. It shares one nonce journal
+  with ERC-8004 registration writes and permits only exact UWU approval, canonical `mintBranding`,
+  and exact deterministic-name trait calldata. Funding shortfalls report Base ETH and UWU targets;
+  a lost response or restart rereads canonical state and resumes without duplicate mint.
 - Weekly upkeep is `ceil(price * 10 / 10_000)` UWU; floor-rounded 10% goes directly to the
   immutable referrer and the remainder directly to the acolyte.
   Payment adds seven days from `max(paidThrough, now)` and opens only when at most seven days
@@ -655,10 +676,11 @@ See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
   match evidence accompanies `contracts/deployments/base-mainnet.json`.
 - The in-progress frontend assignment path reads the actual browser participant address, accepts
   only a positively active Branding, resolves the exact controller's current ERC-8004 production
-  XMTP endpoint, and verifies all routing inputs at one explicit block. Unminted/expired/positively
-  ineligible subjects use the intro Tentacle; configured registry or endpoint unavailability freezes
-  Branding routing. Absence of an explicitly configured deployment is `NotConfigured` and preserves
-  intro continuity.
+  XMTP endpoint, and verifies all routing inputs at one explicit block. A first Unminted connection
+  can select the first live, freshly verified top-ranked Tentacle through the bounded liveness
+  controls; expired/positively ineligible subjects use the intro Tentacle. Configured registry or
+  endpoint unavailability freezes Branding routing. Production always selects the pinned canonical
+  deployment; `NotConfigured` is retained only for injected compatibility configurations.
 - Agent0 plus same-block canonical Base reads remains the public indexing/verification architecture.
   Branding does not resurrect a custom subgraph or add a central router. Contract deployment is
   complete; the live production three-channel XMTP gate remains incomplete.
@@ -669,6 +691,9 @@ The channel configuration names are `VITE_CTHUWU_BASE_RPC_ENDPOINT`,
 `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS`. Browser refresh defaults to 600000 ms and is bounded to
 60000–3600000; the independent Tentacle membership sweep defaults to 900 seconds and is bounded to
 60–86400. No implicit contract, Global group, or admin set may be inferred when absent.
+The checked-in browser Base default is the public Infura endpoint supplied for this static app;
+treat its project ID as public, restrict it by origin/product at the provider, monitor it, and rotate
+it if abused.
 
 See [Acolyte Branding](docs/acolyte-branding.md) and
 [Acolyte XMTP channels](docs/acolyte-channels.md).

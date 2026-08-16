@@ -23,6 +23,24 @@ export const TYPING_CONTENT_TYPE = {
   versionMajor: 1,
   versionMinor: 0,
 } as const satisfies ContentTypeId;
+export const LIVENESS_QUERY_CONTENT_TYPE = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-query",
+  versionMajor: 1,
+  versionMinor: 0,
+} as const satisfies ContentTypeId;
+export const LIVENESS_RESPONSE_CONTENT_TYPE = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-response",
+  versionMajor: 1,
+  versionMinor: 0,
+} as const satisfies ContentTypeId;
+export const LIVENESS_JOIN_CONTENT_TYPE = {
+  authorityId: "cthuwu.app",
+  typeId: "liveness-join",
+  versionMajor: 1,
+  versionMinor: 0,
+} as const satisfies ContentTypeId;
 const HEX_32 = /^[0-9a-f]{32}$/u;
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const DECIMAL = /^(0|[1-9][0-9]{0,77})$/u;
@@ -63,12 +81,69 @@ export interface TypingControl {
   expiresAtNs: string;
 }
 
-export type ControlMessage = JoinControl | AssignmentControl;
+export interface LivenessQueryControl {
+  type: "cthuwu.liveness-query.v1";
+  requestId: string;
+  environment: "production";
+  phrase: "fhtagn?";
+  expiresAtNs: string;
+  targetAgentId: string;
+}
+
+export interface LivenessResponseControl {
+  type: "cthuwu.liveness-response.v1";
+  requestId: string;
+  environment: "production";
+  phrase: "fhtagn!";
+  tentacleAgentId: string;
+}
+
+export interface LivenessJoinControl {
+  type: "cthuwu.liveness-join.v1";
+  requestId: string;
+  environment: "production";
+  livenessRequestId: string;
+}
+
+export type ControlMessage = JoinControl | AssignmentControl | LivenessQueryControl | LivenessResponseControl | LivenessJoinControl;
 export const INVALID_CONTROL = Object.freeze({ invalidControl: true });
 
 export function createJoinControl(requestId = randomRequestId()): JoinControl {
   if (!HEX_32.test(requestId)) throw new Error("join request ID is invalid");
   return { type: "cthuwu.join.v1", requestId, environment: "production" };
+}
+
+export function createLivenessQueryControl(
+  targetAgentId: string,
+  expiresAtNs: string,
+  requestId = randomRequestId(),
+): LivenessQueryControl {
+  const value = {
+    type: "cthuwu.liveness-query.v1",
+    requestId,
+    environment: "production",
+    phrase: "fhtagn?",
+    expiresAtNs,
+    targetAgentId,
+  } as const;
+  const parsed = parseLivenessQuery(value);
+  if (!parsed) throw new Error("liveness query does not match its exact v1 schema");
+  return parsed;
+}
+
+export function createLivenessJoinControl(
+  livenessRequestId: string,
+  requestId = randomRequestId(),
+): LivenessJoinControl {
+  const value = {
+    type: "cthuwu.liveness-join.v1",
+    requestId,
+    environment: "production",
+    livenessRequestId,
+  } as const;
+  const parsed = parseLivenessJoin(value);
+  if (!parsed) throw new Error("liveness join does not match its exact v1 schema");
+  return parsed;
 }
 
 export function isJoinControl(value: unknown): value is JoinControl {
@@ -86,10 +161,37 @@ export const typingCodec: ContentCodec<unknown> = createCodec(
   TYPING_CONTENT_TYPE,
   (value) => parseTyping(value),
 );
-export const CONTROL_CODECS = [joinCodec, assignmentCodec, typingCodec] as const;
+export const livenessQueryCodec: ContentCodec<unknown> = createCodec(
+  LIVENESS_QUERY_CONTENT_TYPE,
+  (value) => parseLivenessQuery(value),
+);
+export const livenessResponseCodec: ContentCodec<unknown> = createCodec(
+  LIVENESS_RESPONSE_CONTENT_TYPE,
+  (value) => parseLivenessResponse(value),
+);
+export const livenessJoinCodec: ContentCodec<unknown> = createCodec(
+  LIVENESS_JOIN_CONTENT_TYPE,
+  (value) => parseLivenessJoin(value),
+);
+export const CONTROL_CODECS = [
+  joinCodec,
+  assignmentCodec,
+  typingCodec,
+  livenessQueryCodec,
+  livenessResponseCodec,
+  livenessJoinCodec,
+] as const;
 
 export function encodeJoinControl(message: JoinControl): EncodedContent {
   return joinCodec.encode(message);
+}
+
+export function encodeLivenessQueryControl(message: LivenessQueryControl): EncodedContent {
+  return livenessQueryCodec.encode(message);
+}
+
+export function encodeLivenessJoinControl(message: LivenessJoinControl): EncodedContent {
+  return livenessJoinCodec.encode(message);
 }
 
 export function isJoinContentType(value: ContentTypeId | undefined): boolean {
@@ -101,7 +203,9 @@ export function isAssignmentContentType(value: ContentTypeId | undefined): boole
 }
 
 export function isControlContentType(value: ContentTypeId | undefined): boolean {
-  return isJoinContentType(value) || isAssignmentContentType(value) || isTypingContentType(value);
+  return isJoinContentType(value) || isAssignmentContentType(value) || isTypingContentType(value) ||
+    isLivenessQueryContentType(value) || isLivenessResponseContentType(value) ||
+    isLivenessJoinContentType(value);
 }
 
 export function isTypingContentType(value: ContentTypeId | undefined): boolean {
@@ -110,6 +214,22 @@ export function isTypingContentType(value: ContentTypeId | undefined): boolean {
 
 export function isTypingControl(value: unknown): value is TypingControl {
   return isRecord(value) && parseTyping(value) !== undefined;
+}
+
+export function isLivenessQueryContentType(value: ContentTypeId | undefined): boolean {
+  return exactContentType(value, LIVENESS_QUERY_CONTENT_TYPE);
+}
+
+export function isLivenessResponseContentType(value: ContentTypeId | undefined): boolean {
+  return exactContentType(value, LIVENESS_RESPONSE_CONTENT_TYPE);
+}
+
+export function isLivenessJoinContentType(value: ContentTypeId | undefined): boolean {
+  return exactContentType(value, LIVENESS_JOIN_CONTENT_TYPE);
+}
+
+export function isLivenessResponseControl(value: unknown): value is LivenessResponseControl {
+  return isRecord(value) && parseLivenessResponse(value) !== undefined;
 }
 
 function parseJoin(value: Record<string, unknown>): JoinControl | undefined {
@@ -179,6 +299,45 @@ function parseTyping(value: Record<string, unknown>): TypingControl | undefined 
     !/^[1-9][0-9]{0,19}$/u.test(value.expiresAtNs)
   ) return undefined;
   return { type: "cthuwu.typing.v1", active: value.active, expiresAtNs: value.expiresAtNs };
+}
+
+function parseLivenessQuery(value: Record<string, unknown>): LivenessQueryControl | undefined {
+  if (
+    !hasExactKeys(value, ["environment", "expiresAtNs", "phrase", "requestId", "targetAgentId", "type"]) ||
+    value.type !== "cthuwu.liveness-query.v1" || value.environment !== "production" ||
+    value.phrase !== "fhtagn?" || !isRequestId(value.requestId) ||
+    !isPositiveUint64(value.expiresAtNs) || !isDecimal(value.targetAgentId)
+  ) return undefined;
+  return {
+    type: "cthuwu.liveness-query.v1", requestId: value.requestId,
+    environment: "production", phrase: "fhtagn?", expiresAtNs: value.expiresAtNs,
+    targetAgentId: value.targetAgentId,
+  };
+}
+
+function parseLivenessResponse(value: Record<string, unknown>): LivenessResponseControl | undefined {
+  if (
+    !hasExactKeys(value, ["environment", "phrase", "requestId", "tentacleAgentId", "type"]) ||
+    value.type !== "cthuwu.liveness-response.v1" || value.environment !== "production" ||
+    value.phrase !== "fhtagn!" || !isRequestId(value.requestId) ||
+    !isDecimal(value.tentacleAgentId)
+  ) return undefined;
+  return {
+    type: "cthuwu.liveness-response.v1", requestId: value.requestId,
+    environment: "production", phrase: "fhtagn!", tentacleAgentId: value.tentacleAgentId,
+  };
+}
+
+function parseLivenessJoin(value: Record<string, unknown>): LivenessJoinControl | undefined {
+  if (
+    !hasExactKeys(value, ["environment", "livenessRequestId", "requestId", "type"]) ||
+    value.type !== "cthuwu.liveness-join.v1" || value.environment !== "production" ||
+    !isRequestId(value.requestId) || !isRequestId(value.livenessRequestId)
+  ) return undefined;
+  return {
+    type: "cthuwu.liveness-join.v1", requestId: value.requestId,
+    environment: "production", livenessRequestId: value.livenessRequestId,
+  };
 }
 
 function createCodec<T extends ControlMessage | TypingControl>(
@@ -285,6 +444,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRequestId(value: unknown): value is string {
   return typeof value === "string" && HEX_32.test(value);
+}
+
+function isPositiveUint64(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9][0-9]{0,19}$/u.test(value) &&
+    BigInt(value) <= 18_446_744_073_709_551_615n;
 }
 
 export function isHex64(value: unknown): value is string {

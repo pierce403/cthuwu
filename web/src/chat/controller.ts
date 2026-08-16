@@ -1,7 +1,20 @@
 import type { AppConfig } from "../config";
 import type { StoredIdentity } from "../identity";
-import { ACOLYTE_NAME_TRAIT, acolyteName } from "../acolyte-name";
+import { acolyteName } from "../acolyte-name";
 import { recruitmentUrl } from "../onboarding-links";
+import {
+  consentMatchesOffer,
+  encodeBrandingDecline,
+  encodeBrandingRequest,
+  parseBrandingMessage,
+  reviewBrandingOffer,
+  signBrandingOffer,
+  verifyBrandingReceipt,
+  type BrandingConsent,
+  type BrandingOffer,
+  type BrandingReceipt,
+  type BrandingReview,
+} from "../branding-consent";
 import { createXmtpWorkspace } from "./xmtp-workspace";
 import {
   CHAT_CHANNELS,
@@ -33,6 +46,10 @@ interface ControllerDependencies {
   createWorkspace?: typeof createXmtpWorkspace;
   brandingOffers?: boolean;
   surface?: "public" | "operator";
+  reviewBrandingOffer?: typeof reviewBrandingOffer;
+  signBrandingOffer?: typeof signBrandingOffer;
+  verifyBrandingReceipt?: typeof verifyBrandingReceipt;
+  nowSeconds?: () => bigint;
 }
 
 interface ChatElements {
@@ -55,6 +72,7 @@ interface ChatElements {
   badges: Record<ChatChannel, HTMLElement>;
   activity: HTMLElement;
   rewardStatus: HTMLElement;
+  brandingReview: HTMLButtonElement;
   copyReferral: HTMLButtonElement;
   referralStatus: HTMLElement;
   brandingDialog: HTMLDialogElement;
@@ -62,11 +80,18 @@ interface ChatElements {
   brandingPrice: HTMLElement;
   brandingUpkeep: HTMLElement;
   brandingReferrer: HTMLElement;
+  brandingContract: HTMLElement;
+  brandingMinter: HTMLElement;
+  brandingAgent: HTMLElement;
+  brandingBasis: HTMLElement;
+  brandingNonce: HTMLElement;
+  brandingDeadline: HTMLElement;
+  brandingStatus: HTMLElement;
   brandingAccept: HTMLButtonElement;
   brandingDecline: HTMLButtonElement;
 }
 
-type BrandingOffer = { messageId: string; price: bigint; upkeep: bigint };
+type BrandingStage = "offer" | "checking" | "review" | "signing" | "pending" | "complete" | "error";
 
 export function initializeChatController(
   config: AppConfig,
@@ -83,11 +108,22 @@ export function initializeChatController(
   let sending = false;
   let loadingEarlier = false;
   let currentBrandingOffer: BrandingOffer | undefined;
+  let currentBrandingConsent: BrandingConsent | undefined;
+  let currentBrandingReceipt: BrandingReceipt | undefined;
+  let currentBrandingReview: BrandingReview | undefined;
+  let brandingStage: BrandingStage = "offer";
+  let brandingError: string | undefined;
+  let brandingBusy = false;
+  const requestedReplacementOffers = new Set<string>();
+  const verifiedReceiptBindings = new Set<string>();
+  const verifyingReceiptBindings = new Set<string>();
+  const failedReceiptBindings = new Map<string, string>();
   const localAcolyteName = acolyteName(identity.address);
   const operatorSurface = dependencies.surface === "operator";
   const operatorTarget = `Target Tentacle · ${shortId(config.botAddress)}`;
   const activeChannel = (snapshot: WorkspaceSnapshot): ChatChannel =>
     operatorSurface ? "direct" : snapshot.activeChannel;
+  const nowSeconds = dependencies.nowSeconds ?? (() => BigInt(Math.floor(Date.now() / 1000)));
 
   const updateComposerControls = (): void => {
     if (!latest) return;
@@ -153,6 +189,11 @@ export function initializeChatController(
     } else {
       elements.loadEarlier.hidden = true;
     }
+    let latestOffer: BrandingOffer | undefined;
+    let latestConsent: BrandingConsent | undefined;
+    let latestReceipt: BrandingReceipt | undefined;
+    let latestDeclinedOfferId: string | undefined;
+    let latestRequest: { referrer: string; name: string } | undefined;
     for (const message of channel.messages) {
       const bubble = document.createElement("article");
       bubble.className = `message ${message.mine ? "mine" : "theirs"}`;
@@ -171,23 +212,50 @@ export function initializeChatController(
       });
       // Operator/tool output is literal text. Public UI markers have no control meaning here and
       // must never be removed from an auditable privileged transcript.
+      const branding = operatorSurface || channelId !== "direct"
+        ? { text: message.text }
+        : parseBrandingMessage(message.text, message.mine ? "mine" : "theirs");
       const control = operatorSurface
         ? { text: message.text }
-        : parseTentacleUi(message.id, message.text, message.mine, channelId);
+        : parseTentacleUi(branding.text, message.mine, channelId);
       bubble.append(sender, document.createTextNode(control.text), time);
-      elements.messages.append(bubble);
+      // Exact Branding controls are transport state, not chat prose. Keep an otherwise empty
+      // control message out of the transcript while preserving malformed, duplicated, misplaced,
+      // or wrong-direction markers literally.
+      if (control.text.length > 0 || !branding.control) elements.messages.append(bubble);
       if (control.reward) {
         elements.activity.hidden = false;
         elements.rewardStatus.textContent = control.reward.status === "confirmed"
           ? `${control.reward.amount.toLocaleString()} UWU reward confirmed on Base`
           : `${control.reward.amount.toLocaleString()} UWU reward queued · awaiting confirmed Base transfer`;
       }
-      if (
-        dependencies.brandingOffers !== false &&
-        control.branding &&
-        !brandingDecision(control.branding.messageId)
-      ) {
-        currentBrandingOffer = control.branding;
+      if (dependencies.brandingOffers !== false && branding.control) {
+        switch (branding.control.type) {
+          case "offer":
+            if (latestOffer?.marker !== branding.control.marker) {
+              latestConsent = undefined;
+              latestReceipt = undefined;
+              latestDeclinedOfferId = undefined;
+            }
+            latestOffer = branding.control;
+            break;
+          case "consent":
+            if (latestOffer && consentMatchesOffer(branding.control, latestOffer)) {
+              latestConsent = branding.control;
+            }
+            break;
+          case "receipt":
+            if (latestOffer && branding.control.offerId === latestOffer.offerId) {
+              latestReceipt = branding.control;
+            }
+            break;
+          case "decline":
+            latestDeclinedOfferId = branding.control.offerId;
+            break;
+          case "request":
+            latestRequest = branding.control;
+            break;
+        }
       }
     }
     if (channel.typing) {
@@ -228,20 +296,16 @@ export function initializeChatController(
     }
 
     updateComposerControls();
-    if (!operatorSurface && currentBrandingOffer && !elements.brandingDialog.hasAttribute("open")) {
-      elements.brandingPrice.textContent = `${currentBrandingOffer.price.toLocaleString()} base units`;
-      elements.brandingUpkeep.textContent = `${currentBrandingOffer.upkeep.toLocaleString()} base units`;
-      elements.brandingReferrer.textContent = config.referrer ?? "not supplied";
-      elements.brandingName.textContent = localAcolyteName;
-      elements.brandingDialog.hidden = false;
-      elements.brandingDialog.setAttribute("open", "");
+    if (!operatorSurface && dependencies.brandingOffers !== false) {
+      reconcileBranding(latestOffer, latestConsent, latestReceipt, latestDeclinedOfferId, latestRequest);
     }
     elements.retention.hidden = false;
     elements.retention.textContent = channel.retentionVerified
       ? "Messages disappear from supporting clients after 14 days."
       : "Composer locked until the 14-day disappearing-message policy is verified.";
     const assignmentRetryable = snapshot.assignmentState === "registry-unavailable" ||
-      snapshot.assignmentState === "direct-verification-unavailable";
+      snapshot.assignmentState === "direct-verification-unavailable" ||
+      snapshot.assignmentState === "liveness-unavailable";
     elements.retry.hidden = snapshot.connected && !assignmentRetryable &&
       channel.status !== "error" && channel.status !== "policy-blocked";
   };
@@ -323,7 +387,8 @@ export function initializeChatController(
   });
   elements.retry.addEventListener("click", () => {
     setComposerError();
-    void (workspace ? workspace.revalidateAssignment("retry") : connect(true))
+    const reconnect = latest?.assignmentState === "liveness-unavailable";
+    void (workspace && !reconnect ? workspace.revalidateAssignment("retry") : connect(true))
       .catch((error) => setComposerError(publicError(error)));
   });
   elements.input.addEventListener("input", () => {
@@ -354,22 +419,11 @@ export function initializeChatController(
     });
   });
 
-  const answerBrandingOffer = (accepted: boolean): void => {
-    const offer = currentBrandingOffer;
-    if (!offer || !workspace) return;
-    localStorage.setItem(`cthuwu:branding-offer:v1:${offer.messageId}`, accepted ? "accepted" : "declined");
-    elements.brandingDialog.removeAttribute("open");
-    elements.brandingDialog.hidden = true;
-    currentBrandingOffer = undefined;
-    void workspace.send(
-      "direct",
-      accepted
-        ? `I accept the Acolyte Branding offer shown in the Cthuwu app. My generated Acolyte name is ${localAcolyteName}; after minting, set the NFT custom trait "${ACOLYTE_NAME_TRAIT}" to exactly "${localAcolyteName}" and correct any mismatch.${config.referrer ? ` Use referrer ${config.referrer} in the exact mint consent.` : ""}`
-        : "I decline the Acolyte Branding offer for now.",
-    ).catch((error) => setComposerError(publicError(error)));
-  };
-  elements.brandingAccept.addEventListener("click", () => answerBrandingOffer(true));
-  elements.brandingDecline.addEventListener("click", () => answerBrandingOffer(false));
+  elements.brandingAccept.addEventListener("click", () => void advanceBranding());
+  elements.brandingDecline.addEventListener("click", () => void declineBranding());
+  elements.brandingReview.addEventListener("click", () => {
+    if (!operatorSurface && currentBrandingOffer) renderBrandingDialog(true);
+  });
   elements.copyReferral.addEventListener("click", () => {
     const target = latest?.assignedTentacleAddress;
     if (!target) return;
@@ -419,6 +473,241 @@ export function initializeChatController(
     elements.error.textContent = message ?? "";
     elements.input.setAttribute("aria-invalid", String(Boolean(message)));
   }
+
+  function reconcileBranding(
+    offer: BrandingOffer | undefined,
+    consent: BrandingConsent | undefined,
+    receipt: BrandingReceipt | undefined,
+    declinedOfferId: string | undefined,
+    request: { referrer: string; name: string } | undefined,
+  ): void {
+    if (!offer || offer.acolyte !== identity.address ||
+        declinedOfferId === offer.offerId || brandingDecision(offer.offerId) === "declined") {
+      if (currentBrandingOffer?.offerId === offer?.offerId) closeBrandingDialog();
+      elements.brandingReview.hidden = true;
+      return;
+    }
+
+    const pinnedReferrer = config.referrer?.toLowerCase();
+    if (pinnedReferrer && offer.referrer !== pinnedReferrer) {
+      if (
+        workspace && !requestedReplacementOffers.has(offer.offerId) &&
+        !(request?.referrer === pinnedReferrer && request.name === localAcolyteName)
+      ) {
+        requestedReplacementOffers.add(offer.offerId);
+        void workspace.send("direct", encodeBrandingRequest(pinnedReferrer, localAcolyteName))
+          .catch((error) => setComposerError(publicError(error)));
+      }
+      elements.brandingReview.hidden = true;
+      return;
+    }
+
+    const changedOffer = currentBrandingOffer?.marker !== offer.marker;
+    currentBrandingOffer = offer;
+    currentBrandingConsent = consent;
+    currentBrandingReceipt = receipt;
+    if (changedOffer) {
+      currentBrandingReview = undefined;
+      brandingError = undefined;
+      brandingStage = consent ? "pending" : "offer";
+    } else if (consent && brandingStage !== "complete") {
+      brandingStage = "pending";
+    }
+
+    if (receipt) {
+      const verificationKey = receiptVerificationKey(offer, receipt);
+      if (verifiedReceiptBindings.has(verificationKey)) {
+        brandingStage = "complete";
+      } else if (!verifyingReceiptBindings.has(verificationKey) && !failedReceiptBindings.has(verificationKey)) {
+        void verifyReceipt(offer, receipt);
+      } else if (failedReceiptBindings.has(verificationKey)) {
+        brandingStage = "error";
+        brandingError = `Receipt verification failed: ${failedReceiptBindings.get(verificationKey)}`;
+      }
+    }
+    elements.activity.hidden = false;
+    elements.brandingReview.hidden = false;
+    renderBrandingDialog(changedOffer);
+  }
+
+  function renderBrandingDialog(present = false): void {
+    const offer = currentBrandingOffer;
+    if (!offer) return;
+    elements.brandingName.textContent = offer.name;
+    elements.brandingPrice.textContent = formatUwu(offer.initialDeclaredPrice);
+    elements.brandingUpkeep.textContent = formatUwu(offer.firstWeekUpkeep);
+    elements.brandingReferrer.textContent = offer.referrer;
+    elements.brandingContract.textContent = offer.contract;
+    elements.brandingMinter.textContent = offer.minter;
+    elements.brandingAgent.textContent = offer.controllerAgentId.toString();
+    elements.brandingBasis.textContent = `${formatBasis(offer.basisPoints)} of the verified ${formatUwu(offer.treasury)} treasury`;
+    elements.brandingNonce.textContent = offer.nonce.toString();
+    elements.brandingDeadline.textContent = unixSecondsLabel(offer.deadline);
+    elements.brandingStatus.textContent = brandingError ?? brandingStageCopy(brandingStage);
+    elements.brandingStatus.classList.toggle("error", brandingStage === "error");
+    elements.brandingReview.textContent = brandingActivityCopy(brandingStage);
+    elements.brandingAccept.disabled = brandingBusy || brandingStage === "checking" || brandingStage === "signing";
+    elements.brandingDecline.disabled = brandingBusy || brandingStage === "complete";
+    elements.brandingDecline.hidden = brandingStage === "complete";
+    elements.brandingAccept.textContent = brandingStage === "review"
+      ? "sign exact consent"
+      : brandingStage === "pending"
+        ? (offer.deadline >= nowSeconds() + 1n ? "resend exact consent" : "request fresh offer")
+        : brandingStage === "complete" ? "done"
+          : brandingStage === "error" && currentBrandingReceipt
+            ? "retry receipt verification"
+            : brandingStage === "error" ? "review again" : "review exact consent";
+    elements.brandingDialog.hidden = false;
+    if (present && !elements.brandingDialog.open) {
+      if (typeof elements.brandingDialog.showModal === "function") {
+        elements.brandingDialog.showModal();
+      } else {
+        // JSDOM and older test DOMs do not implement the dialog top-layer API.
+        elements.brandingDialog.setAttribute("open", "");
+      }
+    }
+  }
+
+  async function advanceBranding(): Promise<void> {
+    const offer = currentBrandingOffer;
+    if (!offer || !workspace || brandingBusy) return;
+    if (brandingStage === "complete") {
+      closeBrandingDialog();
+      return;
+    }
+    if (
+      brandingStage === "error" && currentBrandingReceipt &&
+      failedReceiptBindings.has(receiptVerificationKey(offer, currentBrandingReceipt))
+    ) {
+      failedReceiptBindings.delete(receiptVerificationKey(offer, currentBrandingReceipt));
+      await verifyReceipt(offer, currentBrandingReceipt);
+      return;
+    }
+    if (brandingStage === "pending") {
+      if (currentBrandingConsent && offer.deadline >= nowSeconds() + 1n) {
+        await runBrandingAction(async () => workspace!.send("direct", currentBrandingConsent!.marker), "pending");
+      } else {
+        const referrer = config.referrer ?? offer.referrer;
+        await runBrandingAction(async () => workspace!.send(
+          "direct",
+          encodeBrandingRequest(referrer, localAcolyteName),
+        ), "pending");
+      }
+      return;
+    }
+    if (brandingStage !== "review") {
+      await runBrandingAction(async () => {
+        currentBrandingReview = await (dependencies.reviewBrandingOffer ?? reviewBrandingOffer)(
+          config,
+          identity,
+          offer,
+          latest?.assignedTentacleAddress,
+        );
+      }, "review");
+      return;
+    }
+    if (!currentBrandingReview) {
+      brandingStage = "offer";
+      renderBrandingDialog();
+      return;
+    }
+    brandingStage = "signing";
+    renderBrandingDialog();
+    await runBrandingAction(async () => {
+      const consent = await (dependencies.signBrandingOffer ?? signBrandingOffer)(
+        config,
+        identity,
+        currentBrandingReview!,
+        latest?.assignedTentacleAddress,
+      );
+      // Persist no signature in localStorage. The exact outbound Direct message is the resumable
+      // record and will be recovered from XMTP history on reload.
+      await workspace!.send("direct", consent.marker);
+      currentBrandingConsent = consent;
+    }, "pending");
+  }
+
+  async function declineBranding(): Promise<void> {
+    const offer = currentBrandingOffer;
+    if (!offer || !workspace || brandingBusy) return;
+    await runBrandingAction(async () => {
+      await workspace!.send("direct", encodeBrandingDecline(offer.offerId));
+      localStorage.setItem(brandingDecisionKey(offer.offerId), "declined");
+      closeBrandingDialog();
+      currentBrandingOffer = undefined;
+      currentBrandingReview = undefined;
+      currentBrandingConsent = undefined;
+      currentBrandingReceipt = undefined;
+      elements.brandingReview.hidden = true;
+    }, "offer", false);
+  }
+
+  async function verifyReceipt(offer: BrandingOffer, receipt: BrandingReceipt): Promise<void> {
+    const verificationKey = receiptVerificationKey(offer, receipt);
+    if (verifyingReceiptBindings.has(verificationKey)) return;
+    verifyingReceiptBindings.add(verificationKey);
+    brandingStage = "checking";
+    brandingError = undefined;
+    renderBrandingDialog();
+    try {
+      await (dependencies.verifyBrandingReceipt ?? verifyBrandingReceipt)(
+        config,
+        identity,
+        offer,
+        receipt,
+      );
+      verifiedReceiptBindings.add(receiptVerificationKey(offer, receipt));
+      if (
+        currentBrandingOffer?.marker === offer.marker &&
+        currentBrandingReceipt?.marker === receipt.marker
+      ) {
+        brandingStage = "complete";
+        brandingError = undefined;
+      }
+    } catch (error) {
+      const message = publicError(error);
+      failedReceiptBindings.set(verificationKey, message);
+      if (
+        currentBrandingOffer?.marker === offer.marker &&
+        currentBrandingReceipt?.marker === receipt.marker
+      ) {
+        brandingStage = "error";
+        brandingError = `Receipt verification failed: ${message}`;
+      }
+    } finally {
+      verifyingReceiptBindings.delete(verificationKey);
+      if (currentBrandingOffer?.marker === offer.marker) renderBrandingDialog();
+    }
+  }
+
+  async function runBrandingAction(
+    action: () => Promise<void>,
+    successStage: BrandingStage,
+    renderAfter = true,
+  ): Promise<void> {
+    brandingBusy = true;
+    brandingError = undefined;
+    renderBrandingDialog();
+    try {
+      await action();
+      brandingStage = successStage;
+    } catch (error) {
+      brandingStage = "error";
+      brandingError = publicError(error);
+    } finally {
+      brandingBusy = false;
+      if (renderAfter && currentBrandingOffer) renderBrandingDialog();
+    }
+  }
+
+  function closeBrandingDialog(): void {
+    if (elements.brandingDialog.open && typeof elements.brandingDialog.close === "function") {
+      elements.brandingDialog.close();
+    } else {
+      elements.brandingDialog.removeAttribute("open");
+    }
+    elements.brandingDialog.hidden = true;
+  }
 }
 
 function chatElements(): ChatElements {
@@ -446,6 +735,7 @@ function chatElements(): ChatElements {
     badges,
     activity: required("activity-card"),
     rewardStatus: required("reward-status"),
+    brandingReview: required("branding-review"),
     copyReferral: required("copy-referral"),
     referralStatus: required("referral-status"),
     brandingDialog: required("branding-offer"),
@@ -453,25 +743,29 @@ function chatElements(): ChatElements {
     brandingPrice: required("branding-price"),
     brandingUpkeep: required("branding-upkeep"),
     brandingReferrer: required("branding-referrer"),
+    brandingContract: required("branding-contract"),
+    brandingMinter: required("branding-minter"),
+    brandingAgent: required("branding-agent"),
+    brandingBasis: required("branding-basis"),
+    brandingNonce: required("branding-nonce"),
+    brandingDeadline: required("branding-deadline"),
+    brandingStatus: required("branding-status"),
     brandingAccept: required("branding-accept"),
     brandingDecline: required("branding-decline"),
   };
 }
 
 function parseTentacleUi(
-  messageId: string,
   text: string,
   mine: boolean,
   channel: ChatChannel,
 ): {
   text: string;
   reward?: { status: "pending" | "confirmed"; amount: bigint };
-  branding?: BrandingOffer;
 } {
   if (mine || channel !== "direct") return { text };
   let visible = text;
   let reward: { status: "pending" | "confirmed"; amount: bigint } | undefined;
-  let branding: BrandingOffer | undefined;
   visible = visible.replace(
     /\n?\[\[cthuwu:reward:v1;status=(pending|confirmed);amount=([1-9][0-9]{0,19})\]\]/gu,
     (_match, status: "pending" | "confirmed", amount: string) => {
@@ -479,18 +773,61 @@ function parseTentacleUi(
       return "";
     },
   );
-  visible = visible.replace(
-    /\n?\[\[cthuwu:branding-offer:v1;treasury=(0x[0-9a-f]+);price=(0x[0-9a-f]+);upkeep=(0x[0-9a-f]+)\]\]/gu,
-    (_match, _treasury: string, price: string, upkeep: string) => {
-      branding = { messageId, price: BigInt(price), upkeep: BigInt(upkeep) };
-      return "";
-    },
-  );
-  return { text: visible.trimEnd(), ...(reward ? { reward } : {}), ...(branding ? { branding } : {}) };
+  return { text: visible.trimEnd(), ...(reward ? { reward } : {}) };
 }
 
-function brandingDecision(messageId: string): boolean {
-  return localStorage.getItem(`cthuwu:branding-offer:v1:${messageId}`) !== null;
+function brandingDecisionKey(offerId: string): string {
+  return `cthuwu:branding-offer:v2:${offerId}`;
+}
+
+function receiptVerificationKey(offer: BrandingOffer, receipt: BrandingReceipt): string {
+  return `${offer.marker}\n${receipt.marker}`;
+}
+
+function brandingDecision(offerId: string): string | null {
+  return localStorage.getItem(brandingDecisionKey(offerId));
+}
+
+function formatUwu(value: bigint): string {
+  const whole = value / 1_000_000_000_000_000_000n;
+  const fraction = (value % 1_000_000_000_000_000_000n).toString().padStart(18, "0").replace(/0+$/u, "");
+  return `${whole.toLocaleString()}${fraction ? `.${fraction}` : ""} UWU (${value} base units)`;
+}
+
+function formatBasis(value: bigint): string {
+  const whole = value / 100n;
+  const fraction = (value % 100n).toString().padStart(2, "0").replace(/0+$/u, "");
+  return `${whole}${fraction ? `.${fraction}` : ""}%`;
+}
+
+function unixSecondsLabel(value: bigint): string {
+  const milliseconds = value * 1_000n;
+  if (milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) return `${value} (Unix seconds)`;
+  return `${new Date(Number(milliseconds)).toLocaleString()} (${value})`;
+}
+
+function brandingStageCopy(stage: BrandingStage): string {
+  switch (stage) {
+    case "offer": return "Review the economics, then verify the exact Base state.";
+    case "checking": return "Verifying the canonical Base state…";
+    case "review": return "Canonical state verified. Signing consents only to these exact fields; it does not grant wallet access.";
+    case "signing": return "Waiting for the exact EIP-712 signature in your wallet…";
+    case "pending": return "Consent sent over Direct XMTP. Waiting for an on-chain mint and exact name receipt.";
+    case "complete": return "Branding mint, consumed nonce, original controller and referrer, and exact Acolyte Name verified on Base. Routing eligibility is checked separately.";
+    case "error": return "Branding verification needs attention.";
+  }
+}
+
+function brandingActivityCopy(stage: BrandingStage): string {
+  switch (stage) {
+    case "offer": return "Branding offer · review";
+    case "checking": return "Branding · verifying";
+    case "review": return "Branding offer · ready to sign";
+    case "signing": return "Branding · waiting for wallet";
+    case "pending": return "Branding · pending on Base";
+    case "complete": return "Branding · mint verified";
+    case "error": return "Branding · needs attention";
+  }
 }
 
 function required<T extends HTMLElement>(id: string): T {

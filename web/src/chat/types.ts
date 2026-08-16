@@ -39,9 +39,11 @@ export type AssignmentState =
   | "checking"
   | "intro-unconfigured"
   | "intro-fallback"
+  | "liveness-required"
   | "branding-active"
   | "anchor-verified"
   | "rotation-verified"
+  | "liveness-unavailable"
   | "direct-verification-unavailable"
   | "registry-unavailable";
 

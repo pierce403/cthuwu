@@ -4,10 +4,12 @@ This document specifies the in-progress three-channel browser workspace and Tent
 protocol. It is separate from the Council control plane described in `docs/protocol/`: these groups
 carry acolyte conversation and enrollment traffic, not Council routing, governance, or leases.
 
-There is no funded Acolyte Branding deployment, configured production Global group, or passing live
-production XMTP end-to-end gate yet. Repository code and local tests therefore do **not** establish
-production Branding routing or cross-Tentacle group interoperability. Until those gates pass, the
-deployed continuity path remains the configured intro Tentacle.
+The canonical Acolyte Branding is funded and independently verified on Base, and the repository has
+typed consent/mint/name-repair and assignment implementations. There is still no configured
+production Global group or passing funded browser-wallet/XMTP end-to-end gate. Repository code and
+local tests therefore do **not** establish production wallet or cross-Tentacle group
+interoperability; the configured intro Tentacle remains the continuity path for its documented
+fallback states.
 
 ## Browser workspace
 
@@ -63,34 +65,45 @@ and protocol `1`, the same Base registry and agent ID, XMTP `production`, the sa
 and a bounded capability list containing `direct-xmtp-messaging`. A top-level endpoint without this
 nested CTHUWU production binding is unavailable, not a routing result.
 
-Active Branding remains canonical Base routing authority. For unminted rotation and explicit `#t=`
-links, the complete pinned, indexing-error-free Agent0 directory supplies the candidate identity and
-endpoint without redundant browser RPC reads; XMTP independently binds that inbox to the indexed
-wallet before Direct opens.
+Active Branding remains canonical Base routing authority. Explicit `#t=` links use complete pinned,
+indexing-error-free Agent0 discovery followed by canonical Base authorization. First-connect
+Unminted selection starts from the rank-ordered, completely validated leaderboard snapshot; cached
+data narrows at most five candidates but never authorizes the winning route. XMTP independently
+binds every candidate inbox to its wallet, and the winner receives a fresh same-block canonical
+registry/registration verification before Direct opens. The Direct display name also comes only
+from that freshly verified bounded registration profile, with `Tentacle #<agentId>` as the fallback;
+the cached name remains a discovery hint.
 
 Assignment outcomes are intentionally asymmetric:
 
-- `NotConfigured` means no Branding deployment was explicitly configured. It preserves continuity
-  by assigning the configured intro Tentacle.
-- `Unminted` without an explicit verified `#t=` uses stable address-hash distribution across
-  profile-active, protocol-1, single-agent wallets in the last completely validated leaderboard
-  snapshot. On a new device without that cache, it uses a complete pinned, indexing-error-free
-  Agent0 directory. Once the live Branding read proves `Unminted`, the selected candidate is not
-  redundantly reread from Base. XMTP still verifies that the resolved inbox belongs to the indexed
-  wallet, and the choice is retained locally.
+- `NotConfigured` is retained only for injected compatibility configurations. Normal production
+  configuration always selects the pinned canonical Branding deployment.
+- `Unminted` without an explicit verified `#t=` or retained eligible winner races non-push liveness
+  queries against at most the top five funded profile-active, protocol-1, single-agent wallets in
+  the last completely validated leaderboard snapshot. When absent, the browser first obtains one
+  complete pinned, indexing-error-free Agent0 plus same-block Base UWU snapshot. The first exact
+  authenticated response within 15 seconds wins only after fresh canonical Branding, registry,
+  wallet/authorization, allegiance/protocol, and production agentURI endpoint verification. The
+  route is persisted only after the Direct handoff and liveness-bound join publish succeed. No
+  response is explicit and never selects the unprobed intro Tentacle; deliberate Retry opens a fresh
+  workspace for one new bounded race.
 - An explicit `#t=` wallet selects its sole active protocol-1 identity from that same complete Agent0
-  directory. Multiple eligible identities remain ambiguous and fail closed. Candidate verification
-  performs no Base RPC reads after the Branding status read.
+  directory. Multiple eligible identities remain ambiguous and fail closed. Before Direct opens,
+  the selected identity receives the same fresh same-block canonical Base verification as a liveness
+  winner; the explicit route does not send or require a liveness probe. For a fresh Unminted
+  Acolyte this deliberate route is Direct-only: it sends no enrollment control, and the Acolytes and
+  Global tabs report the policy explicitly instead of waiting for an assignment that cannot arrive.
 - `Expired` or positively verified `Ineligible` continues to assign the intro Tentacle.
 - `RegistryUnavailable`, a malformed canonical response, a block-consistency failure, or an
   unverifiable endpoint freezes Branding-based routing and presents a retryable state. It is never
   reinterpreted as abandonment, ineligibility, or permission to fall back.
 - Only a fully verified `Active` Branding selects its exact controller Tentacle.
 
-This rotation uses eligibility, not a fabricated online-presence signal. The current repository has
-no live authenticated Council heartbeat transport. Operators must confirm `/registry-allegiance off`
-before planned shutdown so the Tentacle leaves discovery; a crash can remain eligible until future
-live heartbeat routing exists.
+This bounded Direct probe proves that the responding XMTP sidecar is currently reachable; it is not
+a Council heartbeat, long-term availability promise, or new central coordinator. One workspace
+attempts it only during first connection (or the first explicit retry after a pre-probe failure),
+never on periodic/resume refresh. Operators should still confirm `/registry-allegiance off` before
+planned shutdown so an offline Tentacle leaves discovery.
 
 Assignment is revalidated on connect, PWA resume, and a bounded periodic interval. A controller
 change advances the assignment revision, stops sends through the old Direct and Acolytes bindings,
@@ -102,13 +115,17 @@ No inbox ID, group ID, assignment revision, or conversation data belongs on-chai
 
 ## Enrollment control messages
 
-The pinned browser and Node SDKs register two custom content types. They have empty parameters, no
+The pinned browser and Node SDKs register the assignment, typing, and liveness custom content types.
+They have empty parameters, no
 fallback text, no compression, and no push notification:
 
 | Logical type | `authorityId` | `typeId` | Version |
 |---|---|---|---|
 | `cthuwu.join.v1` | `cthuwu.app` | `join` | `1.0` |
 | `cthuwu.assignment.v1` | `cthuwu.app` | `assignment` | `1.0` |
+| `cthuwu.liveness-query.v1` | `cthuwu.app` | `liveness-query` | `1.0` |
+| `cthuwu.liveness-response.v1` | `cthuwu.app` | `liveness-response` | `1.0` |
+| `cthuwu.liveness-join.v1` | `cthuwu.app` | `liveness-join` | `1.0` |
 
 The exact join payload keys are:
 
@@ -117,6 +134,41 @@ The exact join payload keys are:
   "type": "cthuwu.join.v1",
   "requestId": "<32 lowercase hex characters>",
   "environment": "production"
+}
+```
+
+Fresh non-intro Unminted enrollment uses a separate exact join bound to the winning query:
+
+```json
+{
+  "type": "cthuwu.liveness-join.v1",
+  "requestId": "<new 32 lowercase hex characters>",
+  "environment": "production",
+  "livenessRequestId": "<winning 32-lowercase-hex query ID>"
+}
+```
+
+The query and response payloads bind the visible challenge, production environment, target agent,
+and bounded deadline:
+
+```json
+{
+  "type": "cthuwu.liveness-query.v1",
+  "requestId": "<32 lowercase hex characters>",
+  "environment": "production",
+  "phrase": "fhtagn?",
+  "expiresAtNs": "<positive decimal uint64>",
+  "targetAgentId": "<canonical decimal uint256>"
+}
+```
+
+```json
+{
+  "type": "cthuwu.liveness-response.v1",
+  "requestId": "<the query requestId>",
+  "environment": "production",
+  "phrase": "fhtagn!",
+  "tentacleAgentId": "<the target agent ID>"
 }
 ```
 
@@ -144,7 +196,7 @@ The exact assignment payload keys are:
 }
 ```
 
-Both payloads are canonical UTF-8 JSON capped at 8 KiB with an exact key set. Global
+Every payload is canonical UTF-8 JSON capped at 8 KiB with an exact key set. Global
 read-conversation and admin-inbox arrays are nonempty, unique, and capped at 32 entries; the write
 ID must appear in the read set. Unknown keys, versions, environments, type metadata, or fallback
 content fail closed.
@@ -153,11 +205,21 @@ The assignment `revision` is the Tentacle's own canonical Base block sample. Its
 but the browser must not require it to equal the browser's independently sampled, earlier routing
 block; the matching request ID and authenticated Direct envelope bind the response instead.
 
-`agent/src/index.ts` intercepts both forms before ordinary message forwarding. They must never
+`agent/src/index.ts` intercepts every control before ordinary message forwarding. They must never
 reach Rust, inference, contact memory, onboarding, token-tier conversation handling, or ordinary
 chat history. Authentication comes from the XMTP envelope's `senderInboxId` and the sender identity
 resolved by the SDK. Any address, inbox, Tentacle ID, group ID, or assignment claim inside the
 payload is untrusted and cannot authenticate the request.
+
+Liveness admission is process-local and deliberately short lived. It accepts only Direct queries
+for the locally verified production agent, rejects expired or more-than-60-second horizons, tracks
+request replays for 60 seconds, permits at most eight accepted probes per sender and 256 globally
+per minute, and keeps bounded sender/replay/grant maps. A valid response creates one grant bound to
+the authenticated sender inbox, its freshly resolved EOA, the query ID, and the local agent ID for
+60 seconds from issuance so the browser can finish its independent Base and Direct checks. A send
+failure revokes it. Successful enrollment persistence consumes it; ordinary join cannot claim the
+first grant, while either exact join form may recover an already persisted matching enrollment when
+an Assignment response was lost.
 
 Normal group chatter is also terminal at the group transport/UI path in version 1. It never enters
 the personal DM inference or memory path.
@@ -265,7 +327,7 @@ deployment; the Global group remains explicit and must never be inferred:
 
 | Name | Consumer | Meaning |
 |---|---|---|
-| `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static browser build | Credential-free HTTPS Base RPC; defaults to `https://mainnet.base.org/`. |
+| `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static browser build | Public read-only Base RPC; defaults to the checked-in origin-restricted Infura endpoint. |
 | `VITE_CTHUWU_BRANDING_CONTRACT` | Static browser build | Verified Branding deployment; defaults to the canonical Base address. |
 | `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Static browser build | Browser revalidation cadence; defaults to `600000`, with accepted values from `60000` through `3600000`. |
 | `CTHUWU_RPC_ENDPOINT` | Tentacle runtime | Credential-free HTTPS or loopback HTTP Base RPC; defaults to `https://mainnet.base.org`. |
@@ -277,7 +339,7 @@ deployment; the Global group remains explicit and must never be inferred:
 For example, a reviewed static build configuration has this shape:
 
 ```dotenv
-VITE_CTHUWU_BASE_RPC_ENDPOINT=https://mainnet.base.org/
+VITE_CTHUWU_BASE_RPC_ENDPOINT=https://base-mainnet.infura.io/v3/e1656809acaa4db18ea2ea40e489c4c8
 VITE_CTHUWU_BRANDING_CONTRACT=0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da
 VITE_CTHUWU_ASSIGNMENT_REFRESH_MS=600000
 ```

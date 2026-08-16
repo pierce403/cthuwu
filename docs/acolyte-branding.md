@@ -5,11 +5,10 @@ routing role. A Branding is the canonical right for one eligible Tentacle to ser
 for one human acolyte. It is **not ownership of a person**, a transferable human identity, or
 permission to publish private information.
 
-The Foundry implementation, tests, deployment tooling, funded Base deployment, browser assignment,
-and live XMTP interoperability have separate release gates. In particular, this document does not
-claim that a Branding contract has been deployed, that a production Global group has been
-bootstrapped, or that [cthuwu.app](https://cthuwu.app) currently routes through either one. Until
-those production gates pass, the browser continues to use the configured intro Tentacle.
+The Foundry implementation, canonical funded Base deployment, static-browser assignment, and typed
+consent/mint/name-repair code are implemented and tested separately. A production Global group and
+funded live browser-wallet/XMTP interoperability still have independent release gates. Source and
+local tests do not claim those live exercises passed.
 
 ## Onboarding links
 
@@ -18,13 +17,17 @@ processed only by the browser and is never included in the HTTP request. Both va
 nonzero Ethereum addresses. `t` is not direct routing authority: the browser discovers a candidate
 agent ID, then verifies the exact wallet, authorization, Cthuwu allegiance/protocol metadata, and
 production XMTP endpoint against canonical ERC-8004 state at one stable Base block. Existing active
-Branding overrides the link.
+Branding overrides the link. A fresh Unminted explicit route is Direct-only: it sends no group join,
+and the Acolytes and Global tabs state that policy rather than waiting indefinitely.
 
 The browser pins the first valid `r` value under the recovered acolyte identity. A later referral
-link cannot replace it. Branding invitations display the pinned referrer and the XMTP acceptance
-receipt names it. That receipt is still not an EIP-712 mint consent or a transaction: the eventual
-mint path must copy the same address into `MintConsent.referrer`, obtain the acolyte signature, and
-verify the confirmed Base transaction before claiming the Branding exists.
+link cannot replace it. Branding review displays the pinned referrer, copies it into the exact
+`MintConsent`, and asks the acolyte's local, injected, WalletConnect EOA, or deployed Base ERC-1271
+wallet for an EIP-712 signature. A terminal XMTP progress receipt is never sufficient: the browser
+independently verifies the consumed nonce, immutable mint tuple, original signed price echoed by the
+receipt, and exact name trait at the receipt block before confirming mint/name completion. Current
+`Active` status remains a separate routing requirement; a delayed repair can finish after expiry,
+ineligibility, registry trouble, or owner repricing without falsely claiming an active assignment.
 
 The public Tentacle leaderboard turns each verified `agentWallet` into a direct-chat link using the
 same `#t=` fragment. Once assignment resolves, the main chat page can copy a recruitment URL with
@@ -43,17 +46,59 @@ and identity settings show it.
 The exact V1 NFT representation is the existing owner-controlled custom trait `Acolyte Name`.
 `tokenURI` already includes bounded custom traits. `/acolytes/` computes the expected name from the
 subject address, labels the exact trait as matching, missing, or mismatched, and never lets hostile
-owner metadata replace the authoritative address-derived card title. The ordinary Branding
-acceptance message carries the generated value and asks the controlling Tentacle to correct a
-mismatch; it is not a typed or on-chain receipt.
+owner metadata replace the authoritative address-derived card title. The Tentacle independently
+rederives the same frozen name rather than trusting browser prose or a supplied name.
 
-This is not yet a live write guarantee. The immutable deployed V1 cannot add the name atomically to
-`mintBranding`, and this repository still lacks the EIP-712 signing and mint transaction executor.
-The eventual controller workflow must wait for the confirmed mint, call
-`setCustomTrait(tokenId, "Acolyte Name", generatedName)` as the current owner, verify its receipt,
-and repair later drift before claiming synchronization. The V1 top-level metadata name remains
+The immutable deployed V1 cannot add the name atomically to `mintBranding`, so the narrow executor
+waits for confirmed mint, calls
+`setCustomTrait(tokenId, "Acolyte Name", generatedName)` as the current owner, verifies canonical
+readback, and repairs later missing/mismatched state. Lost responses resume from consumed nonce and
+current ownership without duplicating mint. This is implemented, but a funded live production run
+remains the external release proof. The V1 top-level metadata name remains
 `Cthuwu Acolyte Branding #<tokenId>`; making that field immutable or consent-bound would require a
 separate V2 deployment and migration design.
+
+## Typed offer, consent, and completion
+
+A v2 offer is issued only after the Tentacle has a positively verified current ERC-8004 agent,
+fresh nonzero treasury observation, canonical Branding inspection, and nonzero referrer (the
+acolyte address is the disclosed default when no referral fragment was pinned). It contains the
+exact chain, contract, acolyte, minter wallet, controller agent ID, referrer, treasury observation,
+10% basis, price, upward-rounded first upkeep, nonce, and Base-derived deadline.
+
+The browser first presents those values for review, then signs the exact Solidity field order:
+
+```text
+MintConsent(
+  address acolyte,
+  address minter,
+  uint256 controllerAgentId,
+  address referrer,
+  uint256 initialDeclaredPrice,
+  uint256 nonce,
+  uint256 deadline
+)
+```
+
+The EIP-712 domain is `Cthuwu Acolyte Branding`, version `1`, Base chain `8453`, and canonical
+verifying contract `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`. There is no `personal_sign`
+fallback. After the wallet prompt the browser proves its original block hash still exists and
+rereads a fresh head, runtime, Unminted state, nonce, quote/upkeep, on-chain digest, and deadline
+margin before sending the exact signature through the current Direct conversation.
+
+The production-wallet sidecar accepts no arbitrary destination, value, trait, or calldata. It may
+only approve the canonical Branding for the exact missing first upkeep, call `mintBranding` with the
+validated persisted consent/signature, and set the exact deterministic `Acolyte Name`. All writes
+share the ERC-8004 wallet nonce journal, are persisted before broadcast, and are recovered by exact
+nonce and canonical receipt/post-state. Insufficient Base ETH or UWU enters the durable funding
+state and asks the authenticated operator for exact targets/shortfalls. A mismatched pending signer
+action returns busy instead of creating a second transaction chain.
+
+Offer, consent, and receipt markers are exact bounded v2 terminal controls. Malformed, duplicated,
+or embedded markers remain literal untrusted text. Valid controls are hidden from transcript,
+unread counts, model inference, contacts, and onboarding. The browser stores only nonsecret
+decision/progress metadata; an outbound signature is recovered from disappearing Direct history
+for exact resend and is never copied into local storage.
 
 ## Roles and on-chain boundary
 
@@ -347,8 +392,9 @@ The in-progress static frontend recovers one existing `StoredIdentity` and creat
 `Client`. The participant address is derived only from that stored identity, never from DOM input,
 a query parameter, message content, Agent0, or the leaderboard cache.
 
-When `VITE_CTHUWU_BRANDING_CONTRACT` is explicitly configured, assignment uses one explicit Base
-block for the complete decision. At that block it must verify:
+Production assignment defaults to the pinned canonical `VITE_CTHUWU_BRANDING_CONTRACT` and rejects
+any alternate override. It uses one explicit Base block for the complete decision. At that block it
+must verify:
 
 1. the participant's deterministic Branding and exact status;
 2. its exact controller agent ID and current NFT owner;
@@ -374,9 +420,12 @@ sufficient.
 
 Assignment outcomes preserve the contract's failure semantics:
 
-- `NotConfigured` means no Branding deployment was explicitly selected and preserves service
-  through the configured intro Tentacle;
-- `Unminted`, `Expired`, and positively verified `Ineligible` also select the intro Tentacle;
+- `NotConfigured` is retained only for injected compatibility configurations; normal production
+  configuration always selects the pinned canonical deployment;
+- a first `Unminted` connection without explicit or retained authority races up to five top funded
+  ranked Tentacles through exact non-push liveness controls; the first authenticated response wins
+  only after fresh canonical verification and a one-use enrollment grant;
+- `Expired` and positively verified `Ineligible` select the intro Tentacle;
 - `RegistryUnavailable`, an inconsistent block snapshot, malformed canonical response, or
   unverifiable endpoint freezes Branding-based routing and exposes a retryable state; and
 - only fully verified `Active` selects its exact controller Tentacle.
@@ -396,9 +445,11 @@ The full channel/enrollment protocol, including the `cthuwu.join.v1` and
 future Global sharding shape, is specified in
 [Acolyte XMTP channels](acolyte-channels.md).
 
-The hard-coded intro Tentacle remains the deployed production behavior because there is no funded
-Branding deployment, configured production Global group, or passing live production XMTP
-three-channel gate yet. Local source and tests cannot satisfy those gates.
+The hard-coded intro Tentacle remains the continuity route for `NotConfigured`, `Expired`, and
+positively verified `Ineligible`, and when product policy explicitly selects fallback. The canonical
+Branding is deployed and the source paths above are implemented; a configured production Global
+group and funded live browser/XMTP three-channel exercise remain open. Local source and tests cannot
+satisfy those live gates.
 
 ## Foundry workspace
 
@@ -548,9 +599,14 @@ The feature remains in progress until all of these release gates have direct evi
 - [x] a funded Base-mainnet deployment completes, receives confirmations, and passes independent
   finalizer and standalone-verifier checks;
 - [x] the canonical deployment JSON is committed without secrets only after that live verification;
-- [ ] the static frontend and Tentacle enrollment path read the canonical deployment at one explicit
+- [x] the static frontend and Tentacle enrollment path read the canonical deployment at one explicit
   block, handle every status including `RegistryUnavailable`, resolve the exact current ERC-8004
   production XMTP endpoint, and preserve only the specified intro fallback states;
+- [x] browser, sidecar, and Rust tests cover typed EIP-712 consent, post-wallet freshness,
+  EOA/ERC-1271 verification, exact approve/mint/name transactions, durable nonce recovery, funding
+  demands, idempotent resend, lost responses, and canonical confirmation/name repair;
+- [ ] funded production runs complete and independently verify consent, mint, and name repair with a
+  local EOA, injected EOA, WalletConnect EOA, and deployed Base ERC-1271 wallet;
 - [ ] one production Global group is explicitly bootstrapped with the reviewed admin set and exact
   environment/versioned `appData` rather than inferred from a name; and
 - [ ] a real production browser routes a fresh acolyte and an existing active Branding through

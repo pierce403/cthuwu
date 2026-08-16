@@ -3,11 +3,19 @@ import {
   ASSIGNMENT_CONTENT_TYPE,
   INVALID_CONTROL,
   JOIN_CONTENT_TYPE,
+  LIVENESS_JOIN_CONTENT_TYPE,
+  LIVENESS_QUERY_CONTENT_TYPE,
+  LIVENESS_RESPONSE_CONTENT_TYPE,
   TYPING_CONTENT_TYPE,
   assignmentCodec,
   createJoinControl,
+  createLivenessJoinControl,
+  createLivenessQueryControl,
   isAssignmentContentType,
   joinCodec,
+  livenessJoinCodec,
+  livenessQueryCodec,
+  livenessResponseCodec,
   typingCodec,
   type AssignmentControl,
 } from "./control";
@@ -47,6 +55,45 @@ describe("XMTP v1 control codecs", () => {
     expect(typingCodec.decode(typingCodec.encode(typing))).toEqual(typing);
     expect(typingCodec.shouldPush(typing)).toBe(false);
     expect(TYPING_CONTENT_TYPE.typeId).toBe("typing");
+    const query = createLivenessQueryControl("42", "1800000000000000000", requestId);
+    expect(livenessQueryCodec.decode(livenessQueryCodec.encode(query))).toEqual(query);
+    const response = {
+      type: "cthuwu.liveness-response.v1", requestId, environment: "production",
+      phrase: "fhtagn!", tentacleAgentId: "42",
+    } as const;
+    expect(livenessResponseCodec.decode(livenessResponseCodec.encode(response))).toEqual(response);
+    const livenessJoin = createLivenessJoinControl(requestId, "34".repeat(16));
+    expect(livenessJoinCodec.decode(livenessJoinCodec.encode(livenessJoin))).toEqual(livenessJoin);
+    expect(livenessQueryCodec.shouldPush(query)).toBe(false);
+    expect(livenessResponseCodec.shouldPush(response)).toBe(false);
+    expect(livenessJoinCodec.shouldPush(livenessJoin)).toBe(false);
+  });
+
+  it("uses three separate exact liveness content types with no text fallback", () => {
+    expect(LIVENESS_QUERY_CONTENT_TYPE.typeId).toBe("liveness-query");
+    expect(LIVENESS_RESPONSE_CONTENT_TYPE.typeId).toBe("liveness-response");
+    expect(LIVENESS_JOIN_CONTENT_TYPE.typeId).toBe("liveness-join");
+    expect(livenessQueryCodec.fallback(createLivenessQueryControl("42", "1", requestId))).toBeUndefined();
+    expect(() => livenessResponseCodec.encode({
+      type: "cthuwu.liveness-response.v1", requestId, environment: "dev",
+      phrase: "fhtagn!", tentacleAgentId: "42",
+    } as never)).toThrow();
+  });
+
+  it("rejects altered liveness phrases, extra keys, noncanonical IDs, and uint64 overflow", () => {
+    expect(() => createLivenessQueryControl("42", "18446744073709551616", requestId)).toThrow();
+    expect(() => createLivenessQueryControl("042", "1", requestId)).toThrow();
+    expect(() => livenessQueryCodec.encode({
+      ...createLivenessQueryControl("42", "1", requestId), phrase: "fhtagn!",
+    } as never)).toThrow();
+    expect(() => livenessJoinCodec.encode({
+      ...createLivenessJoinControl(requestId), claim: "trusted",
+    } as never)).toThrow();
+    const encoded = livenessResponseCodec.encode({
+      type: "cthuwu.liveness-response.v1", requestId, environment: "production",
+      phrase: "fhtagn!", tentacleAgentId: "42",
+    });
+    expect(livenessResponseCodec.decode({ ...encoded, type: JOIN_CONTENT_TYPE })).toBe(INVALID_CONTROL);
   });
 
   it("rejects forged type, environment, authority fields, and versions", () => {

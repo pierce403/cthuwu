@@ -11,8 +11,11 @@ import type { StoredIdentity } from "../identity";
 import { RegistryUnavailableError, type TentacleAssignment } from "./assignment";
 import {
   ASSIGNMENT_CONTENT_TYPE,
+  LIVENESS_RESPONSE_CONTENT_TYPE,
   isJoinControl,
   joinCodec,
+  livenessJoinCodec,
+  livenessQueryCodec,
   type AssignmentControl,
 } from "./control";
 import { createChatUiStateStore } from "./storage";
@@ -62,10 +65,10 @@ const intro: TentacleAssignment = {
 const configuredFallback: TentacleAssignment = {
   source: "intro-fallback",
   address,
-  brandingStatus: "Unminted",
+  brandingStatus: "Expired",
   blockNumber: 123n,
   blockHash: `0x${"6".repeat(64)}`,
-  notice: "Unminted Branding; using intro Tentacle",
+  notice: "Expired Branding; using intro Tentacle",
 };
 const rotated: TentacleAssignment = {
   source: "rotation-verified",
@@ -73,9 +76,23 @@ const rotated: TentacleAssignment = {
   wallet: address,
   inboxId: tentacle,
   agentId: "42",
+  name: "Fresh Registry Name",
   blockNumber: 123n,
   blockHash: `0x${"6".repeat(64)}`,
   notice: "Eligible Tentacle rotation verified",
+};
+const anchored: TentacleAssignment = {
+  ...rotated,
+  source: "anchor-verified",
+  notice: "Explicit Tentacle verified",
+};
+const livenessRequired: TentacleAssignment = {
+  source: "liveness-required",
+  address,
+  brandingStatus: "Unminted",
+  blockNumber: 123n,
+  blockHash: `0x${"6".repeat(64)}`,
+  notice: "Unminted Branding; checking live Tentacles",
 };
 
 class FakeStream<T> implements AsyncIterable<T> {
@@ -148,6 +165,7 @@ function fixture() {
     messages: new FakeStream<ReturnType<typeof textMessage>>(),
     groups: new FakeStream<unknown>(),
     deleted: new FakeStream<ReturnType<typeof textMessage>>(),
+    probe: new FakeStream<unknown>(),
   };
   const streamHistory = {
     messages: [streams.messages],
@@ -169,6 +187,7 @@ function fixture() {
     }),
     messages: vi.fn(async () => directMessages),
     send: vi.fn(async (content: unknown) => { sentControls.push(content); }),
+    stream: vi.fn(async () => streams.probe),
     sendText: vi.fn(async () => undefined),
   };
   let globalPolicy = { fromNs: 1n, inNs: 1_209_600_000_000_000n };
@@ -366,14 +385,241 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
-  it("persists a verified unbranded rotation choice for browser continuity", async () => {
+  it("keeps a fresh Unminted explicit Tentacle link Direct-only without sending an ordinary join", async () => {
+    const value = fixture();
+    let resolved = anchored;
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: vi.fn(async () => resolved),
+      storage: localStorage,
+    });
+    await workspace.start();
+    expect(value.client.conversations.createDm).toHaveBeenCalledWith(
+      tentacle,
+      { messageDisappearingSettings: { fromNs: 1n, inNs: 1_209_600_000_000_000n } },
+    );
+    expect(value.sentControls).toEqual([]);
+    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
+    expect(workspace.snapshot().channels.acolytes).toMatchObject({
+      status: "policy-blocked",
+      error: expect.stringMatching(/Direct-only.*Acolytes/u),
+    });
+    expect(workspace.snapshot().channels.global).toMatchObject({
+      status: "policy-blocked",
+      error: expect.stringMatching(/Direct-only.*Global/u),
+    });
+    resolved = { ...anchored, name: "Freshly Renamed Tentacle" };
+    await workspace.revalidateAssignment("retry");
+    expect(workspace.snapshot().tentacleName).toBe("Freshly Renamed Tentacle");
+    expect(value.sentControls).toEqual([]);
+    await workspace.close();
+  });
+
+  it("does not persist a snapshot-only rotation without a successful liveness join", async () => {
     const value = fixture();
     const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
       resolveAssignment: vi.fn(async () => rotated),
       storage: localStorage,
     });
     await workspace.start();
+    expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBeNull();
+    await workspace.close();
+  });
+
+  it("races an exact non-push liveness query, verifies the first response, persists after join, and replaces a stale cache name", async () => {
+    const value = fixture();
+    const candidate = {
+      wallet: address,
+      agentId: "42",
+      inboxId: tentacle,
+      name: "Stale Cached Name",
+      rank: 1,
+      blockNumber: "122",
+      blockHash: `0x${"8".repeat(64)}`,
+    };
+    const resolveAssignment = vi.fn(async (current: AppConfig) =>
+      current.rotationAnchor ? rotated : livenessRequired);
+    const verifyCandidate = vi.fn(async () => rotated);
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment,
+      loadLivenessCandidates: vi.fn(async () => [candidate]),
+      verifyLivenessCandidate: verifyCandidate,
+      livenessWindowMs: 200,
+      nowMs: () => 1_800_000_000_000,
+      storage: localStorage,
+    });
+    const starting = workspace.start();
+    await waitFor(() => value.sentControls.length === 1);
+    const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
+      requestId: string; expiresAtNs: string; targetAgentId: string;
+    };
+    expect(query).toMatchObject({
+      targetAgentId: "42",
+      expiresAtNs: "1800000000200000000",
+    });
+    expect(value.direct.send).toHaveBeenNthCalledWith(1, value.sentControls[0], { shouldPush: false });
+    value.streams.probe.push({
+      ...textMessage("alive", directId, 1_800_000_000_001_000_000n),
+      contentType: LIVENESS_RESPONSE_CONTENT_TYPE,
+      content: {
+        type: "cthuwu.liveness-response.v1",
+        requestId: query.requestId,
+        environment: "production",
+        phrase: "fhtagn!",
+        tentacleAgentId: "42",
+      },
+    });
+    await starting;
+    expect(verifyCandidate).toHaveBeenCalledWith(config, identity, candidate);
+    expect(workspace.snapshot().tentacleName).toBe(rotated.name);
     expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBe(address);
+    expect(value.sentControls).toHaveLength(2);
+    const firstJoin = livenessJoinCodec.decode(value.sentControls[1] as never) as {
+      requestId: string; livenessRequestId: string;
+    };
+    expect(firstJoin.livenessRequestId).toBe(query.requestId);
+
+    await workspace.revalidateAssignment("retry");
+    const secondJoin = livenessJoinCodec.decode(value.sentControls[2] as never) as {
+      requestId: string; livenessRequestId: string;
+    };
+    expect(secondJoin.livenessRequestId).toBe(query.requestId);
+    expect(secondJoin.requestId).not.toBe(firstJoin.requestId);
+
+    value.streams.messages.push({
+      ...textMessage("assignment-live", directId, 3n),
+      contentType: ASSIGNMENT_CONTENT_TYPE,
+      content: assignment(secondJoin.requestId),
+    } as never);
+    await waitFor(() => workspace.snapshot().channels.acolytes.status !== "awaiting-assignment");
+    await workspace.revalidateAssignment("retry");
+    expect(isJoinControl(joinCodec.decode(value.sentControls[3] as never))).toBe(true);
+    await workspace.close();
+  });
+
+  it("keeps a no-response liveness result explicit and never falls through to intro", async () => {
+    const value = fixture();
+    const candidate = {
+      wallet: address,
+      agentId: "42",
+      inboxId: tentacle,
+      name: "Vhoorl-of-the-Quiet-Tide",
+      rank: 1,
+      blockNumber: "122",
+      blockHash: `0x${"8".repeat(64)}`,
+    };
+    const verifyCandidate = vi.fn(async () => rotated);
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: vi.fn(async () => livenessRequired),
+      loadLivenessCandidates: vi.fn(async () => [candidate]),
+      verifyLivenessCandidate: verifyCandidate,
+      livenessWindowMs: 20,
+      nowMs: () => 1_800_000_000_000,
+      storage: localStorage,
+    });
+
+    await workspace.start();
+    expect(workspace.snapshot()).toMatchObject({
+      assignmentState: "liveness-unavailable",
+      assignmentNotice: expect.stringMatching(/No ranked Tentacle answered/u),
+    });
+    expect(value.sentControls).toHaveLength(1);
+    expect(verifyCandidate).not.toHaveBeenCalled();
+    expect(value.client.conversations.createDmWithIdentifier).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBeNull();
+
+    await workspace.revalidateAssignment("retry");
+    expect(value.sentControls).toHaveLength(1);
+    expect(value.client.conversations.createDmWithIdentifier).not.toHaveBeenCalled();
+    await workspace.close();
+  });
+
+  it("allows only an explicit retry to initiate the first probe after a pre-probe failure", async () => {
+    const value = fixture();
+    const candidate = {
+      wallet: address,
+      agentId: "42",
+      inboxId: tentacle,
+      name: "Vhoorl-of-the-Quiet-Tide",
+      rank: 1,
+      blockNumber: "122",
+      blockHash: `0x${"8".repeat(64)}`,
+    };
+    const loadCandidates = vi.fn()
+      .mockRejectedValueOnce(new Error("directory offline"))
+      .mockResolvedValue([candidate]);
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: vi.fn(async () => livenessRequired),
+      loadLivenessCandidates: loadCandidates,
+      verifyLivenessCandidate: vi.fn(async () => rotated),
+      livenessWindowMs: 20,
+      nowMs: () => 1_800_000_000_000,
+      storage: localStorage,
+    });
+
+    await expect(workspace.start()).rejects.toThrow(/directory offline/u);
+    await workspace.revalidateAssignment("periodic");
+    await workspace.revalidateAssignment("resume");
+    expect(loadCandidates).toHaveBeenCalledTimes(1);
+    expect(value.sentControls).toHaveLength(0);
+
+    await workspace.revalidateAssignment("retry");
+    expect(loadCandidates).toHaveBeenCalledTimes(2);
+    expect(value.sentControls).toHaveLength(1);
+    await workspace.close();
+  });
+
+  it("rejects a liveness response outside the query deadline even when its envelope otherwise matches", async () => {
+    const value = fixture();
+    const candidate = {
+      wallet: address,
+      agentId: "42",
+      inboxId: tentacle,
+      name: "Vhoorl-of-the-Quiet-Tide",
+      rank: 1,
+      blockNumber: "122",
+      blockHash: `0x${"8".repeat(64)}`,
+    };
+    let now = 1_800_000_000_000;
+    const verifyCandidate = vi.fn(async () => rotated);
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: vi.fn(async () => livenessRequired),
+      loadLivenessCandidates: vi.fn(async () => [candidate]),
+      verifyLivenessCandidate: verifyCandidate,
+      livenessWindowMs: 30,
+      nowMs: () => now,
+      storage: localStorage,
+    });
+    const starting = workspace.start();
+    await waitFor(() => value.sentControls.length === 1);
+    const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
+      requestId: string; expiresAtNs: string;
+    };
+    value.streams.probe.push({
+      ...textMessage("after-deadline", directId, BigInt(query.expiresAtNs) + 1n),
+      contentType: LIVENESS_RESPONSE_CONTENT_TYPE,
+      content: {
+        type: "cthuwu.liveness-response.v1",
+        requestId: query.requestId,
+        environment: "production",
+        phrase: "fhtagn!",
+        tentacleAgentId: "42",
+      },
+    });
+    now += 31;
+    value.streams.probe.push({
+      ...textMessage("received-late", directId, BigInt(query.expiresAtNs) - 1n),
+      contentType: LIVENESS_RESPONSE_CONTENT_TYPE,
+      content: {
+        type: "cthuwu.liveness-response.v1",
+        requestId: query.requestId,
+        environment: "production",
+        phrase: "fhtagn!",
+        tentacleAgentId: "42",
+      },
+    });
+    await starting;
+    expect(verifyCandidate).not.toHaveBeenCalled();
+    expect(workspace.snapshot().assignmentState).toBe("liveness-unavailable");
     await workspace.close();
   });
 
@@ -544,6 +790,11 @@ describe("multi-channel XMTP workspace", () => {
     });
     await workspace.send("global", "Global remains healthy");
     expect(value.global.sendText).toHaveBeenCalledWith("Global remains healthy");
+    value.streams.messages.push(textMessage("blocked-acolytes-in", acolytesId, 2_001n));
+    await waitFor(() => workspace.snapshot().channels.acolytes.messages.some(
+      ({ id }) => id === "blocked-acolytes-in",
+    ));
+    expect(workspace.snapshot().channels.acolytes.status).toBe("policy-blocked");
     await expect(workspace.send("acolytes", "must stay blocked")).rejects.toThrow(/not ready/u);
     expect(workspace.snapshot().channels.global.retentionVerified).toBe(true);
     await workspace.close();
@@ -717,6 +968,7 @@ describe("multi-channel XMTP workspace", () => {
       wallet: address,
       inboxId: tentacle,
       agentId: "43",
+      name: "Fresh Controller Name",
       blockNumber: 124n,
       blockHash: `0x${"7".repeat(64)}`,
       notice: "Active Branding verified",

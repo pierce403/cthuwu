@@ -15,8 +15,8 @@ pub mod evolution_runtime;
 pub mod hermes;
 mod inference;
 mod matching;
-mod names;
 mod model;
+mod names;
 mod operator;
 pub mod personality;
 mod principal;
@@ -32,6 +32,7 @@ use anyhow::{Context, Result, bail, ensure};
 use autonomy::LifecycleExecutor;
 use base_rpc::{BaseRpcControl, BaseRpcStore};
 use bot::UwUBot;
+use branding::{BrandingDeliveryTarget, SharedBrandingControl};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use config::{
     BlockchainConfig, BlockchainConfigInput, DEFAULT_BASE_RPC_ENDPOINT,
@@ -834,7 +835,7 @@ async fn main() -> Result<()> {
         &tentacle_id,
         tentacle_wallet,
         registration_config,
-        registration_gateway,
+        registration_gateway.clone(),
     )?));
     if let Some(selected) = cli.erc8004_agent_id.as_deref() {
         let mut registration_guard = registration.lock().await;
@@ -852,6 +853,12 @@ async fn main() -> Result<()> {
         }
     }
     let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()).await);
+    let branding_control = Arc::new(SharedBrandingControl::open(
+        &cli.data_dir,
+        tentacle_wallet,
+        registration_gateway,
+        registration.clone(),
+    )?);
     let mut operator_store = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     repair_operator_conflict(&mut operator_store)?;
     if let Some(identity) = cli.operator.as_deref() {
@@ -896,6 +903,7 @@ async fn main() -> Result<()> {
     .with_base_rpc_control(base_rpc_control)
     .with_venice_key_reward(cli.venice_key_reward_whole)
     .with_registry_control(registry_control)
+    .with_branding_control(branding_control.clone())
     .with_token_observance(token_eye.clone(), blockchain.clone());
 
     info!(
@@ -914,6 +922,11 @@ async fn main() -> Result<()> {
     let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
     let registration_supervisor = tokio::spawn(run_registration_supervisor(
         registration,
+        operators.clone(),
+        operator_notice_tx.clone(),
+    ));
+    let branding_supervisor = tokio::spawn(run_branding_supervisor(
+        branding_control,
         operators,
         operator_notice_tx,
     ));
@@ -935,6 +948,7 @@ async fn main() -> Result<()> {
     tokio::select! {
         transport_result = &mut transport => {
             registration_supervisor.abort();
+            branding_supervisor.abort();
             if *lifecycle_shutdown_tx.borrow() {
                 let shutdown_intent = supervisor
                     .await
@@ -950,6 +964,7 @@ async fn main() -> Result<()> {
         }
         supervisor_result = &mut supervisor => {
             registration_supervisor.abort();
+            branding_supervisor.abort();
             let shutdown_intent = supervisor_result
                 .context("autonomous Evolution supervisor task failed")??;
             transport.await?;
@@ -1497,6 +1512,66 @@ async fn run_registration_supervisor(
             warn!(%error, "could not commit delivered ERC-8004 operator notice state");
         }
         tokio::time::sleep(interval).await;
+    }
+}
+
+async fn run_branding_supervisor(
+    branding: Arc<SharedBrandingControl>,
+    operators: Arc<Mutex<OperatorStore>>,
+    notices: mpsc::Sender<OperatorNotice>,
+) {
+    loop {
+        let delivery = match branding.maintain_once().await {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                warn!(%error, "Acolyte Branding maintenance failed; preserving the durable action for retry");
+                None
+            }
+        };
+        if let Some(delivery) = delivery {
+            let inboxes = match &delivery.target {
+                BrandingDeliveryTarget::Inbox(inbox_id) => vec![inbox_id.clone()],
+                BrandingDeliveryTarget::Operators => {
+                    match current_active_operator_inboxes(&operators) {
+                        Ok(inboxes) => inboxes,
+                        Err(error) => {
+                            warn!(%error, "could not resolve Branding resource-notice targets");
+                            Vec::new()
+                        }
+                    }
+                }
+            };
+            let mut acknowledgements = tokio::task::JoinSet::new();
+            for inbox_id in inboxes {
+                let Ok((notice, acknowledgement)) =
+                    OperatorNotice::with_acknowledgement(inbox_id, delivery.text.clone())
+                else {
+                    continue;
+                };
+                if notices.send(notice).await.is_ok() {
+                    acknowledgements.spawn(async move {
+                        matches!(
+                            tokio::time::timeout(Duration::from_secs(30), acknowledgement).await,
+                            Ok(Ok(true))
+                        )
+                    });
+                }
+            }
+            let mut delivered = false;
+            while let Some(result) = acknowledgements.join_next().await {
+                if matches!(result, Ok(true)) {
+                    delivered = true;
+                }
+            }
+            // Only a positive transport acknowledgement advances an offer/receipt or starts the
+            // funding-notice cooldown. Ambiguous delivery remains durable and is retried exactly.
+            branding.acknowledge_delivery(&delivery, delivered).await;
+            continue;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(branding.maintenance_interval()) => {}
+            _ = branding.wait_for_work() => {}
+        }
     }
 }
 

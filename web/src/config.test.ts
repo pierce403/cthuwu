@@ -33,16 +33,19 @@ describe("configuration", () => {
     );
   });
 
-  it("accepts only explicit safe Branding routing configuration", () => {
+  it("accepts only the canonical Branding routing deployment", () => {
     expect(parseConfig({
       VITE_CTHUWU_BASE_RPC_ENDPOINT: "https://rpc.example/",
-      VITE_CTHUWU_BRANDING_CONTRACT: "0x1111111111111111111111111111111111111111",
+      VITE_CTHUWU_BRANDING_CONTRACT: CANONICAL_BRANDING_CONTRACT,
       VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: "60000",
     })).toMatchObject({
       baseRpcEndpoint: "https://rpc.example/",
-      brandingContract: "0x1111111111111111111111111111111111111111",
+      brandingContract: CANONICAL_BRANDING_CONTRACT,
       assignmentRefreshMs: 60_000,
     });
+    expect(() => parseConfig({
+      VITE_CTHUWU_BRANDING_CONTRACT: "0x1111111111111111111111111111111111111111",
+    })).toThrow(/canonical Base deployment/u);
     expect(() => parseConfig({ VITE_CTHUWU_BRANDING_CONTRACT: "0x0000000000000000000000000000000000000000" })).toThrow();
   });
 });

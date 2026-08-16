@@ -1,0 +1,89 @@
+import type { AppConfig } from "../config";
+import { readLeaderboardCache, writeLeaderboardCache } from "../leaderboard-cache";
+import { parseLeaderboardConfig } from "../leaderboard-config";
+import { fetchCompleteLeaderboard } from "../leaderboard-data";
+import { PROTOCOL_V1_HEX, type LeaderboardSnapshot } from "../leaderboard-types";
+
+const XMTP_ENDPOINT = /^xmtp:\/\/([0-9a-f]{64})$/u;
+const MAX_PROBES = 5;
+
+export interface LivenessCandidate {
+  wallet: string;
+  agentId: string;
+  inboxId: string;
+  name: string;
+  rank: number;
+  blockNumber: string;
+  blockHash: string;
+}
+
+export interface LivenessDirectoryDependencies {
+  fetch?: typeof fetch;
+  refresh?: () => Promise<LeaderboardSnapshot>;
+}
+
+/**
+ * Read the complete, schema-validated local leaderboard first. If it is missing (or predates the
+ * mandatory source hash), perform one complete pinned Agent0 refresh with Base UWU balances at the
+ * exact same block, persist it, and then select only the five highest funded usable routes.
+ */
+export async function loadLivenessCandidates(
+  config: AppConfig,
+  acolyteAddress: string,
+  ownInboxId: string,
+  storage: Storage | undefined,
+  dependencies: LivenessDirectoryDependencies = {},
+): Promise<LivenessCandidate[]> {
+  let snapshot = storage ? readLeaderboardCache(storage) : undefined;
+  if (!snapshot?.sourceBlockHash) {
+    const leaderboardConfig = parseLeaderboardConfig();
+    if (!leaderboardConfig.graphEndpoint) {
+      throw new Error("The complete Tentacle directory is unavailable");
+    }
+    snapshot = await (dependencies.refresh ?? (() => fetchCompleteLeaderboard(
+      leaderboardConfig.graphEndpoint!,
+      {
+        fetch: dependencies.fetch,
+        baseRpcEndpoint: config.baseRpcEndpoint,
+      },
+    )))();
+    if (!snapshot.sourceBlockHash || !snapshot.paginationComplete || snapshot.hasIndexingErrors) {
+      throw new Error("The refreshed Tentacle directory is incomplete");
+    }
+    if (storage && !writeLeaderboardCache(storage, snapshot)) {
+      // Persistence is useful for later first-connects, but a complete in-memory snapshot is still
+      // safe for this one bounded race.
+      console.info("[cthuwu-liveness] validated directory could not be cached");
+    }
+  }
+
+  const usedWallets = new Set<string>();
+  const usedInboxes = new Set<string>();
+  const selected: LivenessCandidate[] = [];
+  for (const group of snapshot.rankedWallets) {
+    if (selected.length >= MAX_PROBES) break;
+    if (group.rank === undefined || group.rank <= 0 || BigInt(group.rawBalance) <= 0n) continue;
+    if (group.wallet === acolyteAddress || usedWallets.has(group.wallet)) continue;
+    const eligible = group.identities.flatMap((identity) => {
+      const endpoint = identity.profile.xmtpEndpoint?.match(XMTP_ENDPOINT);
+      return identity.protocolHex === PROTOCOL_V1_HEX && identity.profile.active && endpoint
+        ? [{ identity, inboxId: endpoint[1]! }]
+        : [];
+    });
+    if (eligible.length !== 1) continue;
+    const { identity, inboxId } = eligible[0]!;
+    if (inboxId === ownInboxId || usedInboxes.has(inboxId)) continue;
+    usedWallets.add(group.wallet);
+    usedInboxes.add(inboxId);
+    selected.push({
+      wallet: group.wallet,
+      agentId: identity.agentId,
+      inboxId,
+      name: identity.profile.name,
+      rank: group.rank,
+      blockNumber: snapshot.sourceBlockNumber,
+      blockHash: snapshot.sourceBlockHash,
+    });
+  }
+  return selected;
+}

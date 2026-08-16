@@ -86,12 +86,16 @@ Do not claim live XMTP interoperability until the corresponding end-to-end relea
 `FEATURES.md` passes against the same XMTP environment. In particular, deterministic in-memory
 Council tests do not prove live XMTP group support, and deterministic registry tests plus read-only
 deployment verification do not prove a funded live ERC-8004 registration and recovery exercise.
-Likewise, Foundry source, mocks, a dry run, or a Base fork do not prove a funded Branding deployment
-or live frontend routing. Keep both explicitly incomplete until their release gates pass.
+Likewise, Foundry source, mocks, a dry run, or a Base fork do not prove the funded live
+Branding-consent/mint/name-repair path. Keep that live-wallet release gate explicitly incomplete
+until it passes, even though the canonical contract deployment and closed implementation exist.
 
 ## Security rules
 
-- Never print or commit private keys, seed phrases, database encryption keys, API keys, full message history, or generated contact notes.
+- Never print or commit private keys, seed phrases, database encryption keys, secret API keys, full
+  message history, or generated contact notes. A browser client identifier may be checked in only
+  when the operator explicitly designates it as public, origin-restricts it where supported, and no
+  signing or privileged authority is attached to it.
 - Use a dedicated, minimally funded bot identity.
 - Store persistent secrets outside the repository with restrictive filesystem permissions.
 - Make production and development XMTP environments explicit; never silently cross them.
@@ -229,6 +233,21 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   referrer. Mint only from EIP-712 acolyte consent bound to minter, exact controller, referrer,
   positive price, nonce, deadline, chain, and verifying contract. Support EOAs and ERC-1271 through
   `SignatureChecker`.
+- Keep Branding controls typed, exact, bounded, non-push, and hidden from ordinary transcript,
+  inference, contact memory, and onboarding. The browser must recheck its pinned Base snapshot after
+  the wallet prompt and independently verify confirmed state; XMTP authentication never substitutes
+  for EIP-712 consent or a canonical receipt.
+- Keep the sidecar Branding executor closed: it may only approve the exact required UWU allowance,
+  call canonical `mintBranding` with the persisted consent, and set the exact deterministic
+  `Acolyte Name` trait. It must share the production Tentacle wallet's durable nonce journal with
+  ERC-8004 writes, persist before broadcast, recover submitted actions by exact nonce, reject an
+  unmatched pending action as busy, and never expose a generic transaction or calldata API.
+- Treat first-contact liveness as a separate non-push control exchange, never ordinary `fhtagn?`
+  chat. Race only a small rank-ordered set from a completely validated leaderboard snapshot, bind
+  the first authenticated response to its exact DM/inbox/agent/request, freshly revalidate that
+  winner on canonical Base, and consume one short-lived server grant for non-intro Unminted
+  enrollment. Rate-limit and replay-bound probes before Rust, inference, operator classification,
+  contacts, rewards, or Branding can observe them.
 - Disable every ordinary ERC-721 approval/transfer path. Ownership changes only through atomic mint,
   active compulsory purchase, or positively claimable `claimUnserved`, with exact agent,
   expected owner/controller tuple, price, deadline, settlement, and first-upkeep checks. Document
@@ -472,7 +491,8 @@ or live frontend routing. Keep both explicitly incomplete until their release ga
   `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`. Its canonical design binds an immutable
   acolyte address, exact eligible controller agent ID, referral-split weekly upkeep, compulsory UWU
   sale, immutable 10% referrer, and fail-closed claim status. Canonical deployment provenance is in
-  `contracts/deployments/base-mainnet.json`; frontend Branding routing is not yet claimed.
+  `contracts/deployments/base-mainnet.json`; frontend routing and the closed consent/mint/name-repair
+  path are implemented, while their funded live browser/XMTP release exercise remains open.
 - The local Evolution core implements signed Nature state, audited awakening epochs, bounded Scales
   judgments, lineage records, and a persisted Hermes anti-entropy state machine. Live XMTP awakening
   still needs a release exercise, and Hermes has no live transport or peer-key provisioning claim.

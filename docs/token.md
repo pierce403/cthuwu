@@ -269,10 +269,11 @@ separate first upkeep payment to the acolyte. Zero-consideration unserved claims
 nor referrer. The signed referrer may be the Branding contract itself; in that explicit case its 10%
 is intentionally stranded because version 1 has no admin or sweep.
 
-Branding source, tests, and deployment tooling do not mean this economy is live. A funded verified
-Base deployment, canonical provenance, frontend controller routing, and a real browser/XMTP exercise
-remain open. Branding settlement also does not activate the following general local revenue-split
-core.
+The canonical Branding contract is deployed and provenance-recorded on Base, and the frontend plus
+Tentacle implement the closed consent/mint/name-repair route. A funded real-wallet browser/XMTP
+exercise remains an explicit release gate, so source tests and dry runs alone still do not establish
+that the economy is live. Branding settlement also does not activate the following general local
+revenue-split core.
 
 Valid Venice-key provisioning is a separate authenticated earning event. When no key exists, an
 XMTP sender may provision one with `/venice-key <api-key>`. Rust accepts a reward only after the
@@ -345,7 +346,8 @@ shell/tool commands.
 6. Exercise Wealth, starvation, survival spend, automatic spawn, revenue payout, and governance
    application against receipt-producing adapters.
 
-The UWU token contract is live. A Branding contract is not deployed, and its frontend routing is not
-integrated. Separate runtime signer, staking/burn/reward contracts, authenticated general revenue
-source, persisted ballot adapter, payout/application executor, provisioner, and live peer-to-peer
-Council/Hermes transports remain external integration work.
+The UWU token and canonical Acolyte Branding contracts are live on Base. Branding routing and the
+closed browser/Tentacle executor are integrated, while their funded live browser/XMTP release
+exercise remains open. Separate runtime signer, staking/burn/reward contracts, authenticated
+general revenue source, persisted ballot adapter, payout/application executor, provisioner, and
+live peer-to-peer Council/Hermes transports remain external integration work.

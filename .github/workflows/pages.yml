@@ -19,7 +19,8 @@ jobs:
       # All VITE_* values are compiled into static JavaScript and are public.
       VITE_CTHUWU_GRAPHQL_ENDPOINT: ${{ vars.CTHUWU_GRAPHQL_ENDPOINT }}
       VITE_CTHUWU_GRAPH_API_KEY: ${{ vars.CTHUWU_GRAPH_API_KEY }}
-      VITE_CTHUWU_BASE_RPC_ENDPOINT: ${{ vars.CTHUWU_BASE_RPC_ENDPOINT }}
+      # Intentionally public browser project ID, origin-restricted to cthuwu.app at Infura.
+      VITE_CTHUWU_BASE_RPC_ENDPOINT: "https://base-mainnet.infura.io/v3/e1656809acaa4db18ea2ea40e489c4c8"
       VITE_CTHUWU_BRANDING_CONTRACT: "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da"
       VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: ${{ vars.CTHUWU_ASSIGNMENT_REFRESH_MS }}
       VITE_CTHUWU_IPFS_GATEWAY: ${{ vars.CTHUWU_IPFS_GATEWAY }}

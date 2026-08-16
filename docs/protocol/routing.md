@@ -13,18 +13,26 @@ The Direct/Acolytes/Global browser workspace does **not** use this Council scori
 its assigned Tentacle. It derives the acolyte address only from the recovered browser
 `StoredIdentity` and applies the deterministic Acolyte Branding rule.
 
-When a Branding deployment is explicitly configured, the decision binds one explicit Base block.
+Production defaults to the pinned canonical Branding deployment and rejects alternate overrides.
+The decision binds one explicit Base block.
 At that block the browser must revalidate the Branding and exact controller, current
 owner/controller wallet, canonical Identity Registry deployment and version, byte-exact allegiance
 and protocol, and the same agent's on-chain ERC-8004 registration resolving to the selected
 production XMTP endpoint. Agent0 and the leaderboard cache may aid discovery or display, but they
 are never routing authority.
 
-`NotConfigured`, `Unminted`, `Expired`, and positively verified `Ineligible` select the configured
-intro Tentacle. For a configured deployment, `RegistryUnavailable`, inconsistent same-block reads,
-or an unverifiable canonical endpoint freezes assignment and exposes retry. No Council route award,
-cached record, claimed control payload, or group name may turn that outage into fallback or
-ineligibility.
+`NotConfigured`, `Expired`, and positively verified `Ineligible` select the configured intro
+Tentacle. A first `Unminted` connection without an explicit or retained verified route races the
+bounded typed liveness exchange described in the channel protocol; only its first authenticated,
+in-window, freshly Base-verified responder may become Direct, and no response remains explicit.
+For a configured deployment, `RegistryUnavailable`, inconsistent same-block reads, or an
+unverifiable canonical endpoint freezes assignment and exposes retry. No Council route award,
+cached record, claimed control payload, group name, or non-response may turn that outage into
+fallback or ineligibility.
+
+An explicit verified `#t=` choice skips the liveness exchange. For a fresh Unminted Acolyte it is a
+Direct-only route and sends no group-enrollment control; the browser marks Acolytes and Global as
+policy-blocked rather than presenting an assignment wait that cannot complete.
 
 The assignment is revalidated on connect, PWA resume, and a bounded interval. Reassignment replaces
 the exact Direct and Acolytes conversation bindings while retaining the Global logical binding.
@@ -159,6 +167,7 @@ content nor the selected Tentacle's private memory.
 **Implemented — local:** deterministic routing and rendezvous over local state/in-memory transport.
 **Planned:** live Council routing through an XMTP group.
 
-The separate acolyte channel implementation has no funded Branding deployment, configured
-production Global group, or passing live production XMTP end-to-end gate yet. It must not be cited
-as evidence of live Council or production group interoperability.
+The separate acolyte channel implementation has a funded verified Branding deployment and local
+typed assignment/mint/liveness paths, but no configured production Global group or passing funded
+production browser/XMTP end-to-end gate. It must not be cited as evidence of live Council or
+production group interoperability.

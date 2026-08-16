@@ -131,7 +131,7 @@ CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<other-tentacle-inbox,...> \
 ```
 
 Unexpected admins, wrong `appData`, wrong environment, non-admin-only policy, a conflicting
-persisted ID, or a second create request fails closed. `CTHUWU_BRANDING_CONTRACT` remains unset
-until the canonical Base deployment exists. While unset, only the canonically verified intro
-Tentacle accepts fallback enrollment. Once configured, a Base, Branding, registry, profile, or
-endpoint validation failure freezes enrollment and pruning rather than becoming abandonment.
+persisted ID, or a second create request fails closed. `CTHUWU_BRANDING_CONTRACT` defaults to the
+pinned canonical Base deployment, and any explicit override must equal that address. A Base,
+Branding, registry, profile, or endpoint validation failure freezes enrollment and pruning rather
+than becoming abandonment.

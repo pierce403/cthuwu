@@ -1,6 +1,13 @@
 import EthereumProvider from "@walletconnect/ethereum-provider";
 import { IdentifierKind, type Signer } from "@xmtp/browser-sdk";
-import { BrowserProvider, getAddress, getBytes, type Eip1193Provider } from "ethers";
+import {
+  BrowserProvider,
+  getAddress,
+  getBytes,
+  type Eip1193Provider,
+  type TypedDataDomain,
+  type TypedDataField,
+} from "ethers";
 import type { ExternalIdentity, ExternalWalletConnector } from "./identity";
 
 // Reown project identifiers are public application identifiers, not secrets. This one is shared
@@ -73,6 +80,36 @@ export async function createExternalSigner(identity: ExternalIdentity): Promise<
   return identity.signerType === "SCW"
     ? { ...signerCore, type: "SCW", getChainId: () => BigInt(identity.chainId) }
     : { ...signerCore, type: "EOA" };
+}
+
+/**
+ * Ask the exact restored external account to sign Branding's EIP-712 consent. The provider owns
+ * the key; only the signature leaves it. Base is required because an ERC-1271 account's code and
+ * validation semantics are chain-specific, and keeping the same rule for EOAs avoids network-drift
+ * surprises in wallet prompts.
+ */
+export async function signExternalTypedData(
+  identity: ExternalIdentity,
+  domain: TypedDataDomain,
+  types: Record<string, TypedDataField[]>,
+  value: Record<string, unknown>,
+): Promise<string> {
+  const provider = await restoredProvider(identity.connector);
+  const accounts = await provider.request({ method: "eth_accounts" }) as string[];
+  if (!accounts.some((account) => canonicalAddress(account) === identity.address)) {
+    throw new Error(
+      `Reconnect ${connectorLabel(identity.connector)} to the saved Acolyte account before signing`,
+    );
+  }
+  const chainId = parseChainId(await provider.request({ method: "eth_chainId" }));
+  if (chainId !== 8453) {
+    throw new Error("Switch the connected Acolyte wallet to Base mainnet before signing");
+  }
+  if (identity.signerType === "SCW" && identity.chainId !== chainId) {
+    throw new Error("The saved smart-account chain changed; reconnect it before signing");
+  }
+  const signer = await new BrowserProvider(provider).getSigner(identity.address);
+  return signer.signTypedData(domain, types, value);
 }
 
 async function connectedWalletConnectProvider(): Promise<EthereumProvider> {

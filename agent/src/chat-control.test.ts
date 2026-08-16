@@ -5,10 +5,18 @@ import {
   ASSIGNMENT_CONTENT_TYPE,
   AssignmentCodec,
   CANONICAL_BRANDING_CONTRACT,
+  CanonicalAssignmentResolver,
   ChatControlService,
   GLOBAL_LOGICAL_CHANNEL_ID,
   JOIN_CONTENT_TYPE,
   JoinCodec,
+  LIVENESS_JOIN_CONTENT_TYPE,
+  LIVENESS_QUERY_CONTENT_TYPE,
+  LIVENESS_RESPONSE_CONTENT_TYPE,
+  LivenessControlGate,
+  LivenessJoinCodec,
+  LivenessQueryCodec,
+  LivenessResponseCodec,
   RETENTION_FROM_NS,
   RETENTION_IN_NS,
   TYPING_CONTENT_TYPE,
@@ -19,6 +27,9 @@ import {
   dispatchPersonalText,
   globalAppData,
   isJoinControl,
+  isLivenessJoinControl,
+  isLivenessQueryControl,
+  isLivenessResponseControl,
   parseControlPayload,
   resolveFreshSenderAddress,
   type AssignmentResolution,
@@ -30,6 +41,8 @@ import {
   type GroupDirectory,
   type GroupLike,
   type JoinControl,
+  type LivenessJoinControl,
+  type LivenessQueryControl,
 } from "./chat-control.js";
 
 const SELF = "aa".repeat(32);
@@ -46,6 +59,17 @@ describe("canonical deployment configuration", () => {
     expect(CANONICAL_BRANDING_CONTRACT).toBe(
       getAddress("0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da"),
     );
+  });
+
+  it("rejects an alternate production Branding contract", () => {
+    expect(() => new CanonicalAssignmentResolver({
+      brandingContract: "0x2222222222222222222222222222222222222222",
+      localRegistration: {
+        agentId: AGENT_ID,
+        wallet: ADDRESS,
+        inboxId: SELF,
+      },
+    })).toThrow(/canonical Base deployment/u);
   });
 });
 
@@ -209,6 +233,7 @@ class FakeResolver implements AssignmentResolver {
     revision: REVISION,
     tentacleAgentId: AGENT_ID,
     tentacleInboxId: SELF,
+    enrollment: "intro",
   };
 
   async resolve(): Promise<AssignmentResolution> {
@@ -248,9 +273,10 @@ function globalGroup(admins = [SELF]): FakeGroup {
 
 function service(options: {
   directory: FakeDirectory;
-  store?: FakeStore;
+  store?: ChatStateStore;
   resolver?: FakeResolver;
   admins?: string[];
+  livenessGate?: LivenessControlGate;
   resolveInboxAddress?: (inboxId: string) => Promise<typeof ADDRESS | undefined>;
 }): ChatControlService {
   return new ChatControlService({
@@ -260,6 +286,9 @@ function service(options: {
     config: config(options.admins),
     selfInboxId: SELF,
     tentacleAgentId: AGENT_ID,
+    ...(options.livenessGate === undefined
+      ? {}
+      : { livenessGate: options.livenessGate }),
     ...(options.resolveInboxAddress === undefined
       ? {}
       : { resolveInboxAddress: options.resolveInboxAddress }),
@@ -270,6 +299,22 @@ const JOIN: JoinControl = {
   type: "cthuwu.join.v1",
   requestId: "01".repeat(16),
   environment: "production",
+};
+
+const LIVENESS_QUERY: LivenessQueryControl = {
+  type: "cthuwu.liveness-query.v1",
+  requestId: "02".repeat(16),
+  environment: "production",
+  phrase: "fhtagn?",
+  expiresAtNs: "1060000000000",
+  targetAgentId: AGENT_ID,
+};
+
+const LIVENESS_JOIN: LivenessJoinControl = {
+  type: "cthuwu.liveness-join.v1",
+  requestId: "03".repeat(16),
+  environment: "production",
+  livenessRequestId: LIVENESS_QUERY.requestId,
 };
 
 describe("custom control codecs", () => {
@@ -371,9 +416,64 @@ describe("custom control codecs", () => {
     expect(() => codec.encode({ ...typing, expiresAtNs: "0" })).toThrow(/invalid/u);
   });
 
+  it("round-trips strict non-push liveness query, response, and join controls", () => {
+    const queryCodec = new LivenessQueryCodec();
+    const responseCodec = new LivenessResponseCodec();
+    const joinCodec = new LivenessJoinCodec();
+    const response = {
+      type: "cthuwu.liveness-response.v1",
+      requestId: LIVENESS_QUERY.requestId,
+      environment: "production",
+      phrase: "fhtagn!",
+      tentacleAgentId: AGENT_ID,
+    } as const;
+    expect(queryCodec.decode(queryCodec.encode(LIVENESS_QUERY))).toEqual(LIVENESS_QUERY);
+    expect(responseCodec.decode(responseCodec.encode(response))).toEqual(response);
+    expect(joinCodec.decode(joinCodec.encode(LIVENESS_JOIN))).toEqual(LIVENESS_JOIN);
+    expect(queryCodec.shouldPush(LIVENESS_QUERY)).toBe(false);
+    expect(responseCodec.shouldPush(response)).toBe(false);
+    expect(joinCodec.shouldPush(LIVENESS_JOIN)).toBe(false);
+    expect(queryCodec.encode(LIVENESS_QUERY).type).toEqual(LIVENESS_QUERY_CONTENT_TYPE);
+    expect(responseCodec.encode(response).type).toEqual(LIVENESS_RESPONSE_CONTENT_TYPE);
+    expect(joinCodec.encode(LIVENESS_JOIN).type).toEqual(LIVENESS_JOIN_CONTENT_TYPE);
+  });
+
+  it("rejects liveness text lookalikes, unknown fields, bad phrases, and version drift", () => {
+    const queryCodec = new LivenessQueryCodec();
+    const responseCodec = new LivenessResponseCodec();
+    const joinCodec = new LivenessJoinCodec();
+    expect(() => queryCodec.encode({ ...LIVENESS_QUERY, phrase: "fhtagn!" })).toThrow();
+    expect(() => queryCodec.encode({ ...LIVENESS_QUERY, expiresAtNs: "18446744073709551616" })).toThrow();
+    expect(() => queryCodec.encode({ ...LIVENESS_QUERY, wallet: ADDRESS })).toThrow();
+    const encoded = queryCodec.encode(LIVENESS_QUERY);
+    expect(
+      isLivenessQueryControl(queryCodec.decode({
+        ...encoded,
+        type: { ...LIVENESS_QUERY_CONTENT_TYPE, versionMinor: 1 },
+      })),
+    ).toBe(false);
+    expect(isLivenessResponseControl(responseCodec.decode({
+      ...responseCodec.encode({
+        type: "cthuwu.liveness-response.v1",
+        requestId: LIVENESS_QUERY.requestId,
+        environment: "production",
+        phrase: "fhtagn!",
+        tentacleAgentId: AGENT_ID,
+      }),
+      parameters: { fallback: "fhtagn!" },
+    }))).toBe(false);
+    expect(isLivenessJoinControl(joinCodec.decode({
+      ...joinCodec.encode(LIVENESS_JOIN),
+      fallback: "join",
+    }))).toBe(false);
+  });
+
   it("dispatches only DM text to the personal bridge", () => {
     const bridge = vi.fn<(text: string) => void>();
     expect(dispatchPersonalText(true, JOIN_CONTENT_TYPE, "join", bridge)).toBe(false);
+    expect(dispatchPersonalText(true, LIVENESS_QUERY_CONTENT_TYPE, "fhtagn?", bridge)).toBe(false);
+    expect(dispatchPersonalText(true, LIVENESS_RESPONSE_CONTENT_TYPE, "fhtagn!", bridge)).toBe(false);
+    expect(dispatchPersonalText(true, LIVENESS_JOIN_CONTENT_TYPE, "join", bridge)).toBe(false);
     expect(
       dispatchPersonalText(true, ASSIGNMENT_CONTENT_TYPE, "assignment", bridge),
     ).toBe(false);
@@ -427,7 +527,253 @@ describe("fresh sender authentication", () => {
   });
 });
 
+describe("bounded liveness admission", () => {
+  it("admits one unexpired query, rejects replay, and binds the grant to inbox/address/agent", () => {
+    let now = 1_000_000;
+    const gate = new LivenessControlGate(() => now);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(false);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: LIVENESS_QUERY,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: getAddress("0x2222222222222222222222222222222222222222"),
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(false);
+    expect(gate.consumeGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(false);
+    now += 60_001;
+    expect(gate.admitQuery(USER, {
+      ...LIVENESS_QUERY,
+      expiresAtNs: (BigInt(now + 60_000) * 1_000_000n).toString(),
+    })).toBe(true);
+  });
+
+  it("rejects expired and overlong queries before consuming rate budget", () => {
+    const now = 1_000_000;
+    const gate = new LivenessControlGate(() => now);
+    expect(gate.admitQuery(USER, {
+      ...LIVENESS_QUERY,
+      requestId: "04".repeat(16),
+      expiresAtNs: (BigInt(now) * 1_000_000n).toString(),
+    })).toBe(false);
+    expect(gate.admitQuery(USER, {
+      ...LIVENESS_QUERY,
+      requestId: "05".repeat(16),
+      expiresAtNs: (BigInt(now + 60_001) * 1_000_000n).toString(),
+    })).toBe(false);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+  });
+
+  it("enforces eight probes per sender in a minute", () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    for (let index = 0; index < 8; index += 1) {
+      expect(gate.admitQuery(USER, {
+        ...LIVENESS_QUERY,
+        requestId: index.toString(16).padStart(2, "0").repeat(16),
+      })).toBe(true);
+    }
+    expect(gate.admitQuery(USER, {
+      ...LIVENESS_QUERY,
+      requestId: "ff".repeat(16),
+    })).toBe(false);
+  });
+
+  it("enforces the bounded global probe budget", () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    for (let index = 1; index <= 256; index += 1) {
+      const inboxId = index.toString(16).padStart(64, "0");
+      expect(gate.admitQuery(inboxId, LIVENESS_QUERY)).toBe(true);
+    }
+    expect(gate.admitQuery("ff".repeat(32), LIVENESS_QUERY)).toBe(false);
+  });
+
+  it("revokes a response grant without reopening its replay marker", () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: LIVENESS_QUERY,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    gate.revokeGrant(USER, LIVENESS_QUERY.requestId);
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(false);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(false);
+  });
+
+  it("keeps an issued grant for a full minute after a short query deadline", () => {
+    let now = 1_000_000;
+    const gate = new LivenessControlGate(() => now);
+    const shortQuery = {
+      ...LIVENESS_QUERY,
+      requestId: "06".repeat(16),
+      expiresAtNs: (BigInt(now + 15_000) * 1_000_000n).toString(),
+    };
+    expect(gate.admitQuery(USER, shortQuery)).toBe(true);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: shortQuery,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    now += 15_001;
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: shortQuery.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    now += 45_000;
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: shortQuery.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(false);
+  });
+});
+
 describe("idempotent channel enrollment", () => {
+  it("requires one matching grant for first non-intro Unminted enrollment, then permits reconnect", async () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    const resolver = new FakeResolver();
+    resolver.resolution = {
+      kind: "assigned_here",
+      revision: REVISION,
+      tentacleAgentId: AGENT_ID,
+      tentacleInboxId: SELF,
+      enrollment: "liveness",
+    };
+    const store = new FakeStore(freshState());
+    const directory = new FakeDirectory([globalGroup()]);
+    const control = service({ directory, store, resolver, livenessGate: gate });
+    const direct = new FakeConversation("11".repeat(32));
+    await expect(control.enroll({
+      join: JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: direct,
+    })).resolves.toBeUndefined();
+    expect(directory.createCount).toBe(0);
+
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: LIVENESS_QUERY,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    await expect(control.enroll({
+      join: LIVENESS_JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: direct,
+    })).resolves.toMatchObject({ requestId: LIVENESS_JOIN.requestId });
+    expect(store.state.enrollments).toHaveLength(1);
+
+    await expect(control.enroll({
+      join: LIVENESS_JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: direct,
+    })).resolves.toMatchObject({ requestId: LIVENESS_JOIN.requestId });
+    await expect(control.enroll({
+      join: JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: direct,
+    })).resolves.toMatchObject({ requestId: JOIN.requestId });
+  });
+
+  it("keeps the liveness grant available when enrollment persistence fails", async () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    const resolver = new FakeResolver();
+    resolver.resolution = {
+      kind: "assigned_here",
+      revision: REVISION,
+      tentacleAgentId: AGENT_ID,
+      tentacleInboxId: SELF,
+      enrollment: "liveness",
+    };
+    const failingStore: ChatStateStore = {
+      load: async () => freshState(),
+      save: async () => {
+        throw new Error("disk unavailable");
+      },
+    };
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: LIVENESS_QUERY,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    await expect(service({
+      directory: new FakeDirectory([globalGroup()]),
+      store: failingStore,
+      resolver,
+      livenessGate: gate,
+    }).enroll({
+      join: LIVENESS_JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: new FakeConversation("11".repeat(32)),
+    })).rejects.toThrow("disk unavailable");
+    expect(gate.hasGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      livenessRequestId: LIVENESS_QUERY.requestId,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+  });
+
+  it("does not let a liveness join replace intro/controller admission", async () => {
+    const gate = new LivenessControlGate(() => 1_000_000);
+    expect(gate.admitQuery(USER, LIVENESS_QUERY)).toBe(true);
+    expect(gate.issueGrant({
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      query: LIVENESS_QUERY,
+      tentacleAgentId: AGENT_ID,
+    })).toBe(true);
+    const directory = new FakeDirectory([globalGroup()]);
+    const control = service({ directory, livenessGate: gate });
+    await expect(control.enroll({
+      join: LIVENESS_JOIN,
+      senderInboxId: USER,
+      senderAddress: ADDRESS,
+      directConversation: new FakeConversation("11".repeat(32)),
+    })).resolves.toBeUndefined();
+    expect(directory.createCount).toBe(0);
+  });
+
   it("creates one Acolytes group, adds members once, and repairs 14-day Direct policy", async () => {
     const global = globalGroup();
     const directory = new FakeDirectory([global]);

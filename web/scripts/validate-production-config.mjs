@@ -4,10 +4,13 @@ const PLACEHOLDER = "{api-key}";
 const API_KEY = /^[A-Za-z0-9._~-]{8,256}$/u;
 const ADDRESS = /^0x[0-9a-f]{40}$/u;
 const ZERO_ADDRESS = `0x${"0".repeat(40)}`;
+const CANONICAL_BRANDING = "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da";
 const UNSIGNED_DECIMAL = /^(?:0|[1-9][0-9]*)$/u;
 const AGENT0 = "https://gateway.thegraph.com/api/{api-key}/subgraphs/id/43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUFJojb";
 // This is intentionally public client configuration, restricted at The Graph gateway.
 const PUBLIC_AGENT0_KEY = "2636605c8c75cc8a1b8ddb5c07f8c563";
+// Public browser project ID, origin-restricted to cthuwu.app at Infura.
+const PUBLIC_BASE_RPC = "https://base-mainnet.infura.io/v3/e1656809acaa4db18ea2ea40e489c4c8";
 
 export function validateProductionConfig(environment) {
   const template = environment.VITE_CTHUWU_GRAPHQL_ENDPOINT?.trim() || AGENT0;
@@ -26,7 +29,7 @@ export function validateProductionConfig(environment) {
     throw new Error("VITE_CTHUWU_GRAPHQL_ENDPOINT contains an unresolved placeholder");
   }
   validateHttpsUrl(resolved, "VITE_CTHUWU_GRAPHQL_ENDPOINT");
-  validateHttpsUrl(environment.VITE_CTHUWU_BASE_RPC_ENDPOINT?.trim() || "https://mainnet.base.org/", "VITE_CTHUWU_BASE_RPC_ENDPOINT");
+  validateHttpsUrl(environment.VITE_CTHUWU_BASE_RPC_ENDPOINT?.trim() || PUBLIC_BASE_RPC, "VITE_CTHUWU_BASE_RPC_ENDPOINT");
   for (const [name, value] of [
     ["VITE_CTHUWU_IPFS_GATEWAY", environment.VITE_CTHUWU_IPFS_GATEWAY],
     ["VITE_CTHUWU_ARWEAVE_GATEWAY", environment.VITE_CTHUWU_ARWEAVE_GATEWAY],
@@ -43,10 +46,12 @@ export function validateProductionConfig(environment) {
   const brandingContract = environment.VITE_CTHUWU_BRANDING_CONTRACT;
   if (
     brandingContract !== undefined && brandingContract !== "" &&
-    (!ADDRESS.test(brandingContract) || brandingContract === ZERO_ADDRESS)
+    (!ADDRESS.test(brandingContract) ||
+      brandingContract === ZERO_ADDRESS ||
+      brandingContract !== CANONICAL_BRANDING)
   ) {
     throw new Error(
-      "VITE_CTHUWU_BRANDING_CONTRACT must be a lowercase nonzero 0x-prefixed address",
+      "VITE_CTHUWU_BRANDING_CONTRACT must be the canonical Base deployment",
     );
   }
   const assignmentRefresh = environment.VITE_CTHUWU_ASSIGNMENT_REFRESH_MS;

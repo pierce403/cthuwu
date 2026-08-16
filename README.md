@@ -51,7 +51,7 @@ retention, and sharding boundaries are documented in
 | ERC-8004 registry read adapter and crash-safe registration | **Implemented — canonical Base mainnet**; pinned registration-v1/contract revision, fail-closed deployment checks, and narrow sidecar signing |
 | Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; restricted public Graph gateway key is checked-in client configuration |
 | Acolyte three-channel workspace | **In progress — fixed Direct/Acolytes/Global model with deterministic unit coverage**; no production Global or live interoperability claim |
-| Acolyte Branding | **In progress — Foundry contract, deployment tooling, and assignment boundary**; no funded Base deployment or live production routing claim |
+| Acolyte Branding | **In progress — verified Base deployment plus typed consent/mint/name reconciliation**; funded live wallet/XMTP and production group gates remain open |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
@@ -132,8 +132,9 @@ committed, so local intents and core records must not be described as completed 
 - Each durable Tentacle derives and persists an expanded launcher-inspired eldritch name, publishes
   it in the ERC-8004 registration-v1 profile, and automatically repairs profile drift when funded.
   Random browser Acolytes receive stable address-derived British-style surname/estate labels; Branding V1 can
-  carry one as the exact owner trait `Acolyte Name`, while live mint/name execution remains a
-  separate unfinished gate.
+  carry one as the exact owner trait `Acolyte Name`. The typed consent executor mints and then
+  reconciles that trait through separately confirmed transactions; a funded production browser run
+  remains the release gate rather than an assumed success.
 - The Scales core accumulates aggregate metrics, keeps open-period snapshots provisional, and makes
   final judgments binding. Public wallets remain entity-scoped tier/Engagement inputs, while the
   XMTP-derived treasury address plus fresh balance/stake observations and accepted reward/spend
@@ -789,17 +790,22 @@ wallet binding, canonical registry, byte-exact allegiance/protocol, and the exac
 ERC-8004 registration resolving to the selected production XMTP endpoint. Agent0 and leaderboard
 rows are hints only.
 
-Unminted, expired, and positively ineligible states preserve the intro path. `RegistryUnavailable`,
-inconsistent same-block reads, or an
-unverifiable endpoint freezes assignment and exposes retry instead of treating the outage as
-abandonment. Assignment is rechecked on connect, PWA resume, and a bounded interval; a controller
-change replaces Direct and Acolytes while retaining Global.
+On a first Unminted connection without an explicit or retained route, the browser concurrently
+probes at most the top five funded eligible Tentacles from its completely validated leaderboard
+snapshot with non-push `fhtagn?` controls. The first authenticated response wins only after fresh
+same-block Branding and ERC-8004 verification; its freshly verified bounded agentURI name (or
+`Tentacle #<agentId>`) appears in chat, and one
+short-lived liveness grant binds enrollment. Expired and positively ineligible states preserve the
+intro path. `RegistryUnavailable`, inconsistent same-block reads, or an unverifiable endpoint
+freezes assignment and exposes retry instead of treating the outage as abandonment. Active
+Branding is rechecked on connect, PWA resume, and a bounded interval; a controller change replaces
+Direct and Acolytes while retaining Global.
 
 The three-channel configuration names are:
 
 | Name | Scope |
 |---|---|
-| `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static client Base RPC; credential-free HTTPS, default `https://mainnet.base.org/`. |
+| `VITE_CTHUWU_BASE_RPC_ENDPOINT` | Static client Base RPC; defaults to the checked-in public, origin-restricted Infura Base endpoint. |
 | `VITE_CTHUWU_BRANDING_CONTRACT` | Verified Branding deployment compiled into the static client; defaults to the canonical Base address. |
 | `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Browser assignment refresh; default `600000`, accepted range `60000`–`3600000`. |
 | `CTHUWU_RPC_ENDPOINT` | Tentacle Base RPC; credential-free HTTPS or loopback HTTP, default `https://mainnet.base.org`. |
@@ -811,7 +817,7 @@ The three-channel configuration names are:
 Example reviewed static-build inputs:
 
 ```dotenv
-VITE_CTHUWU_BASE_RPC_ENDPOINT=https://mainnet.base.org/
+VITE_CTHUWU_BASE_RPC_ENDPOINT=https://base-mainnet.infura.io/v3/e1656809acaa4db18ea2ea40e489c4c8
 VITE_CTHUWU_BRANDING_CONTRACT=0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da
 VITE_CTHUWU_ASSIGNMENT_REFRESH_MS=600000
 ```
@@ -903,8 +909,8 @@ installed app may receive separate storage.
 - A Branding is a public service/controller right for one immutable Ethereum address, not ownership
   of a person. It stores no XMTP inbox, message, contact note, credential, or private memory;
   ordinary ERC-721 approvals/transfers are disabled, registry outages cannot authorize seizure, and
-  sale/upkeep proceeds move directly under the immutable contract rules. No Branding deployment is
-  claimed until its funded Base release gate passes.
+  sale/upkeep proceeds move directly under the immutable contract rules. The canonical Base
+  deployment is confirmed; its funded live consent/mint/name-repair release exercise remains open.
 - Channel UI state uses only `cthuwu.chat.*` local-storage keys and remains separate from
   `cthuwu:leaderboard:v1`. Inbox IDs, group IDs, assignment revisions, and conversation data never
   go on-chain.

@@ -1,6 +1,10 @@
 import { Interface, getAddress } from "ethers";
 import { describe, expect, it, vi } from "vitest";
-import type { AppConfig } from "../config";
+import {
+  CANONICAL_BRANDING_CONTRACT,
+  CANONICAL_BRANDING_RUNTIME_HASH,
+  type AppConfig,
+} from "../config";
 import type { StoredIdentity } from "../identity";
 import {
   ALLEGIANCE_HEX,
@@ -46,6 +50,11 @@ const baseConfig: AppConfig = {
   baseRpcEndpoint: "https://mainnet.base.org/",
   assignmentRefreshMs: 600_000,
 };
+const configuredConfig: AppConfig = {
+  ...baseConfig,
+  brandingContract: CANONICAL_BRANDING_CONTRACT,
+};
+const canonicalCodeHash = () => CANONICAL_BRANDING_RUNTIME_HASH;
 
 function dataUri(value: unknown): string {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
@@ -54,7 +63,7 @@ function dataUri(value: unknown): string {
   return `data:application/json;base64,${btoa(binary)}`;
 }
 
-function profile(environment = "production"): string {
+function profile(environment = "production", name = "Fixture Tentacle"): string {
   const endpoint = `xmtp://${inbox}`;
   const registry = getAddress(IDENTITY_REGISTRY);
   const manifest = dataUri({
@@ -67,7 +76,7 @@ function profile(environment = "production"): string {
   });
   return dataUri({
     type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
-    name: "Fixture Tentacle",
+    name,
     description: "fixture",
     image: "ipfs://fixture",
     services: [
@@ -90,6 +99,8 @@ function canonicalRpc(options: {
 } = {}) {
   const status = options.status ?? 1;
   const owner = status === 0 ? ZERO_ADDRESS : "0x3333333333333333333333333333333333333333";
+  const controllerAgentId = status === 0 ? 0n : 42n;
+  const activePayment = status === 0 ? 0n : 1n;
   const firstHash = `0x${"a".repeat(64)}`;
   let blockReads = 0;
   const brandingCalls: string[] = [];
@@ -112,8 +123,8 @@ function canonicalRpc(options: {
         if (brandingSelector === brandingInterface.getFunction("brandingOf")!.selector) {
           brandingCalls.push(call.data);
           return brandingInterface.encodeFunctionResult("brandingOf", [[
-            BigInt(identity.address), options.acolyte ?? identity.address, owner, 42n,
-            ZERO_ADDRESS, 1n, 1n, 0n, 0n, status,
+            BigInt(identity.address), options.acolyte ?? identity.address, owner, controllerAgentId,
+            ZERO_ADDRESS, activePayment, activePayment, 0n, 0n, status,
           ]]);
         }
         if (brandingSelector === brandingInterface.getFunction("BASE_CHAIN_ID")!.selector) {
@@ -176,14 +187,19 @@ describe("canonical Tentacle assignment", () => {
   });
 
   it("treats a configured registry outage as retryable instead of abandonment", async () => {
-    const config = {
-      ...baseConfig,
-      brandingContract: "0x2222222222222222222222222222222222222222",
-    };
     const rpc = { request: async () => { throw new Error("RPC offline"); } };
-    await expect(resolveTentacleAssignment(config, identity, { rpc })).rejects.toBeInstanceOf(
+    await expect(resolveTentacleAssignment(configuredConfig, identity, { rpc })).rejects.toBeInstanceOf(
       RegistryUnavailableError,
     );
+  });
+
+  it("rejects an alternate Branding address before consulting Base", async () => {
+    const rpc = { request: vi.fn() };
+    await expect(resolveTentacleAssignment({
+      ...baseConfig,
+      brandingContract: "0x2222222222222222222222222222222222222222",
+    }, identity, { rpc })).rejects.toThrow(/canonical deployment/u);
+    expect(rpc.request).not.toHaveBeenCalled();
   });
 
   it("rejects a mismatched JSON-RPC response ID", async () => {
@@ -212,13 +228,16 @@ describe("canonical Tentacle assignment", () => {
   });
 
   it("resolves an Active Branding controller from one stable explicit Base block", async () => {
-    const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
     const rpc = canonicalRpc();
-    await expect(resolveTentacleAssignment(config, identity, { rpc })).resolves.toMatchObject({
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc,
+      hashCode: canonicalCodeHash,
+    })).resolves.toMatchObject({
       source: "branding-active",
       inboxId: inbox,
       agentId: "42",
       wallet: "0x3333333333333333333333333333333333333333",
+      name: "Fixture Tentacle",
       blockNumber: 123n,
       blockHash: `0x${"a".repeat(64)}`,
     });
@@ -227,13 +246,12 @@ describe("canonical Tentacle assignment", () => {
   });
 
   it.each([
-    [0, "Unminted"],
     [2, "Expired"],
     [3, "Ineligible"],
   ])("uses intro only for canonical non-active status %s (%s)", async (status, label) => {
-    const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
-    await expect(resolveTentacleAssignment(config, identity, {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
       rpc: canonicalRpc({ status }),
+      hashCode: canonicalCodeHash,
       discoverRotation: async () => [],
     })).resolves.toMatchObject({
       source: "intro-fallback",
@@ -243,12 +261,12 @@ describe("canonical Tentacle assignment", () => {
     });
   });
 
-  it("assigns an unminted identity through the eligible Tentacle rotation", async () => {
-    const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
+  it("requires a live response instead of assigning an unminted identity by address hash", async () => {
     const wallet = "0x3333333333333333333333333333333333333333";
     const rpc = canonicalRpc({ status: 0 });
-    await expect(resolveTentacleAssignment(config, identity, {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
       rpc,
+      hashCode: canonicalCodeHash,
       discoverRotation: async () => [{
         wallet,
         agentId: "42",
@@ -257,25 +275,24 @@ describe("canonical Tentacle assignment", () => {
         blockHash: `0x${"b".repeat(64)}`,
       }],
     })).resolves.toMatchObject({
-      source: "rotation-verified",
-      address: wallet,
-      agentId: "42",
-      inboxId: inbox,
-      blockNumber: 122n,
-      blockHash: `0x${"b".repeat(64)}`,
+      source: "liveness-required",
+      address: configuredConfig.botAddress,
+      brandingStatus: "Unminted",
+      blockNumber: 123n,
+      blockHash: `0x${"a".repeat(64)}`,
     });
     expect(rpc.registryCalls).toEqual([]);
   });
 
-  it("routes an unbranded deep link from Agent0 without candidate Base reads", async () => {
+  it("routes an unbranded deep link only after fresh canonical Base verification", async () => {
     const config = {
-      ...baseConfig,
-      brandingContract: "0x2222222222222222222222222222222222222222",
+      ...configuredConfig,
       tentacleAnchor: "0x3333333333333333333333333333333333333333",
     };
-    const rpc = canonicalRpc({ status: 0 });
+    const rpc = canonicalRpc({ status: 0, registryWallet: config.tentacleAnchor });
     await expect(resolveTentacleAssignment(config, identity, {
       rpc,
+      hashCode: canonicalCodeHash,
       discoverAnchor: async () => [{
         wallet: config.tentacleAnchor!, agentId: "42", inboxId: inbox,
         blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
@@ -286,19 +303,90 @@ describe("canonical Tentacle assignment", () => {
       wallet: config.tentacleAnchor,
       agentId: "42",
       inboxId: inbox,
-      blockNumber: 122n,
+      name: "Fixture Tentacle",
+      blockNumber: 123n,
+      blockHash: `0x${"a".repeat(64)}`,
     });
-    expect(rpc.registryCalls).toEqual([]);
+    expect(rpc.registryCalls).toHaveLength(6);
+  });
+
+  it("normalizes a checksummed directory wallet to the lowercase explicit link target", async () => {
+    const target = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    const discoverAnchor = vi.fn(async () => [{
+      wallet: getAddress(target), agentId: "42", inboxId: inbox,
+      blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
+    }]);
+    await expect(resolveTentacleAssignment({
+      ...configuredConfig,
+      tentacleAnchor: target,
+    }, identity, {
+      rpc: canonicalRpc({ status: 0, registryWallet: target }),
+      hashCode: canonicalCodeHash,
+      discoverAnchor,
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      address: target,
+      wallet: target,
+      name: "Fixture Tentacle",
+    });
+    expect(discoverAnchor).toHaveBeenCalledWith(target);
+  });
+
+  it("fails a deep link closed when the fresh registry wallet no longer matches", async () => {
+    const config = {
+      ...configuredConfig,
+      tentacleAnchor: "0x3333333333333333333333333333333333333333",
+    };
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: "0x4444444444444444444444444444444444444444",
+      }),
+      hashCode: canonicalCodeHash,
+      discoverAnchor: async () => [{
+        wallet: config.tentacleAnchor!, agentId: "42", inboxId: inbox,
+        blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
+      }],
+    })).rejects.toThrow(/canonically eligible/u);
+  });
+
+  it("fails a deep link closed when its fresh production XMTP endpoint changed", async () => {
+    const config = {
+      ...configuredConfig,
+      tentacleAnchor: "0x3333333333333333333333333333333333333333",
+    };
+    await expect(resolveTentacleAssignment(config, identity, {
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: config.tentacleAnchor,
+        profileUri: profile("dev"),
+      }),
+      hashCode: canonicalCodeHash,
+      discoverAnchor: async () => [{
+        wallet: config.tentacleAnchor!, agentId: "42", inboxId: inbox,
+        blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
+      }],
+    })).rejects.toThrow(/manifest does not bind/u);
+  });
+
+  it("falls back to the verified agent ID when the fresh profile name is unsafe", async () => {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({ profileUri: profile("production", "spoof\u202e") }),
+      hashCode: canonicalCodeHash,
+    })).resolves.toMatchObject({
+      source: "branding-active",
+      name: "Tentacle #42",
+    });
   });
 
   it("refuses an ambiguous t address instead of choosing a controller", async () => {
     const config = {
-      ...baseConfig,
-      brandingContract: "0x2222222222222222222222222222222222222222",
+      ...configuredConfig,
       tentacleAnchor: "0x3333333333333333333333333333333333333333",
     };
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ status: 0 }),
+      hashCode: canonicalCodeHash,
       discoverAnchor: async () => ["42", "43"].map((agentId) => ({
         wallet: config.tentacleAnchor!, agentId, inboxId: inbox,
         blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
@@ -307,18 +395,29 @@ describe("canonical Tentacle assignment", () => {
   });
 
   it("freezes on tuple spoofing, positive RegistryUnavailable, or a reorg", async () => {
-    const config = { ...baseConfig, brandingContract: "0x2222222222222222222222222222222222222222" };
+    const config = configuredConfig;
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ acolyte: "0x4444444444444444444444444444444444444444" }),
+      hashCode: canonicalCodeHash,
     })).rejects.toThrow(RegistryUnavailableError);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ status: 4 }),
+      hashCode: canonicalCodeHash,
     })).rejects.toThrow(RegistryUnavailableError);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ finalHash: `0x${"b".repeat(64)}` }),
+      hashCode: canonicalCodeHash,
     })).rejects.toThrow(/changed during assignment/u);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ brandingUwu: "0x4444444444444444444444444444444444444444" }),
+      hashCode: canonicalCodeHash,
+    })).rejects.toThrow(RegistryUnavailableError);
+  });
+
+  it("freezes assignment when canonical Branding runtime code changes", async () => {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc(),
+      hashCode: () => `0x${"f".repeat(64)}`,
     })).rejects.toThrow(RegistryUnavailableError);
   });
 });

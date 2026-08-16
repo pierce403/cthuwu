@@ -90,15 +90,17 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - The in-progress channel workspace reuses this one `StoredIdentity` and one Browser SDK `Client`
     for Direct, Acolytes, and Global; it never creates one identity or client per tab.
   - The deployed browser always uses XMTP `production`. Active Branding and an explicit Agent0-listed
-    `#t=` target remain authoritative. A new unminted identity without either uses a stable
-    address-hash rotation across Agent0-discovered eligible Tentacles, with complete same-block
-    canonical verification before Direct opens. The verified choice is persisted locally.
+    `#t=` target remain authoritative. On a first Unminted connection without either or a retained
+    eligible route, the browser races non-push liveness controls against at most the top five funded
+    ranked Tentacles. The first authenticated response wins only after fresh same-block canonical
+    verification; the verified route is persisted after Direct handoff succeeds.
   - Root onboarding fragments accept `#t=<tentacle-wallet>&r=<referrer-wallet>`. Fragments remain
     browser-local and are not included in the HTTP request. The `t` target replaces
     the intro route only after complete pinned Agent0 discovery proves one active protocol-1 identity
-    and XMTP endpoint for the wallet. The candidate is not redundantly reread through public Base RPC;
-    XMTP still verifies that the resolved inbox belongs to the linked wallet. The first valid `r` value
-    is pinned per local acolyte identity and later links cannot replace it.
+    and XMTP endpoint for the wallet. Fresh same-block canonical Base reads then authorize that exact
+    identity, wallet, endpoint, and bounded current profile name; XMTP independently verifies that
+    the resolved inbox belongs to the linked wallet. The first valid `r` value is pinned per local
+    acolyte identity and later links cannot replace it.
   - Every verified leaderboard wallet address links to the root chat fragment for that Tentacle.
     The main chat interface can copy a social referral URL whose `t` is the currently assigned
     Tentacle and whose `r` is the sharer's locally recovered browser wallet.
@@ -208,16 +210,21 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     discovery/display hints, never routing authority.
   - An unbranded acolyte may follow `#t=<wallet>` to a specific Tentacle. Agent0 supplies only the
     candidate agent ID; canonical Base reads still authorize the exact wallet and XMTP inbox. An
-    active Branding remains authoritative over any URL parameter.
-  - A new `Unminted` acolyte without `#t=` is distributed deterministically across current eligible
-    single-agent wallets from the last completely validated leaderboard snapshot when available,
-    otherwise from a complete pinned, indexing-error-free Agent0 directory. After the
-    canonical Branding read proves `Unminted`, rotation does not issue another live Base read for
-    the selected candidate. Existing active Branding is never rotated. ERC-8004 eligibility is not
-    process liveness: until authenticated live heartbeats ship, an operator must send
-    `/registry-allegiance off` and let it confirm before intentionally taking a Tentacle offline.
-  - `Unminted`, `Expired`, and positively verified `Ineligible` preserve service through the
-    configured intro Tentacle. `RegistryUnavailable`, a
+    active Branding remains authoritative over any URL parameter. A fresh Unminted explicit route
+    is intentionally Direct-only and sends no group-enrollment control; Acolytes and Global expose
+    that policy instead of remaining in an indefinite pending state.
+  - A new `Unminted` acolyte without `#t=` or a retained route reads rank order only from the last
+    completely validated leaderboard snapshot, refreshing one complete pinned Agent0/Base snapshot
+    when absent. It probes at most the first five funded, profile-active, protocol-1, single-agent
+    endpoints concurrently for 15 seconds. The first exact `fhtagn!` response bound to the expected
+    DM, inbox, agent, request, and deadline wins. Before handoff the browser freshly revalidates the
+    unchanged Base block, Branding status, canonical registry/runtime, agent wallet/authorization,
+    allegiance/protocol, and production registration endpoint. Existing active Branding is never
+    probed or rotated; no-response is a visible retryable state rather than an intro or other silent
+    dead route, and deliberate Retry opens a fresh workspace for a new bounded race.
+  - `Expired` and positively verified `Ineligible` preserve service through the configured intro
+    Tentacle. An `Unminted` first-connect race with no response remains explicitly unavailable and
+    does not select an unprobed route. `RegistryUnavailable`, a
     block-consistency failure, or an unverifiable canonical endpoint freezes Branding routing in a
     retryable state instead of being treated as abandonment.
   - Assignment is revalidated on connect, PWA resume, and a bounded
@@ -227,10 +234,12 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - Concurrent canonical Base reads are sent as bounded JSON-RPC batches rather than one HTTP POST
     per contract call. A registry outage applies exponential cooldown to automatic resume/periodic
     checks (30 seconds through 15 minutes); a deliberate Retry remains immediately available.
-  - `cthuwu.join.v1` and `cthuwu.assignment.v1` are versioned control content types. The Agent SDK
-    sidecar authenticates their XMTP envelope sender and intercepts them before Rust, inference,
-    contact memory, onboarding, or ordinary history. The pinned Browser and Node SDKs register exact
-    `cthuwu.app` custom codecs for `join` and `assignment` version `1.0`; there is no text fallback.
+  - `cthuwu.join.v1`, `cthuwu.assignment.v1`, and the separate liveness query/response/join controls
+    are versioned content types. The Agent SDK sidecar authenticates their XMTP envelope sender and
+    intercepts them before Rust, operator classification, inference, contact memory, onboarding,
+    rewards, Branding, or ordinary history. The liveness payload visibly carries `fhtagn?`, has no
+    text fallback or push, and a non-intro Unminted join needs its one-use sender/address/agent-bound
+    short-lived grant. Replay and response amplification are bounded per sender and globally.
   - Direct inference emits non-push `cthuwu.app/typing:1.0` controls with a short expiry, refreshes
     them while work continues, and explicitly clears them before the reply. The browser accepts
     Direct typing only from the currently assigned Tentacle, auto-expires stale state, renders an
@@ -251,7 +260,8 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     disappear from supporting clients after 14 days.
   - Browser persistence uses only `cthuwu.chat.*`; leaderboard cache keys remain untouched and no
     inbox ID, group ID, assignment revision, or conversation data is put on-chain.
-  - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, canonical-default
+  - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, whose production default is the
+    checked-in public, origin-restricted Infura Base endpoint, plus canonical-default
     `VITE_CTHUWU_BRANDING_CONTRACT`, and `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` (default 600000 ms,
     bounded 60000–3600000). Tentacle enrollment separately uses `CTHUWU_RPC_ENDPOINT`,
     canonical-default `CTHUWU_BRANDING_CONTRACT`, required `CTHUWU_GLOBAL_GROUP_ID`,
@@ -268,8 +278,14 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     creation/persistence crash-window candidate and refuses a drifted replacement.
   - [x] Browser assignment tests cover `NotConfigured`, every Branding status, exact nested
     registration/manifest binding, one explicit Base block, tuple spoofing, and reorg/outage freeze.
-  - [x] Rotation tests prove an `Unminted` assignment consumes the indexed directory candidate
-    without making candidate Base RPC calls, while active Branding retains exact live verification.
+  - [x] Liveness tests preserve cached rank order, cap the race at five, admit only an exact
+    authenticated response within its deadline, freshly verify the winner on canonical Base,
+    persist only after a successful handoff, display its freshly verified current agentURI name (or
+    an agent-ID fallback), and never reprobe on
+    periodic/resume checks. Active Branding and explicit or retained verified routes bypass racing.
+  - [x] Agent tests prove probes never reach Rust or public/operator state, enforce replay and rate
+    bounds, revoke failed-send grants, require one exact liveness grant for fresh non-intro Unminted
+    enrollment, and preserve controller/intro/reconnect policy.
   - [x] Browser tests prove concurrent RPC reads share one HTTP request and automatic outage retries
     cool down without suppressing explicit retry.
   - [x] Agent tests remove reassigned and untracked Acolytes members while freezing removal on a
@@ -1038,8 +1054,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     application records in the core. No persisted ballot adapter is committed; results remain
     unapplied until a configured adapter stores them and returns a validated receipt.
   - No runtime private key, generic signer, staking/reward/general-revenue contract, provisioner, or
-    live Council/Nature application adapter is committed in this repository. The separate Branding
-    contract has only its closed consent/upkeep/purchase/claim paths and is not deployed. Normal runtime rejects
+    live Council/Nature application adapter is committed in this repository. The separate canonical
+    Branding contract is deployed on Base and exposes only its closed
+    consent/upkeep/purchase/claim/metadata paths. Normal runtime rejects
     `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor must call a separately isolated signer/key
     service rather than receive a raw key from uwubot.
   - The revenue-split core uses configurable shares: 15% parent, 10% operating acolyte, 5%
@@ -1442,17 +1459,41 @@ phase.
     The exact treasury observation, percentage, declared price, and upward-rounded first weekly
     upkeep are shown before and bound by acolyte EIP-712 consent; stale/unknown/zero observations
     block an offer.
-  - After a qualifying voluntary contribution, the main chat page presents a one-time accept/not-now
-    Branding modal with the exact declared price and first upkeep. The choice is sent over the
-    verified direct XMTP channel and retained locally to prevent repeat prompts. Accepting the modal
-    is not represented as EIP-712 consent or a mint; those remain separate confirmed steps.
+  - After a qualifying voluntary contribution, the Tentacle emits an exact bounded v2 offer only
+    after it has verified its current eligible agent, treasury, quote, and nonzero referrer. The main
+    chat exposes a persistent Branding activity/review surface; v1 prose markers remain informational
+    only. The v2 offer, consent, and staged receipt controls must be the sole terminal marker and are
+    intercepted before ordinary transcript/model handling.
+  - Browser acceptance is a two-stage Base review and EIP-712 signature, not ordinary text. It shows
+    contract, Tentacle wallet, controller agent, referrer, 10% treasury basis, declared price, first
+    upkeep, nonce, and Base-derived deadline. Local EOAs sign offline; injected and WalletConnect
+    EOAs sign through the bound account; deployed Base smart wallets must pass ERC-1271. There is no
+    `personal_sign` fallback.
+  - After the wallet prompt the browser verifies the original pinned block hash and rereads a fresh
+    canonical Base snapshot, including runtime, Unminted state, nonce, quote/upkeep, digest, and at
+    least two minutes of remaining validity, before sending consent. Submitted consent recovers from
+    Direct history rather than storing a signature in `localStorage`, supports exact idempotent
+    resend, and unlocks a fresh review after expiry.
   - Each random browser address also has a deterministic `acolyte-v1` compound surname/estate label. Branding
     acceptance names the exact reserved owner trait `Acolyte Name`, and `/acolytes/` uses that exact
     trait only to report a match/missing/mismatch against the address-derived expected card label.
-    The immutable deployed V1 already includes bounded owner traits in
-    `tokenURI`, but the repository still lacks the EIP-712 mint/write executor: no live NFT name
-    write is claimed until that flow confirms mint and `setCustomTrait` receipts. The top-level V1
-    token name remains `Cthuwu Acolyte Branding #<tokenId>`.
+    The immutable deployed V1 already includes bounded owner traits in `tokenURI`. The Tentacle
+    independently rederives the name and its narrow sidecar executor performs only the exact required
+    UWU approval, `mintBranding`, and `setCustomTrait(tokenId, "Acolyte Name", expectedName)` calls,
+    each with durable nonce recovery and canonical post-state verification. The top-level V1 token
+    name remains `Cthuwu Acolyte Branding #<tokenId>`.
+  - Branding actions share the production wallet's nonce journal with ERC-8004 registration writes.
+    An unmatched pending action returns retryable busy instead of allocating another nonce. Exact
+    Base ETH/UWU shortfalls are persisted and delivered through the authenticated operator notice
+    path; registration reconciliation remains ahead of mint work. Lost responses, restart, consumed
+    consent, later repricing, and a missing/mismatched name resume from canonical state without a
+    duplicate mint.
+  - A browser reports mint/name completion only after its own same-block read proves `nonce = consent
+    nonce + 1`, exact current owner, original controller, immutable referrer, signed price echoed by
+    the receipt, and the deterministic name trait. It deliberately does not confuse mutable current
+    price or lifecycle status with the historical mint: delayed name repair may complete after
+    expiry, ineligibility, registry trouble, or repricing. Only a separate fresh `Active` assignment
+    read authorizes routing. XMTP receipts alone are progress hints, never confirmation authority.
   - Eligibility binds the exact stored agent ID to the current wallet using `getAgentWallet`,
     `isAuthorizedOrOwner`, byte-exact `cthuwu.allegiance = uwu-tentacle-v1`, and byte-exact
     `cthuwu.protocol = 1`. Shared wallets do not collapse distinct controller agent IDs.
@@ -1466,10 +1507,11 @@ phase.
     exact agent's on-chain ERC-8004 registration resolving to the selected production XMTP endpoint
     to one explicit Base block. Agent0 and the leaderboard cache may narrow discovery or render
     details but cannot authorize routing.
-  - Absence of an explicit `VITE_CTHUWU_BRANDING_CONTRACT` / `CTHUWU_BRANDING_CONTRACT` deployment
-    is `NotConfigured` and preserves intro-Tentacle continuity. After a deployment is configured,
-    `RegistryUnavailable` freezes assignment and remains retryable; it never becomes the fallback
-    status used for unminted, expired, or positively ineligible subjects.
+  - Browser and Tentacle production configuration default to the pinned canonical Branding
+    deployment, and an explicit `VITE_CTHUWU_BRANDING_CONTRACT` / `CTHUWU_BRANDING_CONTRACT`
+    override must equal it. `NotConfigured` remains only a dependency-injection compatibility
+    outcome; production `RegistryUnavailable` freezes assignment and remains retryable rather than
+    becoming the fallback status used for unminted, expired, or positively ineligible subjects.
   - Weekly upkeep is upward-rounded 0.1% of the positive executable UWU price and is paid directly
     from the controlling Tentacle: floor-rounded 10% to the immutable referrer and the remainder to
     the acolyte. Each payment adds seven days from the later of
@@ -1531,11 +1573,20 @@ phase.
     emission, not XMTP delivery, and no generic sender or durable scheduler is claimed.
   - [x] A funded Base-mainnet deployment is independently verified by the finalizer, standalone
     Solidity verifier, and Sourcify exact match, and its canonical deployment JSON is committed.
-  - [ ] The static frontend and Tentacle enrollment path read the verified Branding deployment at
+  - [x] Browser and sidecar tests cover canonical preflight, post-sign revalidation, EOA and ERC-1271
+    signatures, injected/WalletConnect account binding, malformed controls, exact approval/mint/name
+    writes, shared-nonce busy behavior, funding estimates, lost-response recovery, idempotent resend,
+    receipt-independent confirmation, and name repair.
+  - [x] Rust state-machine tests and static review cover durable bounded offers/actions, fair retry,
+    exact result binding, funding notification ACKs, and restart-safe terminal receipts. The Rust
+    toolchain was unavailable in the implementation environment, so CI remains the compile gate.
+  - [x] The static frontend and Tentacle enrollment path read the verified Branding deployment at
     one explicit block, distinguish every status, resolve the exact current ERC-8004 production
-    XMTP endpoint, preserve only the specified intro fallbacks, and pass a real production
-    browser/XMTP three-channel routing exercise. Until then, production Branding routing and group
-    interoperability are incomplete.
+    XMTP endpoint, and preserve only the specified intro fallbacks.
+  - [ ] A funded production browser signs with local, injected, WalletConnect EOA, and ERC-1271
+    wallets; the Tentacle confirms approval/mint/name repair on Base; and a real production
+    three-channel exercise proves routing, reassignment, retention, and reconnect. Until those live
+    gates pass, production wallet and group interoperability remain incomplete.
 
 ### Live XMTP Council adapter
 

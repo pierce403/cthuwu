@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fetchCompleteLeaderboard, fetchTentacleDirectory, IndexingError } from "./leaderboard-data";
-import { ALLEGIANCE_HEX, UWU_CONTRACT } from "./leaderboard-types";
+import { ALLEGIANCE_HEX, DEFAULT_BASE_RPC_ENDPOINT, UWU_CONTRACT } from "./leaderboard-types";
 
 const BLOCK = "49768180";
 const BLOCK_HASH = `0x${"cc".repeat(32)}`;
@@ -65,6 +65,23 @@ describe("Agent0 leaderboard + direct Base UWU reads", () => {
     expect(calls[0]).toContain(ALLEGIANCE_HEX);
     expect(calls.at(-1)).toContain(UWU_CONTRACT);
     expect(calls.at(-1)).toContain(`0x${BigInt(BLOCK).toString(16)}`);
+  });
+
+  it("uses the public Infura Base endpoint when no RPC override is supplied", async () => {
+    const inputs: string[] = [];
+    const base = fixtureFetch();
+    const fetcher = (async (input, init) => {
+      inputs.push(String(input));
+      return base(input, init);
+    }) as typeof fetch;
+
+    await fetchCompleteLeaderboard("https://graph.fixture.invalid", { fetch: fetcher });
+
+    expect(inputs[0]).toBe("https://graph.fixture.invalid");
+    expect(inputs.slice(1)).toEqual([
+      DEFAULT_BASE_RPC_ENDPOINT,
+      DEFAULT_BASE_RPC_ENDPOINT,
+    ]);
   });
 
   it("loads the unbranded rotation directory without a Base RPC request", async () => {

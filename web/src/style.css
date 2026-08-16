@@ -2863,6 +2863,17 @@ html[data-motion="paused"] .message {
 
 .activity-label { margin: 0 0 0.2rem; opacity: 0.72; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; }
 .activity-value { margin: 0; }
+.activity-action {
+  margin-top: 0.55rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(173, 130, 255, 0.5);
+  border-radius: 999px;
+  color: #f8f4ff;
+  background: rgba(85, 46, 133, 0.5);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
 
 .branding-offer {
   max-width: min(32rem, calc(100vw - 2rem));
@@ -2874,6 +2885,9 @@ html[data-motion="paused"] .message {
 }
 .branding-offer::backdrop { background: rgba(5, 2, 12, 0.76); backdrop-filter: blur(6px); }
 .branding-offer dl div { display: flex; justify-content: space-between; gap: 1rem; margin: 0.6rem 0; }
-.branding-offer dd { margin: 0; font-family: monospace; }
+.branding-offer dd { margin: 0; font-family: monospace; overflow-wrap: anywhere; text-align: right; }
+.branding-exact { margin: 1rem 0; }
+.branding-exact summary { cursor: pointer; color: var(--lavender-200, #d8caf3); }
+.branding-disclosure.error { color: #ffb9c8; }
 .branding-disclosure { font-size: 0.86rem; opacity: 0.76; }
 .branding-actions { display: flex; justify-content: flex-end; gap: 0.7rem; margin-top: 1.2rem; }

@@ -95,6 +95,9 @@
           <section id="activity-card" class="activity-card" aria-live="polite" hidden>
             <p class="activity-label">Tentacle activity</p>
             <p id="reward-status" class="activity-value"></p>
+            <button id="branding-review" class="activity-action" type="button" hidden>
+              review Branding offer
+            </button>
           </section>
           <div class="trust-row" aria-label="Connection privacy">
             <span class="trust-chip">
@@ -244,10 +247,22 @@
           <div><dt>First weekly upkeep</dt><dd id="branding-upkeep"></dd></div>
           <div><dt>Referrer</dt><dd id="branding-referrer"></dd></div>
         </dl>
-        <p class="branding-disclosure">Accepting records your choice over XMTP. Minting still requires your exact EIP-712 consent and a confirmed Base transaction; this button alone cannot mint.</p>
+        <details class="branding-exact">
+          <summary>exact consent fields</summary>
+          <dl>
+            <div><dt>Contract</dt><dd id="branding-contract"></dd></div>
+            <div><dt>Minter</dt><dd id="branding-minter"></dd></div>
+            <div><dt>Controller agent</dt><dd id="branding-agent"></dd></div>
+            <div><dt>Price basis</dt><dd id="branding-basis"></dd></div>
+            <div><dt>Consent nonce</dt><dd id="branding-nonce"></dd></div>
+            <div><dt>Deadline</dt><dd id="branding-deadline"></dd></div>
+          </dl>
+        </details>
+        <p id="branding-status" class="branding-disclosure" role="status" aria-live="polite">Review the exact offer before signing.</p>
+        <p class="branding-disclosure">The first button verifies canonical Base state. A separate EIP-712 wallet signature then consents only to the displayed mint fields; neither step shares a private key.</p>
         <div class="branding-actions">
           <button id="branding-decline" type="button" value="decline">not now</button>
-          <button id="branding-accept" type="button" value="accept">accept offer</button>
+          <button id="branding-accept" type="button" value="accept">review exact consent</button>
         </div>
       </form>
     </dialog>

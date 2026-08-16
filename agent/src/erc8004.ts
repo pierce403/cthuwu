@@ -7,6 +7,8 @@ import {
   decodeEventLog,
   encodeFunctionData,
   getAddress,
+  hashTypedData,
+  hexToBytes,
   hexToString,
   http,
   isAddress,
@@ -16,6 +18,7 @@ import {
   parseAbi,
   stringToHex,
   toHex,
+  verifyTypedData,
   type Address,
   type Hex,
 } from "viem";
@@ -42,6 +45,17 @@ export const ERC8004_REVISION =
   "erc-8004-contracts@68fc6765761a10fb26f0692df21c8a6f9d12b1be";
 export const ERC8004_VERSION = "2.0.0";
 export const ERC8004_START_BLOCK = 41_663_783n;
+
+export const BRANDING_CONTRACT = getAddress(
+  "0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da",
+);
+export const BRANDING_RUNTIME_CODE_HASH =
+  "0x3a22b742a570dc2d030edf2bd82dceda1e068a297e2c36883f97b7b66ed4ef2d" as Hex;
+export const CANONICAL_UWU = getAddress(
+  "0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07",
+);
+export const ACOLYTE_NAME_TRAIT = "Acolyte Name";
+export const ACOLYTE_NAME_SCHEME = "acolyte-v1";
 
 export const ALLEGIANCE_KEY = "cthuwu.allegiance";
 export const ALLEGIANCE_VALUE = "uwu-tentacle-v1";
@@ -82,6 +96,42 @@ const DEFAULT_MAX_FEE_PER_GAS_WEI = 10_000_000_000n;
 const DEFAULT_SAFETY_BPS = 12_500n;
 const DEFAULT_RESERVE_WEI = 50_000_000_000_000n;
 const MAX_SIGNER_JOURNAL_BYTES = 4 * 1024;
+const MAX_SIGNATURE_BYTES = 8 * 1024;
+const BRANDING_DOMAIN_NAME = "Cthuwu Acolyte Branding";
+const BRANDING_DOMAIN_VERSION = "1";
+const BRANDING_REGISTRY_VERSION = "2.0.0";
+const UWU_DECIMALS = 18;
+const ERC1271_MAGIC_VALUE = "0x1626ba7e";
+
+const brandingAbi = parseAbi([
+  "event BrandingMinted(uint256 indexed tokenId, address indexed acolyte, address indexed owner, uint256 controllerAgentId, address referrer, uint256 declaredPrice, uint256 paidThrough, uint256 firstUpkeep)",
+  "event CustomTraitUpdated(uint256 indexed tokenId, string traitType, string value)",
+  "function BASE_CHAIN_ID() view returns (uint256)",
+  "function IDENTITY_REGISTRY() view returns (address)",
+  "function UWU() view returns (address)",
+  "function REGISTRY_VERSION() view returns (string)",
+  "function DOMAIN_NAME() view returns (string)",
+  "function DOMAIN_VERSION() view returns (string)",
+  "function nonces(address acolyte) view returns (uint256)",
+  "function weeklyUpkeepForPrice(uint256 price) pure returns (uint256)",
+  "function consentDigest((address acolyte,address minter,uint256 controllerAgentId,address referrer,uint256 initialDeclaredPrice,uint256 nonce,uint256 deadline) consent) view returns (bytes32)",
+  "function mintBranding((address acolyte,address minter,uint256 controllerAgentId,address referrer,uint256 initialDeclaredPrice,uint256 nonce,uint256 deadline) consent, bytes signature) returns (uint256 tokenId)",
+  "function brandingOf(address acolyte) view returns ((uint256 tokenId,address acolyte,address owner,uint256 controllerAgentId,address referrer,uint256 declaredPrice,uint256 paidThrough,uint256 pendingDeclaredPrice,uint256 pendingPriceActivation,uint8 status) result)",
+  "function customTraitCount(uint256 tokenId) view returns (uint256)",
+  "function customTraitAt(uint256 tokenId, uint256 index) view returns (string traitType, string value)",
+  "function setCustomTrait(uint256 tokenId, string traitType, string value)",
+]);
+
+const erc20Abi = parseAbi([
+  "function decimals() view returns (uint8)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+]);
+
+const erc1271Abi = parseAbi([
+  "function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4 magicValue)",
+]);
 
 const identityAbi = parseAbi([
   "event Registered(uint256 indexed agentId, string agentURI, address indexed owner)",
@@ -137,6 +187,36 @@ type WriteIntent =
 
 type WriteOperation = WriteIntent & { nonce: string };
 
+export type BrandingInspectOperation = {
+  type: "branding_inspect";
+  acolyte: Address;
+  controllerAgentId: string;
+  referrer: Address;
+  treasuryBalance: string;
+  priceBasisPoints: number;
+  initialDeclaredPrice: string;
+  acolyteName: string;
+};
+
+export type CompleteBrandingOperation = {
+  type: "complete_branding";
+  acolyte: Address;
+  minter: Address;
+  controllerAgentId: string;
+  referrer: Address;
+  treasuryBalance: string;
+  priceBasisPoints: number;
+  initialDeclaredPrice: string;
+  nonce: string;
+  deadline: string;
+  offerBlockNumber: string;
+  offerBlockHash: Hex;
+  signature: Hex;
+  acolyteName: string;
+};
+
+type BrandingOperation = BrandingInspectOperation | CompleteBrandingOperation;
+
 export type PreparedErc8004Transaction = {
   chainId: 8453;
   to: Address;
@@ -147,7 +227,7 @@ export type PreparedErc8004Transaction = {
 export type Erc8004Request = {
   version: 1;
   actionId: string;
-  operation: ReadOperation | WriteOperation;
+  operation: ReadOperation | WriteOperation | BrandingOperation;
 };
 
 export type Erc8004Response =
@@ -230,6 +310,143 @@ function walletAddress(value: unknown): Address {
     throw new PermanentSignerError("invalid_request", "wallet must not be the zero address");
   }
   return address;
+}
+
+function uint256Decimal(
+  value: unknown,
+  name: string,
+  options: { positive?: boolean } = {},
+): string {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,77})$/u.test(value)) {
+    throw new PermanentSignerError(
+      "invalid_request",
+      `${name} must be a canonical uint256 decimal string`,
+    );
+  }
+  const parsed = BigInt(value);
+  if (parsed >= 1n << 256n || (options.positive === true && parsed === 0n)) {
+    throw new PermanentSignerError(
+      "invalid_request",
+      `${name} is outside its required uint256 range`,
+    );
+  }
+  return value;
+}
+
+function brandingPriceBasisPoints(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 500 ||
+    value > 2_000
+  ) {
+    throw new PermanentSignerError(
+      "invalid_request",
+      "priceBasisPoints must be an integer between 500 and 2000",
+    );
+  }
+  return value;
+}
+
+function validateBrandingQuote(
+  treasuryBalance: string,
+  priceBasisPoints: number,
+  initialDeclaredPrice: string,
+): void {
+  const product = BigInt(treasuryBalance) * BigInt(priceBasisPoints);
+  if (product >= 1n << 256n) {
+    throw new PermanentSignerError(
+      "branding_quote",
+      "treasury-derived Branding price calculation exceeds uint256",
+    );
+  }
+  const expected = product / 10_000n;
+  if (expected === 0n || expected.toString() !== initialDeclaredPrice) {
+    throw new PermanentSignerError(
+      "branding_quote",
+      "initialDeclaredPrice does not match the exact treasury balance and bounded basis-point quote",
+    );
+  }
+}
+
+function boundedHex(value: unknown, name: string, maximumBytes: number): Hex {
+  if (
+    typeof value !== "string" ||
+    !/^0x(?:[0-9a-fA-F]{2})+$/u.test(value) ||
+    (value.length - 2) / 2 > maximumBytes
+  ) {
+    throw new PermanentSignerError(
+      "invalid_request",
+      `${name} must be nonempty bounded hexadecimal bytes`,
+    );
+  }
+  return value.toLowerCase() as Hex;
+}
+
+const ACOLYTE_NAME_FIRST = [
+  "Ainsworth", "Ashcombe", "Bellingham", "Blackwood", "Cavendish", "Cholmondeley",
+  "Davenport", "Devereux", "Eversleigh", "Fairfax", "Featherstone", "Fitzwilliam",
+  "Fortescue", "Gainsborough", "Harrington", "Hawthorne", "Kensington", "Langford",
+  "Marlborough", "Montague", "Pemberton", "Ravenscroft", "Sinclair", "Somerset",
+  "Stanhope", "Thackeray", "Wainwright", "Weatherby", "Wellington", "Westcott",
+  "Whitcombe", "Winchester", "Abberley", "Adderley", "Alvingham", "Bancroft",
+  "Barrington", "Beauchamp", "Beresford", "Brabazon", "Broughton", "Buckhurst",
+  "Cadogan", "Chatterton", "Chetwynd", "Coleridge", "Digby", "Edgeworth", "Frobisher",
+  "Granville", "Hardwick", "Hesketh", "Lascelles", "Mandeville", "Mortimer", "Neville",
+  "Paget", "Rawdon", "Rockingham", "Sherborne", "Trelawney", "Waldegrave", "Wentworth",
+  "Wyndham",
+] as const;
+
+const ACOLYTE_NAME_SECOND = [
+  "Arbuthnot", "Bramwell", "Carrington", "Chadwick", "Clavering", "Cumberland",
+  "Darlington", "Ellsworth", "Farnsworth", "Fetherstonhaugh", "Godolphin", "Grantham",
+  "Hargreaves", "Kingsley", "Loxley", "Marchbanks", "Molesworth", "Northcott", "Ormsby",
+  "Ponsonby", "Radcliffe", "Sackville", "Smythe", "Tavistock", "Templeton", "Uxbridge",
+  "Vane", "Walsingham", "Wetherell", "Whittington", "Wickham", "Worthing", "Acton",
+  "Blandford", "Boswell", "Bridgeman", "Bulwer", "Calthorpe", "Chichester", "Coningsby",
+  "Delamere", "Denham", "Dorrington", "Eddington", "Fane", "Fitzalan", "Grafton",
+  "Grosvenor", "Harcourt", "Ingleby", "Jermyn", "Kettering", "Lowther", "Marwood",
+  "Painswick", "Quenby", "Rivington", "SaintJohn", "Strathmore", "Tichborne", "Underhill",
+  "Vernon", "Wrottesley", "Yelverton",
+] as const;
+
+const ACOLYTE_ESTATE_PREFIX = [
+  "Alder", "Amber", "Apple", "Ash", "Barrow", "Beech", "Bel", "Birch", "Black", "Blen",
+  "Blythe", "Bracken", "Bram", "Briar", "Bright", "Broad", "Buck", "Cedar", "Charn",
+  "Clear", "Cold", "Crow", "Deep", "Dun", "East", "Elder", "Elm", "Ever", "Fair",
+  "Fern", "Fleet", "Fox", "Glen", "Gold", "Grand", "Green", "Grey", "Hart", "Hazel",
+  "High", "Holly", "Honey", "Ivy", "Kings", "Lang", "Little", "Long", "Low", "Maple",
+  "Marsh", "Mere", "Mill", "Nether", "North", "Oak", "Pen", "Pine", "Raven", "Red",
+  "Rose", "Silver", "South", "Stan", "Wych",
+] as const;
+
+const ACOLYTE_ESTATE_SUFFIX = [
+  "abbey", "bank", "borough", "bourne", "bridge", "brook", "bury", "castle", "chester",
+  "cliff", "combe", "court", "croft", "dale", "den", "field", "ford", "gate", "grove",
+  "hall", "ham", "haven", "heath", "hill", "holm", "hurst", "ington", "land", "leigh",
+  "manor", "marsh", "meadow", "mere", "mill", "minster", "moor", "mount", "park", "pool",
+  "port", "ridge", "rose", "stead", "stoke", "stone", "thorp", "ton", "vale", "view",
+  "ville", "wall", "water", "way", "well", "wick", "wood", "worth", "yard", "end", "fen",
+  "green", "lodge", "priory", "quay",
+] as const;
+
+export function deriveAcolyteName(address: string): string {
+  const canonical = getAddress(address);
+  const digest = hexToBytes(keccak256(canonical));
+  const index = (offset: number, length: number): number =>
+    ((digest[offset]! << 8) | digest[offset + 1]!) % length;
+  return `${ACOLYTE_NAME_FIRST[index(0, ACOLYTE_NAME_FIRST.length)]}-${ACOLYTE_NAME_SECOND[index(2, ACOLYTE_NAME_SECOND.length)]} of ${ACOLYTE_ESTATE_PREFIX[index(4, ACOLYTE_ESTATE_PREFIX.length)]}${ACOLYTE_ESTATE_SUFFIX[index(6, ACOLYTE_ESTATE_SUFFIX.length)]}`;
+}
+
+function validatedAcolyteName(value: unknown, acolyte: Address): string {
+  const name = boundedString(value, "acolyteName", 256);
+  if (name !== deriveAcolyteName(acolyte)) {
+    throw new PermanentSignerError(
+      "acolyte_name",
+      `acolyteName must match the deterministic ${ACOLYTE_NAME_SCHEME} value`,
+    );
+  }
+  return name;
 }
 
 function transactionHash(value: unknown): Hex {
@@ -434,6 +651,91 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
         ...(operation.agentId === undefined ? {} : { agentId: decimalId(operation.agentId) }),
       };
       return { version: 1, actionId, operation: parsed };
+    }
+    case "branding_inspect": {
+      exactKeys(operation, [
+        "type",
+        "acolyte",
+        "controllerAgentId",
+        "referrer",
+        "treasuryBalance",
+        "priceBasisPoints",
+        "initialDeclaredPrice",
+        "acolyteName",
+      ]);
+      const acolyte = walletAddress(operation.acolyte);
+      const treasuryBalance = uint256Decimal(operation.treasuryBalance, "treasuryBalance");
+      const priceBasisPoints = brandingPriceBasisPoints(operation.priceBasisPoints);
+      const initialDeclaredPrice = uint256Decimal(
+        operation.initialDeclaredPrice,
+        "initialDeclaredPrice",
+        { positive: true },
+      );
+      validateBrandingQuote(treasuryBalance, priceBasisPoints, initialDeclaredPrice);
+      return {
+        version: 1,
+        actionId,
+        operation: {
+          type: "branding_inspect",
+          acolyte,
+          controllerAgentId: decimalId(operation.controllerAgentId),
+          referrer: walletAddress(operation.referrer),
+          treasuryBalance,
+          priceBasisPoints,
+          initialDeclaredPrice,
+          acolyteName: validatedAcolyteName(operation.acolyteName, acolyte),
+        },
+      };
+    }
+    case "complete_branding": {
+      exactKeys(operation, [
+        "type",
+        "acolyte",
+        "minter",
+        "controllerAgentId",
+        "referrer",
+        "treasuryBalance",
+        "priceBasisPoints",
+        "initialDeclaredPrice",
+        "nonce",
+        "deadline",
+        "offerBlockNumber",
+        "offerBlockHash",
+        "signature",
+        "acolyteName",
+      ]);
+      const acolyte = walletAddress(operation.acolyte);
+      const treasuryBalance = uint256Decimal(operation.treasuryBalance, "treasuryBalance");
+      const priceBasisPoints = brandingPriceBasisPoints(operation.priceBasisPoints);
+      const initialDeclaredPrice = uint256Decimal(
+        operation.initialDeclaredPrice,
+        "initialDeclaredPrice",
+        { positive: true },
+      );
+      validateBrandingQuote(treasuryBalance, priceBasisPoints, initialDeclaredPrice);
+      return {
+        version: 1,
+        actionId,
+        operation: {
+          type: "complete_branding",
+          acolyte,
+          minter: walletAddress(operation.minter),
+          controllerAgentId: decimalId(operation.controllerAgentId),
+          referrer: walletAddress(operation.referrer),
+          treasuryBalance,
+          priceBasisPoints,
+          initialDeclaredPrice,
+          nonce: uint256Decimal(operation.nonce, "nonce"),
+          deadline: uint256Decimal(operation.deadline, "deadline", { positive: true }),
+          offerBlockNumber: uint256Decimal(
+            operation.offerBlockNumber,
+            "offerBlockNumber",
+          ),
+          offerBlockHash: transactionHash(operation.offerBlockHash),
+          signature: boundedHex(operation.signature, "signature", MAX_SIGNATURE_BYTES),
+          acolyteName: validatedAcolyteName(operation.acolyteName, acolyte),
+        },
+      };
     }
     case "register":
       exactKeys(operation, ["type", "nonce"]);
@@ -805,6 +1107,212 @@ export async function authorizeSignerNonce(
   return existed;
 }
 
+type BrandingSignerAllocation = {
+  version: 2;
+  chainId: 8453;
+  wallet: Address;
+  nonce: string;
+  actionId: string;
+  phase: BrandingTransactionPhase;
+  destination: Address;
+  calldataHash: Hex;
+  fingerprint: string;
+};
+
+export type BrandingTransactionPhase = "approve" | "mint" | "name_trait";
+
+function brandingSignerFingerprint(
+  actionId: string,
+  phase: BrandingTransactionPhase,
+  wallet: Address,
+  nonce: string,
+  destination: Address,
+  calldataHash: Hex,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      version: 2,
+      actionId,
+      chainId: ERC8004_CHAIN_ID,
+      wallet,
+      nonce,
+      phase,
+      destination,
+      calldataHash,
+    }))
+    .digest("hex");
+}
+
+function parseBrandingSignerAllocation(raw: string): BrandingSignerAllocation {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new PermanentSignerError(
+      "signer_journal",
+      "shared signer nonce allocation is not valid JSON",
+    );
+  }
+  if (!isRecord(value)) {
+    throw new PermanentSignerError(
+      "signer_journal",
+      "shared signer nonce allocation has an invalid shape",
+    );
+  }
+  exactKeys(value, [
+    "version",
+    "chainId",
+    "wallet",
+    "nonce",
+    "actionId",
+    "phase",
+    "destination",
+    "calldataHash",
+    "fingerprint",
+  ]);
+  if (
+    value.version !== 2 ||
+    value.chainId !== ERC8004_CHAIN_ID ||
+    (value.phase !== "approve" && value.phase !== "mint" && value.phase !== "name_trait") ||
+    typeof value.fingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.fingerprint)
+  ) {
+    throw new PermanentSignerError(
+      "signer_journal",
+      "shared signer nonce allocation is incomplete or has another protocol version",
+    );
+  }
+  return {
+    version: 2,
+    chainId: ERC8004_CHAIN_ID,
+    wallet: walletAddress(value.wallet),
+    nonce: transactionNonce(value.nonce),
+    actionId: boundedString(value.actionId, "journal actionId", 128),
+    phase: value.phase,
+    destination: walletAddress(value.destination),
+    calldataHash: transactionHash(value.calldataHash),
+    fingerprint: value.fingerprint,
+  };
+}
+
+/**
+ * Reserves the one currently executable EOA nonce for one closed Branding phase. The same
+ * `erc8004-signer-nonce-v1-*` namespace is intentionally shared with registry writes, so a
+ * pending registration or unrelated wallet transaction cannot be replaced by Branding.
+ */
+export async function authorizeBrandingSignerNonce(
+  identity: LoadedIdentity,
+  actionId: string,
+  phase: BrandingTransactionPhase,
+  destination: Address,
+  data: Hex,
+  pendingNonce: number,
+  latestNonce: number,
+): Promise<{ nonce: number; existed: boolean }> {
+  const wallet = assertProductionIdentity(identity);
+  if (
+    !Number.isSafeInteger(pendingNonce) ||
+    !Number.isSafeInteger(latestNonce) ||
+    latestNonce < 0 ||
+    pendingNonce < latestNonce ||
+    pendingNonce > latestNonce + 1
+  ) {
+    throw new RecoverableSignerError(
+      "signer_busy",
+      "production signer has an unmatched pending nonce window",
+    );
+  }
+  const stateDirectory = path.dirname(identity.identityPath);
+  const directoryStat = await lstat(stateDirectory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new PermanentSignerError(
+      "signer_journal",
+      "persistent identity state directory is not a private regular directory",
+    );
+  }
+  await chmod(stateDirectory, 0o700);
+  const nonce = latestNonce.toString();
+  const calldataHash = keccak256(data);
+  const allocation: BrandingSignerAllocation = {
+    version: 2,
+    chainId: ERC8004_CHAIN_ID,
+    wallet,
+    nonce,
+    actionId,
+    phase,
+    destination,
+    calldataHash,
+    fingerprint: brandingSignerFingerprint(
+      actionId,
+      phase,
+      wallet,
+      nonce,
+      destination,
+      calldataHash,
+    ),
+  };
+  const encoded = `${JSON.stringify(allocation)}\n`;
+  if (Buffer.byteLength(encoded, "utf8") > MAX_SIGNER_JOURNAL_BYTES) {
+    throw new PermanentSignerError("signer_journal", "shared signer nonce allocation exceeds its bound");
+  }
+  const allocationPath = path.join(
+    stateDirectory,
+    `erc8004-signer-nonce-v1-${nonce}.json`,
+  );
+  let existed = true;
+  if (pendingNonce === latestNonce) {
+    existed = !(await installSignerAllocation(allocationPath, encoded));
+  }
+  let stat;
+  try {
+    stat = await lstat(allocationPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new RecoverableSignerError(
+        "signer_busy",
+        "production signer has an unmatched pending transaction",
+      );
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SIGNER_JOURNAL_BYTES) {
+    throw new PermanentSignerError(
+      "signer_journal",
+      "shared signer nonce allocation is not a bounded regular file",
+    );
+  }
+  await chmod(allocationPath, 0o600);
+  let persisted: BrandingSignerAllocation;
+  try {
+    persisted = parseBrandingSignerAllocation(await readFile(allocationPath, "utf8"));
+  } catch (error) {
+    // A v1 registry allocation at this exact nonce is valid shared-signer state, but it never
+    // authorizes a Branding replacement.
+    if (pendingNonce > latestNonce) {
+      throw new RecoverableSignerError(
+        "signer_busy",
+        "production signer nonce is reserved by another exact action",
+      );
+    }
+    throw error;
+  }
+  if (
+    persisted.wallet !== allocation.wallet ||
+    persisted.nonce !== allocation.nonce ||
+    persisted.actionId !== allocation.actionId ||
+    persisted.phase !== allocation.phase ||
+    persisted.destination !== allocation.destination ||
+    persisted.calldataHash !== allocation.calldataHash ||
+    persisted.fingerprint !== allocation.fingerprint
+  ) {
+    throw new RecoverableSignerError(
+      "signer_busy",
+      "production signer nonce is reserved by another exact action",
+    );
+  }
+  return { nonce: latestNonce, existed };
+}
+
 function createRegistryPublicClient(rpcEndpoint: string) {
   let endpoint: URL;
   try {
@@ -852,14 +1360,28 @@ async function verifyCode(
   return (code.length - 2) / 2;
 }
 
-export async function verifyCanonicalDeployment(publicClient: PublicClient): Promise<Record<string, unknown>> {
+export async function verifyCanonicalDeployment(
+  publicClient: PublicClient,
+  pinnedObservation?: { number: bigint; hash: Hex },
+): Promise<Record<string, unknown>> {
   const chainId = await publicClient.getChainId();
   if (chainId !== ERC8004_CHAIN_ID) {
     throw new PermanentSignerError("wrong_chain", `RPC reported chain ${chainId}; canonical Base is ${ERC8004_CHAIN_ID}`);
   }
-  const observedBlock = await publicClient.getBlock();
+  const observedBlock = pinnedObservation === undefined
+    ? await publicClient.getBlock()
+    : await publicClient.getBlock({ blockNumber: pinnedObservation.number });
   const observedBlockNumber = observedBlock.number;
   const observedBlockHash = observedBlock.hash;
+  if (
+    pinnedObservation !== undefined &&
+    (observedBlockNumber !== pinnedObservation.number || observedBlockHash !== pinnedObservation.hash)
+  ) {
+    throw new RecoverableSignerError(
+      "registry_reorg",
+      "the pinned registry observation block is no longer canonical",
+    );
+  }
   const [identityProxyCodeBytes, reputationProxyCodeBytes] = await Promise.all([
     verifyCode(publicClient, ERC8004_IDENTITY_REGISTRY, PROXY_CODE_HASH, "Identity Registry proxy", observedBlockNumber),
     verifyCode(publicClient, ERC8004_REPUTATION_REGISTRY, PROXY_CODE_HASH, "Reputation Registry proxy", observedBlockNumber),
@@ -1695,6 +2217,1052 @@ async function executeWrite(
   };
 }
 
+type CanonicalBrandingObservation = {
+  blockNumber: bigint;
+  blockHash: Hex;
+  blockTimestamp: bigint;
+};
+
+type BrandingStatusName =
+  | "unminted"
+  | "active"
+  | "expired"
+  | "ineligible"
+  | "registry_unavailable";
+
+type BrandingView = {
+  tokenId: bigint;
+  acolyte: Address;
+  owner: Address;
+  controllerAgentId: bigint;
+  referrer: Address;
+  declaredPrice: bigint;
+  paidThrough: bigint;
+  pendingDeclaredPrice: bigint;
+  pendingPriceActivation: bigint;
+  status: number;
+};
+
+type BrandingSnapshot = {
+  observation: CanonicalBrandingObservation;
+  minter: Address;
+  tokenId: bigint;
+  branding: BrandingView;
+  brandingStatus: BrandingStatusName;
+  currentConsentNonce: bigint;
+  firstWeekUpkeep: bigint;
+  ethBalance: bigint;
+  uwuBalance: bigint;
+  allowance: bigint;
+  nameTrait: string | null;
+};
+
+type BrandingFunding = {
+  ethTarget: bigint;
+  ethShortfall: bigint;
+  uwuTarget: bigint;
+  uwuShortfall: bigint;
+  estimatedCost: bigint;
+  executionGas: bigint;
+  l1DataFee: bigint;
+  l1DataFeeExact: boolean;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  safetyBps: bigint;
+  reserve: bigint;
+  exactOperations: BrandingTransactionPhase[];
+  conservativeOperations: BrandingTransactionPhase[];
+};
+
+type PreparedBrandingPhase = {
+  operation: BrandingTransactionPhase;
+  to: Address;
+  data: Hex;
+};
+
+export function isAllowedBrandingTransaction(
+  operation: BrandingTransactionPhase,
+  to: string,
+  data: string,
+): boolean {
+  if (!isAddress(to, { strict: true }) || !isHex(data) || data.length < 10) return false;
+  const selector = data.slice(0, 10);
+  if (operation === "approve") {
+    return (
+      getAddress(to) === CANONICAL_UWU &&
+      selector ===
+        encodeFunctionData({
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [BRANDING_CONTRACT, 0n],
+        }).slice(0, 10)
+    );
+  }
+  if (getAddress(to) !== BRANDING_CONTRACT) return false;
+  if (operation === "mint") {
+    return selector === encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "mintBranding",
+      args: [{
+        acolyte: BRANDING_CONTRACT,
+        minter: BRANDING_CONTRACT,
+        controllerAgentId: 0n,
+        referrer: BRANDING_CONTRACT,
+        initialDeclaredPrice: 1n,
+        nonce: 0n,
+        deadline: 1n,
+      }, "0x00"],
+    }).slice(0, 10);
+  }
+  return selector === encodeFunctionData({
+    abi: brandingAbi,
+    functionName: "setCustomTrait",
+    args: [0n, ACOLYTE_NAME_TRAIT, "x"],
+  }).slice(0, 10);
+}
+
+const BRANDING_STATUS_NAMES: readonly BrandingStatusName[] = [
+  "unminted",
+  "active",
+  "expired",
+  "ineligible",
+  "registry_unavailable",
+];
+
+function requiredBlockHash(value: Hex | null): Hex {
+  if (value === null || !/^0x[0-9a-fA-F]{64}$/u.test(value)) {
+    throw new RecoverableSignerError(
+      "branding_observation",
+      "Base RPC did not return a canonical Branding block hash",
+    );
+  }
+  return value.toLowerCase() as Hex;
+}
+
+function lowerAddress(value: string): string {
+  return getAddress(value).toLowerCase();
+}
+
+export async function verifyCanonicalBrandingDeployment(
+  publicClient: PublicClient,
+  pinnedObservation?: { number: bigint; hash: Hex },
+): Promise<CanonicalBrandingObservation> {
+  const block = pinnedObservation === undefined
+    ? await publicClient.getBlock()
+    : await publicClient.getBlock({ blockNumber: pinnedObservation.number });
+  const blockHash = requiredBlockHash(block.hash);
+  if (
+    pinnedObservation !== undefined &&
+    (block.number !== pinnedObservation.number || blockHash !== pinnedObservation.hash.toLowerCase())
+  ) {
+    throw new RecoverableSignerError(
+      "branding_reorg",
+      "the signed Branding observation block is no longer canonical",
+    );
+  }
+  await verifyCanonicalDeployment(publicClient, { number: block.number, hash: blockHash });
+  const [runtime, uwuCode] = await Promise.all([
+    publicClient.getCode({ address: BRANDING_CONTRACT, blockNumber: block.number }),
+    publicClient.getCode({ address: CANONICAL_UWU, blockNumber: block.number }),
+  ]);
+  if (runtime === undefined || runtime === "0x" || keccak256(runtime) !== BRANDING_RUNTIME_CODE_HASH) {
+    throw new PermanentSignerError(
+      "branding_code",
+      "canonical Branding runtime bytecode does not match the pinned Base deployment",
+    );
+  }
+  if (uwuCode === undefined || uwuCode === "0x") {
+    throw new PermanentSignerError("uwu_code", "canonical UWU has no deployed bytecode");
+  }
+  const [chainId, registry, uwu, registryVersion, domainName, domainVersion, decimals] =
+    await Promise.all([
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "BASE_CHAIN_ID",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "IDENTITY_REGISTRY",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "UWU",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "REGISTRY_VERSION",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "DOMAIN_NAME",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "DOMAIN_VERSION",
+        blockNumber: block.number,
+      }),
+      publicClient.readContract({
+        address: CANONICAL_UWU,
+        abi: erc20Abi,
+        functionName: "decimals",
+        blockNumber: block.number,
+      }),
+    ]);
+  if (
+    chainId !== BigInt(ERC8004_CHAIN_ID) ||
+    getAddress(registry) !== ERC8004_IDENTITY_REGISTRY ||
+    getAddress(uwu) !== CANONICAL_UWU ||
+    registryVersion !== BRANDING_REGISTRY_VERSION ||
+    domainName !== BRANDING_DOMAIN_NAME ||
+    domainVersion !== BRANDING_DOMAIN_VERSION ||
+    decimals !== UWU_DECIMALS
+  ) {
+    throw new PermanentSignerError(
+      "branding_dependencies",
+      "canonical Branding dependencies, domain, or version do not match the pinned deployment",
+    );
+  }
+  const canonical = await publicClient.getBlock({ blockNumber: block.number });
+  if (requiredBlockHash(canonical.hash) !== blockHash) {
+    throw new RecoverableSignerError(
+      "branding_reorg",
+      "the Branding deployment observation changed while it was verified",
+    );
+  }
+  return {
+    blockNumber: block.number,
+    blockHash,
+    blockTimestamp: block.timestamp,
+  };
+}
+
+async function verifyBrandingController(
+  publicClient: PublicClient,
+  minter: Address,
+  agentId: string,
+  blockNumber: bigint,
+): Promise<void> {
+  const id = BigInt(agentId);
+  const [agentWallet, authorized, allegiance, protocol] = await Promise.all([
+    publicClient.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: identityAbi,
+      functionName: "getAgentWallet",
+      args: [id],
+      blockNumber,
+    }),
+    publicClient.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: identityAbi,
+      functionName: "isAuthorizedOrOwner",
+      args: [minter, id],
+      blockNumber,
+    }),
+    publicClient.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: identityAbi,
+      functionName: "getMetadata",
+      args: [id, ALLEGIANCE_KEY],
+      blockNumber,
+    }),
+    publicClient.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: identityAbi,
+      functionName: "getMetadata",
+      args: [id, PROTOCOL_KEY],
+      blockNumber,
+    }),
+  ]);
+  if (
+    getAddress(agentWallet) !== minter ||
+    !authorized ||
+    allegiance !== stringToHex(ALLEGIANCE_VALUE) ||
+    protocol !== stringToHex(PROTOCOL_VALUE)
+  ) {
+    throw new PermanentSignerError(
+      "branding_ineligible",
+      "local production signer is not the exact eligible controller for this Branding",
+    );
+  }
+}
+
+async function readAcolyteNameTrait(
+  publicClient: PublicClient,
+  tokenId: bigint,
+  blockNumber: bigint,
+): Promise<string | null> {
+  const count = await publicClient.readContract({
+    address: BRANDING_CONTRACT,
+    abi: brandingAbi,
+    functionName: "customTraitCount",
+    args: [tokenId],
+    blockNumber,
+  });
+  if (count > 32n) {
+    throw new PermanentSignerError(
+      "branding_metadata",
+      "Branding contains more custom traits than the canonical contract permits",
+    );
+  }
+  for (let index = 0n; index < count; index += 1n) {
+    const [traitType, value] = await publicClient.readContract({
+      address: BRANDING_CONTRACT,
+      abi: brandingAbi,
+      functionName: "customTraitAt",
+      args: [tokenId, index],
+      blockNumber,
+    });
+    if (
+      Buffer.byteLength(traitType, "utf8") > 64 ||
+      Buffer.byteLength(value, "utf8") > 256
+    ) {
+      throw new PermanentSignerError(
+        "branding_metadata",
+        "Branding custom trait exceeds the canonical metadata bounds",
+      );
+    }
+    if (traitType === ACOLYTE_NAME_TRAIT) return value;
+  }
+  return null;
+}
+
+async function readBrandingSnapshot(
+  publicClient: PublicClient,
+  operation: BrandingOperation,
+  minter: Address,
+): Promise<BrandingSnapshot> {
+  const observation = await verifyCanonicalBrandingDeployment(publicClient);
+  const initialDeclaredPrice = BigInt(operation.initialDeclaredPrice);
+  const [rawBranding, currentConsentNonce, firstWeekUpkeep, ethBalance, uwuBalance, allowance] =
+    await Promise.all([
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "brandingOf",
+        args: [operation.acolyte],
+        blockNumber: observation.blockNumber,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "nonces",
+        args: [operation.acolyte],
+        blockNumber: observation.blockNumber,
+      }),
+      publicClient.readContract({
+        address: BRANDING_CONTRACT,
+        abi: brandingAbi,
+        functionName: "weeklyUpkeepForPrice",
+        args: [initialDeclaredPrice],
+        blockNumber: observation.blockNumber,
+      }),
+      publicClient.getBalance({ address: minter, blockNumber: observation.blockNumber }),
+      publicClient.readContract({
+        address: CANONICAL_UWU,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [minter],
+        blockNumber: observation.blockNumber,
+      }),
+      publicClient.readContract({
+        address: CANONICAL_UWU,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [minter, BRANDING_CONTRACT],
+        blockNumber: observation.blockNumber,
+      }),
+    ]);
+  const branding = rawBranding as BrandingView;
+  const tokenId = BigInt(operation.acolyte);
+  const brandingStatus = BRANDING_STATUS_NAMES[branding.status];
+  if (
+    brandingStatus === undefined ||
+    branding.tokenId !== tokenId ||
+    getAddress(branding.acolyte) !== operation.acolyte
+  ) {
+    throw new PermanentSignerError(
+      "branding_state",
+      "canonical Branding returned an inconsistent subject or status",
+    );
+  }
+  if (brandingStatus === "unminted") {
+    // Inspection reports the fresh canonical balance so Rust can durably supersede an invitation
+    // whose unsigned quote went stale. Once a consent is signed, completion stays byte-exact and
+    // refuses any treasury drift before minting.
+    if (
+      operation.type === "complete_branding" &&
+      uwuBalance.toString() !== operation.treasuryBalance
+    ) {
+      throw new RecoverableSignerError(
+        "branding_treasury_changed",
+        "the production minter UWU balance changed after the exact Branding quote was created",
+      );
+    }
+    const expectedFirstWeekUpkeep = (initialDeclaredPrice * 10n + 9_999n) / 10_000n;
+    if (firstWeekUpkeep !== expectedFirstWeekUpkeep) {
+      throw new PermanentSignerError(
+        "branding_upkeep",
+        "canonical Branding returned an upkeep amount inconsistent with its exact upward-rounding rule",
+      );
+    }
+    if (
+      getAddress(branding.owner) !== ZERO_ADDRESS ||
+      branding.controllerAgentId !== 0n ||
+      getAddress(branding.referrer) !== ZERO_ADDRESS ||
+      branding.declaredPrice !== 0n ||
+      branding.paidThrough !== 0n
+    ) {
+      throw new PermanentSignerError(
+        "branding_state",
+        "unminted Branding returned nonzero lifecycle state",
+      );
+    }
+    await verifyBrandingController(
+      publicClient,
+      minter,
+      operation.controllerAgentId,
+      observation.blockNumber,
+    );
+  } else {
+    if (
+      getAddress(branding.owner) !== minter ||
+      branding.controllerAgentId.toString() !== operation.controllerAgentId ||
+      getAddress(branding.referrer) !== operation.referrer
+    ) {
+      throw new PermanentSignerError(
+        "branding_conflict",
+        "existing Branding owner, controller, or immutable referrer conflicts with this exact workflow",
+      );
+    }
+    if (
+      operation.type === "complete_branding" &&
+      currentConsentNonce !== BigInt(operation.nonce) + 1n
+    ) {
+      throw new PermanentSignerError(
+        "branding_nonce",
+        "existing Branding did not consume this exact mint consent nonce",
+      );
+    }
+  }
+  const nameTrait = brandingStatus === "unminted"
+    ? null
+    : await readAcolyteNameTrait(publicClient, tokenId, observation.blockNumber);
+  const canonical = await publicClient.getBlock({ blockNumber: observation.blockNumber });
+  if (requiredBlockHash(canonical.hash) !== observation.blockHash) {
+    throw new RecoverableSignerError(
+      "branding_reorg",
+      "Branding state changed canonical blocks while it was read",
+    );
+  }
+  return {
+    observation,
+    minter,
+    tokenId,
+    branding,
+    brandingStatus,
+    currentConsentNonce,
+    firstWeekUpkeep,
+    ethBalance,
+    uwuBalance,
+    allowance,
+    nameTrait,
+  };
+}
+
+function mintConsentFor(
+  operation: CompleteBrandingOperation,
+): {
+  acolyte: Address;
+  minter: Address;
+  controllerAgentId: bigint;
+  referrer: Address;
+  initialDeclaredPrice: bigint;
+  nonce: bigint;
+  deadline: bigint;
+} {
+  return {
+    acolyte: operation.acolyte,
+    minter: operation.minter,
+    controllerAgentId: BigInt(operation.controllerAgentId),
+    referrer: operation.referrer,
+    initialDeclaredPrice: BigInt(operation.initialDeclaredPrice),
+    nonce: BigInt(operation.nonce),
+    deadline: BigInt(operation.deadline),
+  };
+}
+
+export function brandingConsentDigest(operation: CompleteBrandingOperation): Hex {
+  return hashTypedData({
+    domain: {
+      name: BRANDING_DOMAIN_NAME,
+      version: BRANDING_DOMAIN_VERSION,
+      chainId: ERC8004_CHAIN_ID,
+      verifyingContract: BRANDING_CONTRACT,
+    },
+    types: {
+      MintConsent: [
+        { name: "acolyte", type: "address" },
+        { name: "minter", type: "address" },
+        { name: "controllerAgentId", type: "uint256" },
+        { name: "referrer", type: "address" },
+        { name: "initialDeclaredPrice", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    },
+    primaryType: "MintConsent",
+    message: mintConsentFor(operation),
+  });
+}
+
+async function verifyMintConsent(
+  publicClient: PublicClient,
+  operation: CompleteBrandingOperation,
+  snapshot: BrandingSnapshot,
+): Promise<void> {
+  if (snapshot.brandingStatus !== "unminted") return;
+  if (snapshot.currentConsentNonce.toString() !== operation.nonce) {
+    throw new PermanentSignerError(
+      "branding_nonce",
+      "mint consent nonce no longer matches canonical Branding state",
+    );
+  }
+  const deadline = BigInt(operation.deadline);
+  if (deadline <= snapshot.observation.blockTimestamp) {
+    throw new PermanentSignerError(
+      "branding_deadline",
+      "mint consent expired at the fresh pre-mint block",
+    );
+  }
+  if (deadline < snapshot.observation.blockTimestamp + 120n) {
+    // A previously submitted exact mint may still confirm before the signed deadline. Keep the
+    // durable consent retryable until the chain either proves the mint or makes inclusion
+    // impossible; only the expired branch above may discard that authority.
+    throw new RecoverableSignerError(
+      "branding_deadline_close",
+      "mint consent has less than 120 seconds remaining at the fresh pre-mint block",
+    );
+  }
+  const digest = brandingConsentDigest(operation);
+  const contractDigest = await publicClient.readContract({
+    address: BRANDING_CONTRACT,
+    abi: brandingAbi,
+    functionName: "consentDigest",
+    args: [mintConsentFor(operation)],
+    blockNumber: snapshot.observation.blockNumber,
+  });
+  if (contractDigest.toLowerCase() !== digest.toLowerCase()) {
+    throw new PermanentSignerError(
+      "branding_digest",
+      "local and canonical contract EIP-712 consent digests disagree",
+    );
+  }
+  const acolyteCode = await publicClient.getCode({
+    address: operation.acolyte,
+    blockNumber: snapshot.observation.blockNumber,
+  });
+  let valid = false;
+  if (acolyteCode === undefined || acolyteCode === "0x") {
+    valid = await verifyTypedData({
+      address: operation.acolyte,
+      domain: {
+        name: BRANDING_DOMAIN_NAME,
+        version: BRANDING_DOMAIN_VERSION,
+        chainId: ERC8004_CHAIN_ID,
+        verifyingContract: BRANDING_CONTRACT,
+      },
+      types: {
+        MintConsent: [
+          { name: "acolyte", type: "address" },
+          { name: "minter", type: "address" },
+          { name: "controllerAgentId", type: "uint256" },
+          { name: "referrer", type: "address" },
+          { name: "initialDeclaredPrice", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      primaryType: "MintConsent",
+      message: mintConsentFor(operation),
+      signature: operation.signature,
+    }).catch(() => false);
+  } else {
+    const magic = await publicClient.readContract({
+      address: operation.acolyte,
+      abi: erc1271Abi,
+      functionName: "isValidSignature",
+      args: [digest, operation.signature],
+      blockNumber: snapshot.observation.blockNumber,
+    }).catch(() => "0x" as Hex);
+    valid = magic.toLowerCase() === ERC1271_MAGIC_VALUE;
+  }
+  if (!valid) {
+    throw new PermanentSignerError(
+      "branding_signature",
+      "mint consent signature is not valid for the exact acolyte EOA or ERC-1271 wallet",
+    );
+  }
+  const canonical = await publicClient.getBlock({ blockNumber: snapshot.observation.blockNumber });
+  if (requiredBlockHash(canonical.hash) !== snapshot.observation.blockHash) {
+    throw new RecoverableSignerError(
+      "branding_reorg",
+      "the mint-consent verification block changed before execution",
+    );
+  }
+}
+
+function brandingPhases(
+  operation: BrandingOperation,
+  snapshot: BrandingSnapshot,
+): PreparedBrandingPhase[] {
+  if (snapshot.brandingStatus !== "unminted") {
+    return snapshot.nameTrait === operation.acolyteName
+      ? []
+      : [{
+          operation: "name_trait",
+          to: BRANDING_CONTRACT,
+          data: encodeFunctionData({
+            abi: brandingAbi,
+            functionName: "setCustomTrait",
+            args: [snapshot.tokenId, ACOLYTE_NAME_TRAIT, operation.acolyteName],
+          }),
+        }];
+  }
+  const phases: PreparedBrandingPhase[] = [];
+  if (snapshot.allowance < snapshot.firstWeekUpkeep) {
+    phases.push({
+      operation: "approve",
+      to: CANONICAL_UWU,
+      data: encodeFunctionData({
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [BRANDING_CONTRACT, snapshot.firstWeekUpkeep],
+      }),
+    });
+  }
+  const complete = operation.type === "complete_branding" ? operation : undefined;
+  const placeholderSignature = `0x${"00".repeat(65)}` as Hex;
+  const consent = complete === undefined
+    ? {
+        acolyte: operation.acolyte,
+        minter: snapshot.minter,
+        controllerAgentId: BigInt(operation.controllerAgentId),
+        referrer: operation.referrer,
+        initialDeclaredPrice: BigInt(operation.initialDeclaredPrice),
+        nonce: snapshot.currentConsentNonce,
+        deadline: snapshot.observation.blockTimestamp + 600n,
+      }
+    : mintConsentFor(complete);
+  phases.push({
+    operation: "mint",
+    to: BRANDING_CONTRACT,
+    data: encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "mintBranding",
+      args: [consent, complete?.signature ?? placeholderSignature],
+    }),
+  });
+  phases.push({
+    operation: "name_trait",
+    to: BRANDING_CONTRACT,
+    data: encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "setCustomTrait",
+      args: [snapshot.tokenId, ACOLYTE_NAME_TRAIT, operation.acolyteName],
+    }),
+  });
+  return phases;
+}
+
+async function brandingFunding(
+  publicClient: PublicClient,
+  snapshot: BrandingSnapshot,
+  phases: readonly PreparedBrandingPhase[],
+): Promise<BrandingFunding> {
+  const safetyBps = envBigInt("CTHUWU_ERC8004_GAS_SAFETY_BPS", DEFAULT_SAFETY_BPS);
+  if (safetyBps < 10_000n || safetyBps > 50_000n) {
+    throw new PermanentSignerError(
+      "configuration",
+      "gas safety factor must be between 10000 and 50000 basis points",
+    );
+  }
+  const reserve = envBigInt(
+    "CTHUWU_ERC8004_POST_REGISTRATION_RESERVE_WEI",
+    DEFAULT_RESERVE_WEI,
+  );
+  if (phases.length === 0) {
+    return {
+      ethTarget: 0n,
+      ethShortfall: 0n,
+      uwuTarget: 0n,
+      uwuShortfall: 0n,
+      estimatedCost: 0n,
+      executionGas: 0n,
+      l1DataFee: 0n,
+      l1DataFeeExact: true,
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+      safetyBps,
+      reserve,
+      exactOperations: [],
+      conservativeOperations: [],
+    };
+  }
+  const { maxFeePerGas, maxPriorityFeePerGas } = await feeParameters(publicClient);
+  const gasCeiling = envBigInt(
+    "CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION",
+    DEFAULT_MAX_GAS_PER_TRANSACTION,
+  );
+  let executionGas = 0n;
+  const exactOperations: BrandingTransactionPhase[] = [];
+  const conservativeOperations: BrandingTransactionPhase[] = [];
+  for (const phase of phases) {
+    let gas = gasCeiling;
+    try {
+      gas = await publicClient.estimateGas({
+        account: snapshot.minter,
+        to: phase.to,
+        data: phase.data,
+        value: 0n,
+      });
+      exactOperations.push(phase.operation);
+    } catch {
+      // A later phase may be impossible to estimate until the prior exact transaction confirms.
+      // Keep the strict configured ceiling instead of understating the funding requirement.
+      conservativeOperations.push(phase.operation);
+    }
+    if (gas > gasCeiling) {
+      throw new RecoverableSignerError(
+        "gas_ceiling",
+        "estimated Branding gas exceeds the configured per-transaction ceiling",
+      );
+    }
+    executionGas += gas;
+  }
+  const conservativeL1FeePerTransaction = gasCeiling * maxFeePerGas;
+  const l1Estimate = await sumL1FeesWithConservativeFallback(
+    phases,
+    (phase) =>
+      publicClient.estimateL1Fee({
+        account: snapshot.minter,
+        to: phase.to,
+        data: phase.data,
+      }),
+    conservativeL1FeePerTransaction,
+  );
+  const estimatedCost = executionGas * maxFeePerGas + l1Estimate.fee;
+  const ethTarget = (estimatedCost * safetyBps + 9_999n) / 10_000n + reserve;
+  const uwuTarget = phases.some((phase) => phase.operation === "mint")
+    ? snapshot.firstWeekUpkeep
+    : 0n;
+  return {
+    ethTarget,
+    ethShortfall: ethTarget > snapshot.ethBalance ? ethTarget - snapshot.ethBalance : 0n,
+    uwuTarget,
+    uwuShortfall: uwuTarget > snapshot.uwuBalance ? uwuTarget - snapshot.uwuBalance : 0n,
+    estimatedCost,
+    executionGas,
+    l1DataFee: l1Estimate.fee,
+    l1DataFeeExact: l1Estimate.exact,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+    safetyBps,
+    reserve,
+    exactOperations,
+    conservativeOperations,
+  };
+}
+
+function brandingResult(
+  kind: "branding_inspection" | "branding_completion",
+  operation: BrandingOperation,
+  snapshot: BrandingSnapshot,
+  phases: readonly PreparedBrandingPhase[],
+  funding: BrandingFunding,
+  transactionHashes: readonly { operation: BrandingTransactionPhase; transactionHash: Hex }[],
+): Record<string, unknown> {
+  const funded = funding.ethShortfall === 0n && funding.uwuShortfall === 0n;
+  const disposition = phases.length === 0
+    ? "complete"
+    : !funded
+      ? "funding_required"
+      : snapshot.brandingStatus === "unminted"
+        ? "ready"
+        : "repair_required";
+  return {
+    kind,
+    disposition,
+    chainId: ERC8004_CHAIN_ID,
+    contract: lowerAddress(BRANDING_CONTRACT),
+    runtimeCodeHash: BRANDING_RUNTIME_CODE_HASH,
+    identityRegistry: lowerAddress(ERC8004_IDENTITY_REGISTRY),
+    uwu: lowerAddress(CANONICAL_UWU),
+    observedBlockNumber: snapshot.observation.blockNumber.toString(),
+    observedBlockHash: snapshot.observation.blockHash.toLowerCase(),
+    observedBlockTimestamp: snapshot.observation.blockTimestamp.toString(),
+    minter: lowerAddress(snapshot.minter),
+    acolyte: lowerAddress(operation.acolyte),
+    tokenId: snapshot.tokenId.toString(),
+    controllerAgentId: operation.controllerAgentId,
+    referrer: lowerAddress(operation.referrer),
+    initialDeclaredPrice: operation.initialDeclaredPrice,
+    firstWeekUpkeep: snapshot.firstWeekUpkeep.toString(),
+    acolyteName: operation.acolyteName,
+    consentNonce:
+      operation.type === "complete_branding"
+        ? operation.nonce
+        : snapshot.currentConsentNonce.toString(),
+    ...(operation.type === "complete_branding"
+      ? { currentConsentNonce: snapshot.currentConsentNonce.toString() }
+      : {}),
+    brandingStatus: snapshot.brandingStatus,
+    owner: lowerAddress(snapshot.branding.owner),
+    onchainControllerAgentId: snapshot.branding.controllerAgentId.toString(),
+    onchainReferrer: lowerAddress(snapshot.branding.referrer),
+    onchainDeclaredPrice: snapshot.branding.declaredPrice.toString(),
+    paidThrough: snapshot.branding.paidThrough.toString(),
+    nameTrait: snapshot.nameTrait,
+    ethBalanceWei: snapshot.ethBalance.toString(),
+    ethTargetWei: funding.ethTarget.toString(),
+    ethShortfallWei: funding.ethShortfall.toString(),
+    uwuBalance: snapshot.uwuBalance.toString(),
+    uwuTarget: funding.uwuTarget.toString(),
+    uwuShortfallWei: funding.uwuShortfall.toString(),
+    allowance: snapshot.allowance.toString(),
+    estimatedCostWei: funding.estimatedCost.toString(),
+    executionGas: funding.executionGas.toString(),
+    l1DataFeeWei: funding.l1DataFee.toString(),
+    l1DataFeeExact: funding.l1DataFeeExact,
+    maxFeePerGasWei: funding.maxFeePerGas.toString(),
+    maxPriorityFeePerGasWei: funding.maxPriorityFeePerGas.toString(),
+    safetyBps: funding.safetyBps.toString(),
+    reserveWei: funding.reserve.toString(),
+    exactOperations: funding.exactOperations,
+    conservativeOperations: funding.conservativeOperations,
+    pendingOperations: phases.map((phase) => phase.operation),
+    ...(kind === "branding_completion" ? { transactionHashes } : {}),
+  };
+}
+
+async function inspectBranding(
+  publicClient: PublicClient,
+  operation: BrandingInspectOperation,
+  identity: LoadedIdentity,
+): Promise<Record<string, unknown>> {
+  const minter = assertProductionIdentity(identity);
+  const snapshot = await readBrandingSnapshot(publicClient, operation, minter);
+  const phases = brandingPhases(operation, snapshot);
+  const funding = await brandingFunding(publicClient, snapshot, phases);
+  return brandingResult(
+    "branding_inspection",
+    operation,
+    snapshot,
+    phases,
+    funding,
+    [],
+  );
+}
+
+async function sendBrandingPhase(
+  publicClient: PublicClient,
+  identity: LoadedIdentity,
+  actionId: string,
+  phase: PreparedBrandingPhase,
+  rpcEndpoint: string,
+): Promise<Hex> {
+  if (!isAllowedBrandingTransaction(phase.operation, phase.to, phase.data)) {
+    throw new PermanentSignerError(
+      "branding_calldata",
+      "prepared Branding phase is outside the closed approve, mint, and name-trait allowlist",
+    );
+  }
+  const account = privateKeyToAccount(identity.walletKey);
+  const fees = await feeParameters(publicClient);
+  const gasCeiling = envBigInt(
+    "CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION",
+    DEFAULT_MAX_GAS_PER_TRANSACTION,
+  );
+  const gas = await publicClient.estimateGas({
+    account,
+    to: phase.to,
+    data: phase.data,
+    value: 0n,
+  });
+  if (gas > gasCeiling) {
+    throw new RecoverableSignerError(
+      "gas_ceiling",
+      "estimated Branding gas exceeds the configured per-transaction ceiling",
+    );
+  }
+  const [pendingNonce, latestNonce] = await Promise.all([
+    publicClient.getTransactionCount({ address: account.address, blockTag: "pending" }),
+    publicClient.getTransactionCount({ address: account.address, blockTag: "latest" }),
+  ]);
+  const allocation = await authorizeBrandingSignerNonce(
+    identity,
+    actionId,
+    phase.operation,
+    phase.to,
+    phase.data,
+    pendingNonce,
+    latestNonce,
+  );
+  const walletClient = createWalletClient({
+    account,
+    chain: base,
+    transport: http(rpcEndpoint, { timeout: 20_000, retryCount: 0 }),
+  });
+  const hash = await walletClient.sendTransaction({
+    account,
+    chain: base,
+    to: phase.to,
+    data: phase.data,
+    value: 0n,
+    gas,
+    ...fees,
+    nonce: allocation.nonce,
+  });
+  let receipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({
+      hash,
+      confirmations: 1,
+      timeout: 30_000,
+    });
+  } catch {
+    throw new RecoverableSignerError(
+      "branding_transaction_pending",
+      `exact ${phase.operation} transaction remains pending and will be recovered from its durable signer allocation`,
+    );
+  }
+  if (receipt.status !== "success") {
+    throw new PermanentSignerError(
+      "branding_transaction_reverted",
+      `canonical ${phase.operation} transaction reverted`,
+    );
+  }
+  return hash;
+}
+
+async function completeBranding(
+  publicClient: PublicClient,
+  operation: CompleteBrandingOperation,
+  identity: LoadedIdentity,
+  actionId: string,
+  rpcEndpoint: string,
+): Promise<Record<string, unknown>> {
+  const minter = assertProductionIdentity(identity, operation.minter);
+  let snapshot = await readBrandingSnapshot(publicClient, operation, minter);
+  if (snapshot.brandingStatus === "unminted") {
+    // The historical offer anchor is a precondition for exercising mint authority. Once fresh
+    // state proves this exact nonce was consumed by the expected owner/controller/referrer, a
+    // delayed owner-only name repair must not depend on archival access to that old block.
+    const offerBlock = await publicClient.getBlock({
+      blockNumber: BigInt(operation.offerBlockNumber),
+    });
+    if (requiredBlockHash(offerBlock.hash) !== operation.offerBlockHash.toLowerCase()) {
+      throw new RecoverableSignerError(
+        "branding_offer_reorg",
+        "the signed Branding offer block is no longer canonical",
+      );
+    }
+    await verifyMintConsent(publicClient, operation, snapshot);
+  }
+  let phases = brandingPhases(operation, snapshot);
+  let funding = await brandingFunding(publicClient, snapshot, phases);
+  if (funding.ethShortfall !== 0n || funding.uwuShortfall !== 0n) {
+    return brandingResult(
+      "branding_completion",
+      operation,
+      snapshot,
+      phases,
+      funding,
+      [],
+    );
+  }
+  const transactionHashes: Array<{
+    operation: BrandingTransactionPhase;
+    transactionHash: Hex;
+  }> = [];
+
+  for (;;) {
+    const next = phases[0];
+    if (next === undefined) break;
+    // Every phase is reconstructed from freshly verified canonical state. A confirmed approve,
+    // mint, or trait write is skipped after a crash; an exact pending phase is safely replaceable.
+    const hash = await sendBrandingPhase(
+      publicClient,
+      identity,
+      actionId,
+      next,
+      rpcEndpoint,
+    );
+    transactionHashes.push({ operation: next.operation, transactionHash: hash });
+    snapshot = await readBrandingSnapshot(publicClient, operation, minter);
+    const phaseAdvanced =
+      (next.operation === "approve" && snapshot.allowance >= snapshot.firstWeekUpkeep) ||
+      (next.operation === "mint" &&
+        snapshot.brandingStatus !== "unminted" &&
+        snapshot.currentConsentNonce === BigInt(operation.nonce) + 1n) ||
+      (next.operation === "name_trait" && snapshot.nameTrait === operation.acolyteName);
+    if (!phaseAdvanced) {
+      throw new RecoverableSignerError(
+        "branding_no_effect",
+        `confirmed ${next.operation} transaction did not produce its exact expected canonical state transition`,
+      );
+    }
+    if (snapshot.brandingStatus === "unminted") {
+      await verifyMintConsent(publicClient, operation, snapshot);
+    }
+    phases = brandingPhases(operation, snapshot);
+    funding = await brandingFunding(publicClient, snapshot, phases);
+    if (funding.ethShortfall !== 0n || funding.uwuShortfall !== 0n) {
+      return brandingResult(
+        "branding_completion",
+        operation,
+        snapshot,
+        phases,
+        funding,
+        transactionHashes,
+      );
+    }
+  }
+
+  if (
+    snapshot.brandingStatus === "unminted" ||
+    snapshot.nameTrait !== operation.acolyteName ||
+    snapshot.currentConsentNonce !== BigInt(operation.nonce) + 1n ||
+    getAddress(snapshot.branding.owner) !== minter ||
+    snapshot.branding.controllerAgentId.toString() !== operation.controllerAgentId ||
+    getAddress(snapshot.branding.referrer) !== operation.referrer
+  ) {
+    throw new RecoverableSignerError(
+      "branding_incomplete",
+      "Branding completion could not be verified from fresh canonical state",
+    );
+  }
+  funding = await brandingFunding(publicClient, snapshot, []);
+  return brandingResult(
+    "branding_completion",
+    operation,
+    snapshot,
+    [],
+    funding,
+    transactionHashes,
+  );
+}
+
 export async function handleErc8004Request(
   request: Erc8004Request,
   rpcEndpoint: string,
@@ -1760,6 +3328,22 @@ export async function handleErc8004Request(
         await verifyCanonicalDeployment(publicClient);
         result = await fundingEstimate(publicClient, operation);
         break;
+      case "branding_inspect":
+        result = await inspectBranding(
+          publicClient,
+          operation,
+          await loadIdentity(),
+        );
+        break;
+      case "complete_branding":
+        result = await completeBranding(
+          publicClient,
+          operation,
+          await loadIdentity(),
+          request.actionId,
+          rpcEndpoint,
+        );
+        break;
       case "register":
       case "set_agent_uri":
       case "set_metadata":
@@ -1780,7 +3364,11 @@ export async function handleErc8004Request(
     const recoverable = error instanceof RecoverableSignerError || !permanent;
     const code = error instanceof PermanentSignerError || error instanceof RecoverableSignerError ? error.code : "rpc_or_signing_failure";
     const rawMessage = error instanceof Error ? error.message : "ERC-8004 request failed";
-    const message = rawMessage.replace(/https?:\/\/\S+/gu, "<redacted-rpc>").replace(/[\r\n]+/gu, " ").slice(0, 512);
+    const message = rawMessage
+      .replace(/https?:\/\/\S+/gu, "<redacted-rpc>")
+      .replace(/0x[0-9a-fA-F]{80,}/gu, "<redacted-bytes>")
+      .replace(/[\r\n]+/gu, " ")
+      .slice(0, 512);
     return { version: 1, actionId: request.actionId, ok: false, recoverable, code, message };
   }
 }

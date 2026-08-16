@@ -2,6 +2,7 @@ import {
   ALLEGIANCE_HEX,
   BASE_CHAIN_ID,
   BASE_NAME,
+  DEFAULT_BASE_RPC_ENDPOINT,
   IDENTITY_REGISTRY,
   LEADERBOARD_CACHE_VERSION,
   PROTOCOL_V1_HEX,
@@ -167,7 +168,7 @@ export async function fetchCompleteLeaderboard(
     if (parsed.rowCount < PAGE_SIZE) {
       const balanced = await attachUwuBalances(
         fetcher,
-        options.baseRpcEndpoint ?? "https://mainnet.base.org/",
+        options.baseRpcEndpoint ?? DEFAULT_BASE_RPC_ENDPOINT,
         identities,
         parsed.meta,
       );

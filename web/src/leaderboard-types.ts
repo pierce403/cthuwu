@@ -13,7 +13,9 @@ export const AGENT0_BASE_SUBGRAPH_ID = "43s9hQRurMGjuYnC1r2ZwS6xSQktbFyXMPMqGKUF
 // not secrecy; every static-site visitor necessarily sends it to the Graph gateway.
 export const AGENT0_PUBLIC_API_KEY = "2636605c8c75cc8a1b8ddb5c07f8c563";
 export const AGENT0_ENDPOINT_TEMPLATE = `https://gateway.thegraph.com/api/{api-key}/subgraphs/id/${AGENT0_BASE_SUBGRAPH_ID}`;
-export const DEFAULT_BASE_RPC_ENDPOINT = "https://mainnet.base.org/";
+// Public, origin-restricted browser project ID; no signing authority or private key is present.
+export const DEFAULT_BASE_RPC_ENDPOINT =
+  "https://base-mainnet.infura.io/v3/e1656809acaa4db18ea2ea40e489c4c8";
 export const LEADERBOARD_CACHE_KEY = "cthuwu:leaderboard:v1";
 export const LEADERBOARD_CACHE_VERSION = 1;
 

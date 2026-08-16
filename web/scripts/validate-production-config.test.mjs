@@ -8,7 +8,7 @@ const configured = {
   VITE_CTHUWU_IPFS_GATEWAY: "https://ipfs.example/ipfs/",
   VITE_CTHUWU_ARWEAVE_GATEWAY: "https://ar.example/",
   VITE_CTHUWU_LEADERBOARD_FRESH_MS: "900000",
-  VITE_CTHUWU_BRANDING_CONTRACT: "0x1234567890abcdef1234567890abcdef12345678",
+  VITE_CTHUWU_BRANDING_CONTRACT: "0xd8c36f13d79a505c7fbdc5f6467ea3cd75e896da",
   VITE_CTHUWU_ASSIGNMENT_REFRESH_MS: "600000",
 };
 
@@ -64,7 +64,14 @@ describe("production static leaderboard configuration", () => {
         ...configured,
         VITE_CTHUWU_BRANDING_CONTRACT: brandingContract,
       }),
-    ).toThrow("lowercase nonzero");
+    ).toThrow("canonical Base deployment");
+  });
+
+  it("rejects a well-formed alternate Branding deployment", () => {
+    expect(() => validateProductionConfig({
+      ...configured,
+      VITE_CTHUWU_BRANDING_CONTRACT: "0x1234567890abcdef1234567890abcdef12345678",
+    })).toThrow("canonical Base deployment");
   });
 
   it.each([undefined, ""])(

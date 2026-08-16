@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../config";
+import { CANONICAL_BRANDING_CONTRACT } from "../config";
 import type { StoredIdentity } from "../identity";
 import { initializeChatController } from "./controller";
 import type { ChatChannel, ChatWorkspace, WorkspaceSnapshot } from "./types";
@@ -163,6 +164,27 @@ describe("three-channel chat controller", () => {
     expect(workspace.close).toHaveBeenCalledOnce();
   });
 
+  it("starts a fresh workspace when the user retries a completed liveness race", async () => {
+    const failedSnapshot = {
+      ...initialSnapshot(),
+      assignmentState: "liveness-unavailable" as const,
+      assignmentNotice: "No ranked Tentacle answered the one-time liveness check",
+    };
+    const first = fakeWorkspace(failedSnapshot);
+    const second = fakeWorkspace();
+    const createWorkspace = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
+    const controller = initializeChatController(config, identity, { createWorkspace });
+    await controller.connect();
+
+    document.querySelector<HTMLButtonElement>("#connect")?.click();
+    await vi.waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(2));
+    expect(first.revalidateAssignment).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+
   it("keeps existing message nodes stable across every composer keystroke", async () => {
     const workspace = fakeWorkspace();
     const controller = initializeChatController(config, identity, {
@@ -194,14 +216,38 @@ describe("three-channel chat controller", () => {
 
   it("renders reward state and presents a one-time Branding decision modal", async () => {
     const referrer = "0x2222222222222222222222222222222222222222";
+    const dialog = document.querySelector<HTMLDialogElement>("#branding-offer")!;
+    const showModal = vi.fn(() => dialog.setAttribute("open", ""));
+    Object.defineProperty(dialog, "showModal", {
+      configurable: true,
+      value: showModal,
+    });
     const start = initialSnapshot();
+    const name = "Ainsworth-Clavering of Ambercroft";
+    const nameHex = `0x${Array.from(new TextEncoder().encode(name), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const offerId = "12".repeat(16);
+    const blockHash = `0x${"a".repeat(64)}`;
+    const offerMarker = `[[cthuwu:branding-offer:v2;offer=${offerId};contract=${CANONICAL_BRANDING_CONTRACT};minter=${config.botAddress};agent=42;acolyte=${identity.address};referrer=${referrer};treasury=1000;basis=1000;price=100;upkeep=1;nonce=0;deadline=2000000000;block=123;blockHash=${blockHash};name=${nameHex}]]`;
+    const consentMarker = `[[cthuwu:branding-consent:v2;offer=${offerId};contract=${CANONICAL_BRANDING_CONTRACT};minter=${config.botAddress};agent=42;acolyte=${identity.address};referrer=${referrer};price=100;nonce=0;deadline=2000000000;block=123;blockHash=${blockHash};name=${nameHex};signature=0x11]]`;
     start.channels.direct.messages[0] = {
       ...start.channels.direct.messages[0]!,
-      text: "thanks for sharing\n[[cthuwu:reward:v1;status=pending;amount=8]]\n[[cthuwu:branding-offer:v1;treasury=0x3e8;price=0x64;upkeep=0x1]]",
+      text: `thanks for sharing\n[[cthuwu:reward:v1;status=pending;amount=8]]\n${offerMarker}`,
     };
     const workspace = fakeWorkspace(start);
-    const controller = initializeChatController({ ...config, referrer }, identity, {
+    const offer = (await import("../branding-consent")).parseBrandingMessage(offerMarker, "theirs").control;
+    if (!offer || offer.type !== "offer") throw new Error("fixture offer did not parse");
+    const review = {
+      offer,
+      digest: `0x${"b".repeat(64)}`,
+      domain: { name: "Cthuwu Acolyte Branding", version: "1", chainId: 8453, verifyingContract: CANONICAL_BRANDING_CONTRACT },
+    } as const;
+    const consent = (await import("../branding-consent")).parseBrandingMessage(consentMarker, "mine").control;
+    if (!consent || consent.type !== "consent") throw new Error("fixture consent did not parse");
+    const controller = initializeChatController({ ...config, brandingContract: CANONICAL_BRANDING_CONTRACT, referrer }, identity, {
       createWorkspace: vi.fn(async () => workspace),
+      reviewBrandingOffer: vi.fn(async () => review),
+      signBrandingOffer: vi.fn(async () => consent),
+      nowSeconds: () => 1_900_000_000n,
     });
     await controller.connect();
 
@@ -209,17 +255,107 @@ describe("three-channel chat controller", () => {
     expect(document.querySelector(".message")?.textContent).not.toContain("cthuwu:reward");
     expect(document.querySelector("#reward-status")?.textContent).toContain("8 UWU reward queued");
     expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(true);
-    expect(document.querySelector("#branding-price")?.textContent).toBe("100 base units");
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("#branding-price")?.textContent).toContain("100 base units");
     expect(document.querySelector("#branding-referrer")?.textContent).toBe(referrer);
+    const brandingReview = document.querySelector<HTMLButtonElement>("#branding-review")!;
+    expect(brandingReview.hidden).toBe(false);
+    expect(brandingReview.textContent).toContain("Branding offer");
+    dialog.removeAttribute("open");
+    brandingReview.click();
+    expect(showModal).toHaveBeenCalledTimes(2);
+    expect(dialog.hasAttribute("open")).toBe(true);
 
     document.querySelector<HTMLButtonElement>("#branding-accept")?.click();
-    await vi.waitFor(() => expect(workspace.send).toHaveBeenCalledWith(
-      "direct",
-      `I accept the Acolyte Branding offer shown in the Cthuwu app. My generated Acolyte name is Ainsworth-Clavering of Ambercroft; after minting, set the NFT custom trait "Acolyte Name" to exactly "Ainsworth-Clavering of Ambercroft" and correct any mismatch. Use referrer ${referrer} in the exact mint consent.`,
-    ));
-    expect(document.querySelector("#branding-name")?.textContent).toBe("Ainsworth-Clavering of Ambercroft");
-    expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(false);
-    expect(localStorage.getItem("cthuwu:branding-offer:v1:m1")).toBe("accepted");
+    await vi.waitFor(() => expect(document.querySelector("#branding-accept")?.textContent).toBe("sign exact consent"));
+    expect(workspace.send).not.toHaveBeenCalled();
+    document.querySelector<HTMLButtonElement>("#branding-accept")?.click();
+    await vi.waitFor(() => expect(workspace.send).toHaveBeenCalledWith("direct", consentMarker));
+    expect(document.querySelector("#branding-name")?.textContent).toBe(name);
+    expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(true);
+    expect(localStorage.getItem(`cthuwu:branding-offer:v2:${offerId}`)).toBeNull();
+    await controller.close();
+  });
+
+  it("retries the same receipt after a transient Base verification failure", async () => {
+    const start = initialSnapshot();
+    const referrer = "0x2222222222222222222222222222222222222222";
+    const name = "Ainsworth-Clavering of Ambercroft";
+    const nameHex = `0x${Array.from(new TextEncoder().encode(name), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const offerId = "34".repeat(16);
+    const offerBlockHash = `0x${"a".repeat(64)}`;
+    const receiptBlockHash = `0x${"b".repeat(64)}`;
+    const offerMarker = `[[cthuwu:branding-offer:v2;offer=${offerId};contract=${CANONICAL_BRANDING_CONTRACT};minter=${config.botAddress};agent=42;acolyte=${identity.address};referrer=${referrer};treasury=1000;basis=1000;price=100;upkeep=1;nonce=0;deadline=2000000000;block=123;blockHash=${offerBlockHash};name=${nameHex}]]`;
+    const receiptMarker = `[[cthuwu:branding-receipt:v2;offer=${offerId};contract=${CANONICAL_BRANDING_CONTRACT};token=${BigInt(identity.address)};agent=42;acolyte=${identity.address};owner=${config.botAddress};referrer=${referrer};price=100;nonce=0;block=130;blockHash=${receiptBlockHash};name=${nameHex}]]`;
+    start.channels.direct.messages = [
+      {
+        ...start.channels.direct.messages[0]!,
+        id: "offer",
+        text: offerMarker,
+      },
+      {
+        ...start.channels.direct.messages[0]!,
+        id: "receipt",
+        sentAtNs: start.channels.direct.messages[0]!.sentAtNs + 1n,
+        text: receiptMarker,
+      },
+    ];
+    const workspace = fakeWorkspace(start);
+    const verifyReceipt = vi.fn()
+      .mockRejectedValueOnce(new Error("Base RPC unavailable"))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("receipt no longer matches the offer"));
+    const controller = initializeChatController(
+      { ...config, brandingContract: CANONICAL_BRANDING_CONTRACT },
+      identity,
+      {
+        createWorkspace: vi.fn(async () => workspace),
+        verifyBrandingReceipt: verifyReceipt,
+      },
+    );
+    await controller.connect();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector("#branding-status")?.textContent).toContain(
+        "Receipt verification failed",
+      );
+    });
+    const accept = document.querySelector<HTMLButtonElement>("#branding-accept")!;
+    expect(accept.textContent).toBe("retry receipt verification");
+
+    accept.click();
+    await vi.waitFor(() => expect(verifyReceipt).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(document.querySelector("#branding-status")?.textContent).toContain(
+        "Routing eligibility is checked separately",
+      );
+    });
+    expect(accept.textContent).toBe("done");
+
+    const changedOfferMarker = offerMarker.replace(
+      "treasury=1000;basis=1000;price=100;upkeep=1",
+      "treasury=2000;basis=1000;price=200;upkeep=1",
+    );
+    start.channels.direct.messages.push(
+      {
+        ...start.channels.direct.messages[0]!,
+        id: "changed-offer",
+        sentAtNs: start.channels.direct.messages[1]!.sentAtNs + 1n,
+        text: changedOfferMarker,
+      },
+      {
+        ...start.channels.direct.messages[1]!,
+        id: "old-receipt-again",
+        sentAtNs: start.channels.direct.messages[1]!.sentAtNs + 2n,
+      },
+    );
+    workspace.emit();
+    await vi.waitFor(() => expect(verifyReceipt).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => {
+      expect(document.querySelector("#branding-status")?.textContent).toContain(
+        "receipt no longer matches the offer",
+      );
+    });
     await controller.close();
   });
 
@@ -245,6 +381,7 @@ describe("three-channel chat controller", () => {
     expect(document.querySelector("#status")?.textContent).not.toContain("Branding routing");
     expect(document.querySelector("#branding-offer")?.hasAttribute("open")).toBe(false);
     expect(document.querySelector<HTMLElement>("#activity-card")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>("#branding-review")?.hidden).toBe(true);
     expect(workspace.setActiveChannel).toHaveBeenCalledWith("direct");
 
     document.querySelector<HTMLButtonElement>("#tab-direct")?.dispatchEvent(
