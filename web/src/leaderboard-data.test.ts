@@ -67,6 +67,32 @@ describe("Agent0 leaderboard + direct Base UWU reads", () => {
     expect(calls.at(-1)).toContain(`0x${BigInt(BLOCK).toString(16)}`);
   });
 
+  it("counts exact same-owner Tentacle duplicates once across stale agentWallets", async () => {
+    const value = graph();
+    const first = (value as any).data.agentMetadatas[0];
+    const higher = structuredClone(first);
+    higher.id = "8453:8:cthuwu.allegiance";
+    higher.agent.id = "8453:8";
+    higher.agent.agentId = "8";
+    higher.agent.agentWallet = `0x${"44".repeat(20)}`;
+    higher.agent.metadata = higher.agent.metadata.map((row: any) => ({
+      ...row,
+      id: `8-${row.key}`,
+    }));
+    (value as any).data.agentMetadatas.push(higher);
+
+    const snapshot = await fetchCompleteLeaderboard(
+      "https://graph.fixture.invalid",
+      { fetch: fixtureFetch(value) },
+    );
+    expect(snapshot.rankedWallets).toHaveLength(1);
+    expect(snapshot.rankedWallets[0]!.identities.map(({ agentId }) => agentId)).toEqual(["7"]);
+    expect(snapshot.duplicateAgentAliases).toEqual([{
+      aliasAgentId: "8",
+      canonicalAgentId: "7",
+    }]);
+  });
+
   it("uses the public Infura Base endpoint when no RPC override is supplied", async () => {
     const inputs: string[] = [];
     const base = fixtureFetch();

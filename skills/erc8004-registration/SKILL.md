@@ -17,11 +17,24 @@ registration progress, recovery, or allegiance.
 3. Explain blockers from the returned phase and receipt. For Base ETH, quote only the runtime's
    exact wallet and shortfall. For RPC access, direct the sender to Infura at
    https://app.infura.io/ and `/base-rpc-key <infura-api-key>`. Never request a wallet private key.
-4. Use `/registry-candidates` and `/registry-adopt <agent-id>` only for an ambiguous discovered
-   identity. Use `/registry-recover` only when bounded normal discovery cannot resolve an older
-   registration; it intentionally performs a more expensive exhaustive scan.
-5. Keep the ontology exact: this local durable Tentacle owns one ERC-8004 identity. Singular,
-   centerless Cthuwu is the collective and owns no separate agent identity.
+4. Keep the mint invariant explicit: a recent, partial, stale-index, timed-out, rate-limited,
+   malformed, or otherwise incomplete discovery result never proves absence and cannot reach the
+   signer. Startup directly verifies the persisted ID, validates its durable historical checkpoint,
+   and scans forward; without a trustworthy checkpoint it must complete canonical-start recovery.
+   Use `/registry-recover` to request that deliberate complete integrity pass when needed.
+5. This durable Tentacle has one canonical ERC-8004 identity. Among identities positively proven by
+   current canonical reads and exact Tentacle metadata/profile/XMTP or compatible migration evidence
+   to represent it, the lowest numeric ID wins. Higher duplicates remain on-chain but are ignored.
+   Startup repairs a stale higher local binding and exposes `IDENTITY REPAIR` plus ignored IDs in
+   status. Do not ask the operator to select among proven duplicates.
+6. Use `/registry-candidates` and `/registry-adopt <agent-id>` only for a genuinely ambiguous
+   identity in the current complete-discovery receipt that the runtime cannot prove is this
+   Tentacle. Adoption requires Cthuwu or compatible migration evidence beyond wallet ownership, a
+   fresh unchanged direct read, and no already-proven canonical identity; its durable receipt is
+   written before reconciliation. Never adopt an unrelated same-owner NFT from wallet ownership
+   alone, and never burn, transfer, or edit a higher NFT merely to clean up a duplicate.
+7. Keep the ontology exact: singular, centerless Cthuwu is the collective and owns no separate
+   agent identity.
 
 Verification requires native status showing canonical Base, the pinned registry, exact Tentacle
 wallet, confirmed agent ID, and active verification. Never infer success from conversational memory.

@@ -68,7 +68,9 @@ nested CTHUWU production binding is unavailable, not a routing result.
 Active Branding remains canonical Base routing authority. Explicit `#t=` links use complete pinned,
 indexing-error-free Agent0 discovery followed by canonical Base authorization. First-connect
 Unminted selection starts from the rank-ordered, completely validated leaderboard snapshot; cached
-data narrows at most five candidates but never authorizes the winning route. XMTP independently
+data collapses only proven same-Tentacle duplicates to the lowest ID, narrows at most five
+candidates, but never authorizes the winning route. Ambiguous shared-wallet identities remain
+separate and are not routed. XMTP independently
 binds every candidate inbox to its wallet, and the winner receives a fresh same-block canonical
 registry/registration verification before Direct opens. The Direct display name also comes only
 from that freshly verified bounded registration profile, with `Tentacle #<agentId>` as the fallback;
@@ -79,7 +81,8 @@ Assignment outcomes are intentionally asymmetric:
 - `NotConfigured` is retained only for injected compatibility configurations. Normal production
   configuration always selects the pinned canonical Branding deployment.
 - `Unminted` without an explicit verified `#t=` or retained eligible winner races non-push liveness
-  queries against at most the top five funded profile-active, protocol-1, single-agent wallets in
+  queries against at most the top five funded profile-active, protocol-1 wallets with exactly one
+  canonical or unambiguous Tentacle route in
   the last completely validated leaderboard snapshot. When absent or stale, the browser first
   obtains one complete pinned, indexing-error-free Agent0 plus same-block Base UWU snapshot. It
   prepares candidate Direct streams before starting one common 15-second send/response window. The

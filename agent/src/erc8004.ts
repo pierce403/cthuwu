@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, link, lstat, open, readFile, unlink } from "node:fs/promises";
+import { chmod, link, lstat, open, readFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
+  ContractFunctionRevertedError,
   createPublicClient,
   createWalletClient,
   decodeEventLog,
@@ -85,6 +86,8 @@ const MAX_OPERATOR_OWNERS = 64;
 // blocks. Keep this inclusive range pinned to that real production limit.
 const LOG_BLOCK_SPAN = 10_000n;
 const RECENT_DISCOVERY_BLOCKS = 20_000n;
+const TEST_RECENT_DISCOVERY_BLOCKS_ENV =
+  "CTHUWU_TEST_ERC8004_RECENT_DISCOVERY_BLOCKS";
 const DISCOVERY_CONCURRENCY = 5;
 const RPC_RETRY_ATTEMPTS = 3;
 const RPC_RETRY_BASE_DELAY_MS = 1_100;
@@ -96,6 +99,7 @@ const DEFAULT_MAX_FEE_PER_GAS_WEI = 10_000_000_000n;
 const DEFAULT_SAFETY_BPS = 12_500n;
 const DEFAULT_RESERVE_WEI = 50_000_000_000_000n;
 const MAX_SIGNER_JOURNAL_BYTES = 4 * 1024;
+const MAX_DISCOVERY_JOURNAL_BYTES = 64 * 1024;
 const MAX_SIGNATURE_BYTES = 8 * 1024;
 const BRANDING_DOMAIN_NAME = "Cthuwu Acolyte Branding";
 const BRANDING_DOMAIN_VERSION = "1";
@@ -134,6 +138,7 @@ const erc1271Abi = parseAbi([
 ]);
 
 const identityAbi = parseAbi([
+  "error ERC721NonexistentToken(uint256 tokenId)",
   "event Registered(uint256 indexed agentId, string agentURI, address indexed owner)",
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   "event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId)",
@@ -167,7 +172,16 @@ type ReadOperation =
       observedBlockHash?: Hex;
     }
   | { type: "inspect_agent"; agentId: string; wallet: string }
-  | { type: "discover"; wallet: string; registrationNonce?: string; scope: "recent" | "exhaustive" }
+  | {
+      type: "discover";
+      wallet: string;
+      registrationNonce?: string;
+      registrationActionId?: string;
+      scope: "recent" | "exhaustive";
+      tentacleId?: string;
+      xmtpInboxId?: string;
+      checkpoint?: DiscoveryCheckpointReference;
+    }
   | { type: "receipt"; transactionHash: string }
   | {
       type: "funding_estimate";
@@ -179,13 +193,34 @@ type ReadOperation =
       metadata: Array<{ key: string; value: string }>;
     };
 
+export type DiscoveryCheckpointReference = {
+  version: 1;
+  fingerprint: string;
+};
+
+export type MintAuthorization = {
+  version: 1;
+  chainId: 8453;
+  registry: Address;
+  wallet: Address;
+  tentacleId: string;
+  xmtpInboxId: string;
+  fromBlock: string;
+  throughBlock: string;
+  throughBlockHash: Hex;
+  candidateSetHash: Hex;
+  fingerprint: string;
+};
+
 type WriteIntent =
   | { type: "register" }
   | { type: "set_agent_uri"; agentId: string; agentURI: string }
   | { type: "set_metadata"; agentId: string; key: string; value: string }
   | { type: "set_agent_wallet"; agentId: string };
 
-type WriteOperation = WriteIntent & { nonce: string };
+type WriteOperation =
+  | { type: "register"; nonce: string; mintAuthorization?: MintAuthorization }
+  | (Exclude<WriteIntent, { type: "register" }> & { nonce: string });
 
 export type BrandingInspectOperation = {
   type: "branding_inspect";
@@ -473,6 +508,63 @@ function transactionNonce(value: unknown): string {
   return value;
 }
 
+function fingerprint(value: unknown, label = "fingerprint"): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new PermanentSignerError("invalid_request", `${label} must be 32 lowercase hex bytes`);
+  }
+  return value;
+}
+
+function xmtpInboxId(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new PermanentSignerError("invalid_request", "xmtpInboxId must be a canonical production inbox ID");
+  }
+  return value;
+}
+
+function discoveryCheckpointReference(value: unknown): DiscoveryCheckpointReference {
+  if (!isRecord(value)) {
+    throw new PermanentSignerError("invalid_request", "discovery checkpoint must be an object");
+  }
+  exactKeys(value, ["version", "fingerprint"]);
+  if (value.version !== 1) {
+    throw new PermanentSignerError("invalid_request", "unsupported discovery checkpoint version");
+  }
+  return { version: 1, fingerprint: fingerprint(value.fingerprint, "checkpoint fingerprint") };
+}
+
+function mintAuthorization(value: unknown): MintAuthorization {
+  if (!isRecord(value)) {
+    throw new PermanentSignerError("invalid_request", "mintAuthorization must be an object");
+  }
+  exactKeys(value, [
+    "version", "chainId", "registry", "wallet", "tentacleId", "xmtpInboxId",
+    "fromBlock", "throughBlock", "throughBlockHash", "candidateSetHash", "fingerprint",
+  ]);
+  if (value.version !== 1 || value.chainId !== ERC8004_CHAIN_ID) {
+    throw new PermanentSignerError("invalid_request", "mintAuthorization targets an unsupported chain or version");
+  }
+  const registry = walletAddress(value.registry);
+  if (registry !== ERC8004_IDENTITY_REGISTRY) {
+    throw new PermanentSignerError("invalid_request", "mintAuthorization targets another registry");
+  }
+  const tentacleId = boundedString(value.tentacleId, "tentacleId", MAX_TENTACLE_ID_BYTES);
+  validateMetadata(TENTACLE_ID_KEY, tentacleId);
+  return {
+    version: 1,
+    chainId: ERC8004_CHAIN_ID,
+    registry,
+    wallet: walletAddress(value.wallet),
+    tentacleId,
+    xmtpInboxId: xmtpInboxId(value.xmtpInboxId),
+    fromBlock: decimalId(value.fromBlock),
+    throughBlock: decimalId(value.throughBlock),
+    throughBlockHash: transactionHash(value.throughBlockHash),
+    candidateSetHash: transactionHash(value.candidateSetHash),
+    fingerprint: fingerprint(value.fingerprint, "mint authorization fingerprint"),
+  };
+}
+
 export function assertTransactionNonceWindow(
   requested: string,
   pending: number,
@@ -604,14 +696,39 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
         operation: { type: "inspect_agent", agentId: decimalId(operation.agentId), wallet: walletAddress(operation.wallet) },
       };
     case "discover":
+      if ((operation.tentacleId === undefined) !== (operation.xmtpInboxId === undefined)) {
+        throw new PermanentSignerError(
+          "invalid_request",
+          "Tentacle ID and production XMTP inbox must be provided together for identity classification",
+        );
+      }
+      if (operation.registrationActionId !== undefined && operation.registrationNonce === undefined) {
+        throw new PermanentSignerError(
+          "invalid_request",
+          "registrationActionId requires the exact persisted registration nonce",
+        );
+      }
       exactKeys(
         operation,
-        operation.registrationNonce === undefined
-          ? ["type", "wallet", "scope"]
-          : ["type", "wallet", "registrationNonce", "scope"],
+        [
+          "type", "wallet", "scope",
+          ...(operation.registrationNonce === undefined ? [] : ["registrationNonce"]),
+          ...(operation.registrationActionId === undefined ? [] : ["registrationActionId"]),
+          ...(operation.tentacleId === undefined ? [] : ["tentacleId", "xmtpInboxId"]),
+          ...(operation.checkpoint === undefined ? [] : ["checkpoint"]),
+        ],
       );
       if (operation.scope !== "recent" && operation.scope !== "exhaustive") {
         throw new PermanentSignerError("invalid_request", "discovery scope must be recent or exhaustive");
+      }
+      if (operation.checkpoint !== undefined && operation.scope !== "exhaustive") {
+        throw new PermanentSignerError("invalid_request", "discovery checkpoints are exhaustive-only");
+      }
+      const discoveredTentacleId = operation.tentacleId === undefined
+        ? undefined
+        : boundedString(operation.tentacleId, "tentacleId", MAX_TENTACLE_ID_BYTES);
+      if (discoveredTentacleId !== undefined) {
+        validateMetadata(TENTACLE_ID_KEY, discoveredTentacleId);
       }
       return {
         version: 1,
@@ -620,9 +737,27 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
           type: "discover",
           wallet: walletAddress(operation.wallet),
           scope: operation.scope,
+          ...(operation.tentacleId === undefined
+            ? {}
+            : {
+                tentacleId: discoveredTentacleId as string,
+                xmtpInboxId: xmtpInboxId(operation.xmtpInboxId),
+              }),
+          ...(operation.checkpoint === undefined
+            ? {}
+            : { checkpoint: discoveryCheckpointReference(operation.checkpoint) }),
           ...(operation.registrationNonce === undefined
             ? {}
             : { registrationNonce: transactionNonce(operation.registrationNonce) }),
+          ...(operation.registrationActionId === undefined
+            ? {}
+            : {
+                registrationActionId: boundedString(
+                  operation.registrationActionId,
+                  "registrationActionId",
+                  128,
+                ),
+              }),
         },
       };
     case "receipt":
@@ -738,11 +873,22 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
       };
     }
     case "register":
-      exactKeys(operation, ["type", "nonce"]);
+      exactKeys(
+        operation,
+        operation.mintAuthorization === undefined
+          ? ["type", "nonce"]
+          : ["type", "nonce", "mintAuthorization"],
+      );
       return {
         version: 1,
         actionId,
-        operation: { type: "register", nonce: transactionNonce(operation.nonce) },
+        operation: {
+          type: "register",
+          nonce: transactionNonce(operation.nonce),
+          ...(operation.mintAuthorization === undefined
+            ? {}
+            : { mintAuthorization: mintAuthorization(operation.mintAuthorization) }),
+        },
       };
     case "set_agent_uri":
       exactKeys(operation, ["type", "agentId", "agentURI", "nonce"]);
@@ -1443,12 +1589,73 @@ function decodeMetadata(value: Hex): { hex: Hex; utf8: string | null } {
   }
 }
 
+function isCanonicalOwnerOfNotFound(error: unknown, agentId: bigint): boolean {
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current !== undefined; depth += 1) {
+    if (visited.has(current)) return false;
+    visited.add(current);
+    if (current instanceof ContractFunctionRevertedError) {
+      const decoded = current.data;
+      return (
+        decoded?.errorName === "ERC721NonexistentToken" &&
+        Array.isArray(decoded.args) &&
+        decoded.args.length === 1 &&
+        decoded.args[0] === agentId
+      );
+    }
+    if (current instanceof Error) {
+      current = current.cause;
+      continue;
+    }
+    if (!isRecord(current)) return false;
+    current = current.cause;
+  }
+  return false;
+}
+
 export async function inspectAgent(publicClient: PublicClient, agentId: string, wallet: Address): Promise<Record<string, unknown>> {
-  const id = BigInt(agentId);
   const observedBlock = await publicClient.getBlock();
   const blockNumber = observedBlock.number;
-  const [owner, agentURI, agentWallet, allegiance, protocol, tentacleId, authorized] = await Promise.all([
-    publicClient.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: identityAbi, functionName: "ownerOf", args: [id], blockNumber }),
+  const result = await inspectAgentAtBlock(publicClient, agentId, wallet, blockNumber, observedBlock.hash);
+  const canonicalBlock = await publicClient.getBlock({ blockNumber });
+  if (canonicalBlock.hash !== observedBlock.hash) {
+    throw new RecoverableSignerError(
+      "agent_reorg",
+      "the agent observation block changed while it was being read",
+    );
+  }
+  return result;
+}
+
+async function inspectAgentAtBlock(
+  publicClient: PublicClient,
+  agentId: string,
+  wallet: Address,
+  blockNumber: bigint,
+  blockHash: Hex,
+): Promise<Record<string, unknown>> {
+  const id = BigInt(agentId);
+  let owner: Address;
+  try {
+    owner = await publicClient.readContract({
+      address: ERC8004_IDENTITY_REGISTRY,
+      abi: identityAbi,
+      functionName: "ownerOf",
+      args: [id],
+      blockNumber,
+    });
+  } catch (error) {
+    if (!isCanonicalOwnerOfNotFound(error, id)) throw error;
+    return {
+      agentId,
+      agentExists: false,
+      authority: "canonical-base-ownerOf",
+      observedBlock: blockNumber.toString(),
+      observedBlockHash: blockHash,
+    };
+  }
+  const [agentURI, agentWallet, allegiance, protocol, tentacleId, authorized] = await Promise.all([
     publicClient.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: identityAbi, functionName: "tokenURI", args: [id], blockNumber }),
     publicClient.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: identityAbi, functionName: "getAgentWallet", args: [id], blockNumber }),
     publicClient.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: identityAbi, functionName: "getMetadata", args: [id, ALLEGIANCE_KEY], blockNumber }),
@@ -1462,13 +1669,6 @@ export async function inspectAgent(publicClient: PublicClient, agentId: string, 
   const allegianceValue = decodeMetadata(allegiance);
   const protocolValue = decodeMetadata(protocol);
   const tentacleIdValue = decodeMetadata(tentacleId);
-  const canonicalBlock = await publicClient.getBlock({ blockNumber });
-  if (canonicalBlock.hash !== observedBlock.hash) {
-    throw new RecoverableSignerError(
-      "agent_reorg",
-      "the agent observation block changed while it was being read",
-    );
-  }
   return {
     agentId,
     owner: getAddress(owner),
@@ -1482,7 +1682,7 @@ export async function inspectAgent(publicClient: PublicClient, agentId: string, 
     protocolCompatible: protocol === stringToHex(PROTOCOL_VALUE),
     walletVerified: getAddress(agentWallet) === wallet && getAddress(agentWallet) !== ZERO_ADDRESS,
     observedBlock: blockNumber.toString(),
-    observedBlockHash: observedBlock.hash,
+    observedBlockHash: blockHash,
   };
 }
 
@@ -1499,6 +1699,45 @@ type DiscoveryLog = {
     metadataKey?: string;
     metadataValue?: Hex;
   };
+};
+
+type WalletRegistration = {
+  agentId: string;
+  transactionHash: Hex;
+};
+
+type DiscoveryClassificationContext = {
+  tentacleId: string;
+  xmtpInboxId: string;
+};
+
+type DiscoveryJournal = {
+  version: 1;
+  chainId: 8453;
+  registry: Address;
+  wallet: Address;
+  tentacleId: string;
+  xmtpInboxId: string;
+  fromBlock: string;
+  throughBlock: string;
+  throughBlockHash: Hex;
+  associatedAgentIds: string[];
+  walletRegistrations: WalletRegistration[];
+  operatorOwners: Address[];
+  checkpointFingerprint: string;
+  mintAuthorization?: MintAuthorization;
+};
+
+type DiscoveryInternalState = {
+  associatedAgentIds: string[];
+  walletRegistrations: WalletRegistration[];
+  operatorOwners: Address[];
+  classification?: DiscoveryClassificationContext;
+};
+
+const DISCOVERY_INTERNAL = Symbol("cthuwu.discovery-internal");
+type DiscoveryResultWithInternal = Record<string, unknown> & {
+  [DISCOVERY_INTERNAL]: DiscoveryInternalState;
 };
 
 const DISCOVERY_EVENT_TOPICS = {
@@ -1683,29 +1922,163 @@ function addDiscoveryId(ids: Set<string>, value: bigint | undefined): void {
   }
 }
 
+function decodeBoundedDataJson(value: string): Record<string, unknown> | undefined {
+  const prefix = "data:application/json;base64,";
+  if (!value.startsWith(prefix) || Buffer.byteLength(value, "utf8") > MAX_URI_BYTES) return undefined;
+  try {
+    const decoded = Buffer.from(value.slice(prefix.length), "base64");
+    if (decoded.length > MAX_URI_BYTES) return undefined;
+    const parsed: unknown = JSON.parse(decoded.toString("utf8"));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function profileIdentityEvidence(agentURI: unknown): { tentacleIds: Set<string>; inboxIds: Set<string> } {
+  const tentacleIds = new Set<string>();
+  const inboxIds = new Set<string>();
+  if (typeof agentURI !== "string") return { tentacleIds, inboxIds };
+  const visit = (record: Record<string, unknown>, depth: number): void => {
+    if (typeof record.tentacleId === "string" && Buffer.byteLength(record.tentacleId, "utf8") <= MAX_TENTACLE_ID_BYTES) {
+      tentacleIds.add(record.tentacleId);
+    }
+    if (isRecord(record.xmtp) && typeof record.xmtp.endpoint === "string") {
+      const match = /^xmtp:\/\/([0-9a-f]{64})$/u.exec(record.xmtp.endpoint);
+      if (match) inboxIds.add(match[1]!);
+    }
+    if (!Array.isArray(record.services) || record.services.length > 32) return;
+    for (const serviceValue of record.services) {
+      if (!isRecord(serviceValue)) continue;
+      const endpoint = serviceValue.endpoint ?? serviceValue.uri;
+      if (typeof endpoint !== "string") continue;
+      if (serviceValue.name === "CTHUWU-XMTP" || serviceValue.name === "XMTP") {
+        const match = /^xmtp:\/\/([0-9a-f]{64})$/u.exec(endpoint);
+        if (match) inboxIds.add(match[1]!);
+      }
+      if (depth === 0 && serviceValue.name === "CTHUWU") {
+        const manifest = decodeBoundedDataJson(endpoint);
+        if (manifest) visit(manifest, 1);
+      }
+    }
+  };
+  const profile = decodeBoundedDataJson(agentURI);
+  if (profile) visit(profile, 0);
+  return { tentacleIds, inboxIds };
+}
+
+export function classifyDiscoveredAgent(
+  candidate: Record<string, unknown>,
+  context: DiscoveryClassificationContext,
+): Record<string, unknown> {
+  const evidence: string[] = [];
+  const metadata = isRecord(candidate.tentacleId) ? candidate.tentacleId : undefined;
+  const metadataTentacleId = typeof metadata?.utf8 === "string" && metadata.utf8.length > 0
+    ? metadata.utf8
+    : undefined;
+  const profile = profileIdentityEvidence(candidate.agentURI);
+  const exactMetadataTentacle = metadataTentacleId === context.tentacleId;
+  const exactProfileTentacle = profile.tentacleIds.has(context.tentacleId);
+  const exactXmtp = profile.inboxIds.has(context.xmtpInboxId);
+  const conflictingTentacleId =
+    (metadataTentacleId !== undefined && metadataTentacleId !== context.tentacleId) ||
+    [...profile.tentacleIds].some((value) => value !== context.tentacleId);
+  const eligibleMarkers =
+    candidate.declaresTentacleAllegiance === true && candidate.protocolCompatible === true;
+  const currentRelationship = candidate.authorized === true || candidate.walletVerified === true;
+  if (exactMetadataTentacle) evidence.push("exact-tentacle-id");
+  if (exactProfileTentacle) evidence.push("exact-profile-tentacle-id");
+  if (exactXmtp) evidence.push("exact-xmtp-endpoint");
+  if (eligibleMarkers && currentRelationship) evidence.push("legacy-allegiance");
+  if (currentRelationship && evidence.length === 0) evidence.push("wallet-only");
+  const sameTentacle = currentRelationship && !conflictingTentacleId &&
+    (exactMetadataTentacle || exactProfileTentacle || (eligibleMarkers && exactXmtp));
+  const provenUnrelated = conflictingTentacleId &&
+    !exactMetadataTentacle && !exactProfileTentacle && !exactXmtp;
+  // A bare current wallet/authorization relationship is indistinguishable from a just-mined
+  // register() whose local journals and metadata reconciliation were lost. It must block mint
+  // without being adopted. Only explicit conflicting durable identity provenance can prove that
+  // a same-operator identity belongs to another Tentacle.
+  const ambiguousTentacle = !sameTentacle && !provenUnrelated &&
+    (currentRelationship || eligibleMarkers || exactMetadataTentacle || exactProfileTentacle || exactXmtp);
+  return { ...candidate, identityEvidence: evidence, sameTentacle, ambiguousTentacle };
+}
+
 export async function discoverAgents(
   publicClient: PublicClient,
   wallet: Address,
   registrationNonce?: string,
   scope: "recent" | "exhaustive" = "exhaustive",
+  context?: DiscoveryClassificationContext,
+  checkpoint?: DiscoveryJournal,
+  observation: "finalized" | "latest" = "finalized",
 ): Promise<unknown> {
   // Recovery decisions must never compare logs from one RPC head with a nonce from another.
-  // Use a canonical finalized observation and echo its number/hash for a later EIP-1898-pinned
-  // nonce query. If the provider cannot supply this, discovery fails closed.
-  const observedBlock = await publicClient.getBlock({ blockTag: "finalized" });
+  // Ordinary/checkpoint discovery uses finalized. The last signer-bound refresh uses latest so
+  // an externally-created wallet association above finalized cannot hide from the mint gate.
+  // Both modes echo and recheck an exact canonical number/hash.
+  const observedBlock = await publicClient.getBlock({ blockTag: observation });
   if (observedBlock.hash === null || observedBlock.number < ERC8004_START_BLOCK) {
     throw new RecoverableSignerError(
       "discovery_observation",
-      "provider did not return a usable finalized ERC-8004 discovery block",
+      `provider did not return a usable ${observation} ERC-8004 discovery block`,
     );
   }
   const observedBlockNumber = observedBlock.number;
   const observedBlockHash = observedBlock.hash;
-  const firstBlock = scope === "recent"
-    ? observedBlockNumber - ERC8004_START_BLOCK + 1n > RECENT_DISCOVERY_BLOCKS
-      ? observedBlockNumber - RECENT_DISCOVERY_BLOCKS + 1n
+  let recentDiscoveryBlocks = RECENT_DISCOVERY_BLOCKS;
+  if (scope === "recent" && process.env.NODE_ENV === "test") {
+    const override = process.env[TEST_RECENT_DISCOVERY_BLOCKS_ENV];
+    if (override !== undefined) {
+      if (!/^[1-9][0-9]{0,4}$/u.test(override)) {
+        throw new PermanentSignerError(
+          "configuration",
+          `${TEST_RECENT_DISCOVERY_BLOCKS_ENV} must be a canonical positive integer`,
+        );
+      }
+      recentDiscoveryBlocks = BigInt(override);
+      if (recentDiscoveryBlocks > RECENT_DISCOVERY_BLOCKS) {
+        throw new PermanentSignerError(
+          "configuration",
+          `${TEST_RECENT_DISCOVERY_BLOCKS_ENV} cannot exceed the production 20,000-block window`,
+        );
+      }
+    }
+  }
+  const requestedFirstBlock = scope === "recent"
+    ? observedBlockNumber - ERC8004_START_BLOCK + 1n > recentDiscoveryBlocks
+      ? observedBlockNumber - recentDiscoveryBlocks + 1n
       : ERC8004_START_BLOCK
     : ERC8004_START_BLOCK;
+  if (
+    checkpoint !== undefined &&
+    (scope !== "exhaustive" ||
+      context === undefined ||
+      checkpoint.wallet !== wallet ||
+      checkpoint.tentacleId !== context.tentacleId ||
+      checkpoint.xmtpInboxId !== context.xmtpInboxId ||
+      checkpoint.fromBlock !== ERC8004_START_BLOCK.toString() ||
+      BigInt(checkpoint.throughBlock) > observedBlockNumber)
+  ) {
+    throw new RecoverableSignerError(
+      "discovery_checkpoint",
+      "durable identity-discovery checkpoint is incompatible with this exhaustive request",
+    );
+  }
+  if (checkpoint !== undefined) {
+    const canonicalCheckpointBlock = await publicClient.getBlock({
+      blockNumber: BigInt(checkpoint.throughBlock),
+    });
+    if (canonicalCheckpointBlock.hash !== checkpoint.throughBlockHash) {
+      throw new RecoverableSignerError(
+        "discovery_checkpoint_reorg",
+        "durable identity-discovery checkpoint is no longer canonical",
+      );
+    }
+  }
+  const firstBlock = checkpoint === undefined
+    ? requestedFirstBlock
+    : BigInt(checkpoint.throughBlock) + 1n;
   const budget = { logs: 0 };
   const walletTopic = pad(wallet, { size: 32 });
   const combined = await getLogsChunked(
@@ -1761,7 +2134,7 @@ export async function discoverAgents(
         break;
     }
   }
-  const ids = new Set<string>();
+  const ids = new Set<string>(checkpoint?.associatedAgentIds ?? []);
   for (const log of registered) addDiscoveryId(ids, log.args.agentId);
   for (const log of transferred) addDiscoveryId(ids, log.args.tokenId);
   for (const log of approved) addDiscoveryId(ids, log.args.tokenId);
@@ -1777,9 +2150,14 @@ export async function discoverAgents(
     }
   }
 
-  const operatorOwners = new Set<Address>();
+  const operatorOwners = new Set<Address>(checkpoint?.operatorOwners ?? []);
+  const ownersGrantedInCurrentRange = new Set<Address>();
   for (const log of operatorEvents) {
-    if (log.args.owner !== undefined) operatorOwners.add(getAddress(log.args.owner));
+    if (log.args.owner !== undefined) {
+      const owner = getAddress(log.args.owner);
+      operatorOwners.add(owner);
+      if (log.args.approved === true) ownersGrantedInCurrentRange.add(owner);
+    }
     if (operatorOwners.size > MAX_OPERATOR_OWNERS) {
       throw new PermanentSignerError(
         "candidate_limit",
@@ -1793,8 +2171,16 @@ export async function discoverAgents(
       abi: identityAbi,
       functionName: "isApprovedForAll",
       args: [owner, wallet],
+      blockNumber: observedBlockNumber,
     });
     if (!currentlyApproved) continue;
+    // A new or re-granted blanket approval can expose identities that the owner registered
+    // before this checkpoint. Existing checkpoint owners without a new grant were already
+    // exhaustively enumerated when their association became current, so only they may advance
+    // incrementally. This branch is rare and remains bounded by the canonical log budget.
+    const ownerFirstBlock = ownersGrantedInCurrentRange.has(owner)
+      ? ERC8004_START_BLOCK
+      : firstBlock;
     const ownerLogs = await getLogsChunked(
       publicClient,
       [DISCOVERY_EVENT_TOPICS.Registered, DISCOVERY_EVENT_TOPICS.Transfer],
@@ -1804,7 +2190,7 @@ export async function discoverAgents(
         (log.eventName === "Transfer" && log.args.to === owner),
       budget,
       observedBlockNumber,
-      firstBlock,
+      ownerFirstBlock,
     );
     for (const log of ownerLogs) {
       if (log.eventName === "Registered" && log.args.owner === owner) {
@@ -1817,8 +2203,26 @@ export async function discoverAgents(
   }
   const candidates = [];
   for (const id of [...ids].sort((left, right) => (BigInt(left) < BigInt(right) ? -1 : 1))) {
-    const candidate = await inspectAgent(publicClient, id, wallet);
-    if (candidate.authorized === true || candidate.walletVerified === true) candidates.push(candidate);
+    const inspected = await inspectAgentAtBlock(
+      publicClient,
+      id,
+      wallet,
+      observedBlockNumber,
+      observedBlockHash,
+    );
+    // A historical association can name a token that canonical ownerOf now proves does not
+    // exist. This typed result is authoritative for that candidate only; all provider failures
+    // still abort discovery and therefore remain incapable of authorizing registration.
+    if (inspected.agentExists === false) continue;
+    const candidate = context === undefined
+      ? inspected
+      : classifyDiscoveredAgent(inspected, context);
+    if (
+      candidate.authorized === true ||
+      candidate.walletVerified === true ||
+      candidate.sameTentacle === true ||
+      candidate.ambiguousTentacle === true
+    ) candidates.push(candidate);
     if (candidates.length > MAX_CANDIDATES) {
       throw new PermanentSignerError(
         "candidate_limit",
@@ -1830,33 +2234,49 @@ export async function discoverAgents(
   if (canonicalBlock.hash !== observedBlockHash) {
     throw new RecoverableSignerError(
       "discovery_reorg",
-      "the finalized discovery block changed while candidate discovery was running",
+      `the ${observation} discovery block changed while candidate discovery was running`,
+    );
+  }
+  const walletRegistrationMap = new Map<string, WalletRegistration>();
+  for (const registration of checkpoint?.walletRegistrations ?? []) {
+    walletRegistrationMap.set(`${registration.agentId}:${registration.transactionHash}`, registration);
+  }
+  for (const log of registered) {
+    if (log.transactionHash === undefined || log.args.agentId === undefined) {
+      throw new RecoverableSignerError(
+        "discovery_outcome",
+        "provider omitted transaction provenance for a registration event",
+      );
+    }
+    const registration = {
+      agentId: log.args.agentId.toString(),
+      transactionHash: log.transactionHash,
+    };
+    walletRegistrationMap.set(`${registration.agentId}:${registration.transactionHash}`, registration);
+  }
+  const walletRegistrations = [...walletRegistrationMap.values()].sort((left, right) =>
+    BigInt(left.agentId) < BigInt(right.agentId) ? -1 :
+      BigInt(left.agentId) > BigInt(right.agentId) ? 1 :
+        left.transactionHash.localeCompare(right.transactionHash),
+  );
+  if (walletRegistrations.length > MAX_DISCOVERY_IDS) {
+    throw new PermanentSignerError(
+      "candidate_limit",
+      "wallet has too many historical registrations for bounded recovery",
     );
   }
   const matchedRegistrationAgentIds = new Set<string>();
   if (registrationNonce !== undefined) {
-    if (registered.length > MAX_DISCOVERY_IDS) {
-      throw new PermanentSignerError(
-        "candidate_limit",
-        "wallet has too many historical registrations for exact nonce recovery",
-      );
-    }
     const requestedNonce = Number(transactionNonce(registrationNonce));
-    for (const log of registered) {
-      if (log.transactionHash === undefined || log.args.agentId === undefined) {
-        throw new RecoverableSignerError(
-          "discovery_outcome",
-          "provider omitted transaction provenance for a registration event",
-        );
-      }
+    for (const registration of walletRegistrations) {
       const transaction = await publicClient.getTransaction({
-        hash: log.transactionHash,
+        hash: registration.transactionHash,
       });
       if (
         getAddress(transaction.from) === wallet &&
         transaction.nonce === requestedNonce
       ) {
-        matchedRegistrationAgentIds.add(log.args.agentId.toString());
+        matchedRegistrationAgentIds.add(registration.agentId);
       }
     }
     if (matchedRegistrationAgentIds.size > 1) {
@@ -1866,14 +2286,535 @@ export async function discoverAgents(
       );
     }
   }
-  return {
-    complete: true,
-    fromBlock: firstBlock.toString(),
+  const coverageFromBlock = checkpoint?.fromBlock ?? requestedFirstBlock.toString();
+  const result = {
+    complete: scope === "exhaustive" && coverageFromBlock === ERC8004_START_BLOCK.toString(),
+    rangeComplete: true,
+    scope,
+    source: checkpoint === undefined ? "canonical-logs" : "canonical-logs-checkpoint",
+    fromBlock: coverageFromBlock,
     observedBlockNumber: observedBlockNumber.toString(),
     observedBlockHash,
+    coverage: {
+      fromBlock: coverageFromBlock,
+      throughBlock: observedBlockNumber.toString(),
+      throughBlockHash: observedBlockHash,
+    },
     matchedRegistrationAgentIds: [...matchedRegistrationAgentIds],
     candidates,
+  } as unknown as DiscoveryResultWithInternal;
+  Object.defineProperty(result, DISCOVERY_INTERNAL, {
+    value: {
+      associatedAgentIds: [...ids].sort((left, right) => BigInt(left) < BigInt(right) ? -1 : 1),
+      walletRegistrations,
+      operatorOwners: [...operatorOwners].sort(),
+      ...(context === undefined ? {} : { classification: context }),
+    } satisfies DiscoveryInternalState,
+    enumerable: false,
+  });
+  return result;
+}
+
+function sha256Hex(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function discoveryJournalPath(identity: LoadedIdentity): string {
+  return path.join(path.dirname(identity.identityPath), "erc8004-discovery-v1.json");
+}
+
+async function replacePrivateFile(target: string, contents: string): Promise<void> {
+  const directory = path.dirname(target);
+  const directoryStat = await lstat(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new PermanentSignerError(
+      "discovery_journal",
+      "identity-discovery state directory is not a private regular directory",
+    );
+  }
+  await chmod(directory, 0o700);
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(contents, { encoding: "utf8" });
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporary, target);
+    await chmod(target, 0o600);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+function candidateSetHash(candidates: unknown): Hex {
+  if (!Array.isArray(candidates)) {
+    throw new PermanentSignerError("discovery_journal", "candidate set is unavailable");
+  }
+  const bounded = candidates.map((value) => {
+    if (!isRecord(value)) {
+      throw new PermanentSignerError("discovery_journal", "candidate set is malformed");
+    }
+    return {
+      agentId: value.agentId,
+      owner: value.owner,
+      agentURI: value.agentURI,
+      agentWallet: value.agentWallet,
+      authorized: value.authorized,
+      walletVerified: value.walletVerified,
+      allegiance: value.allegiance,
+      protocol: value.protocol,
+      tentacleId: value.tentacleId,
+      sameTentacle: value.sameTentacle,
+      ambiguousTentacle: value.ambiguousTentacle,
+    };
+  });
+  return `0x${sha256Hex(bounded)}`;
+}
+
+function buildDiscoveryJournal(
+  result: DiscoveryResultWithInternal,
+  wallet: Address,
+  context: DiscoveryClassificationContext,
+): DiscoveryJournal {
+  const coverage = result.coverage;
+  if (!isRecord(coverage)) {
+    throw new PermanentSignerError("discovery_journal", "complete discovery omitted coverage");
+  }
+  const base = {
+    version: 1 as const,
+    chainId: ERC8004_CHAIN_ID as 8453,
+    registry: ERC8004_IDENTITY_REGISTRY,
+    wallet,
+    tentacleId: context.tentacleId,
+    xmtpInboxId: context.xmtpInboxId,
+    fromBlock: decimalId(coverage.fromBlock),
+    throughBlock: decimalId(coverage.throughBlock),
+    throughBlockHash: transactionHash(coverage.throughBlockHash),
+    associatedAgentIds: result[DISCOVERY_INTERNAL].associatedAgentIds,
+    walletRegistrations: result[DISCOVERY_INTERNAL].walletRegistrations,
+    operatorOwners: result[DISCOVERY_INTERNAL].operatorOwners,
   };
+  const checkpointFingerprint = sha256Hex(base);
+  let mint: MintAuthorization | undefined;
+  const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+  const blocked = candidates.some((candidate) =>
+    isRecord(candidate) && (candidate.sameTentacle === true || candidate.ambiguousTentacle === true));
+  if (
+    result.complete === true &&
+    base.fromBlock === ERC8004_START_BLOCK.toString() &&
+    !blocked
+  ) {
+    const authorizationBase = {
+      version: 1 as const,
+      chainId: ERC8004_CHAIN_ID as 8453,
+      registry: ERC8004_IDENTITY_REGISTRY,
+      wallet,
+      tentacleId: context.tentacleId,
+      xmtpInboxId: context.xmtpInboxId,
+      fromBlock: base.fromBlock,
+      throughBlock: base.throughBlock,
+      throughBlockHash: base.throughBlockHash,
+      candidateSetHash: candidateSetHash(candidates),
+    };
+    mint = { ...authorizationBase, fingerprint: sha256Hex(authorizationBase) };
+  }
+  return {
+    ...base,
+    checkpointFingerprint,
+    ...(mint === undefined ? {} : { mintAuthorization: mint }),
+  };
+}
+
+function parseDiscoveryJournal(raw: string): DiscoveryJournal {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new RecoverableSignerError("discovery_checkpoint", "identity-discovery checkpoint is not valid JSON");
+  }
+  if (!isRecord(value)) {
+    throw new RecoverableSignerError("discovery_checkpoint", "identity-discovery checkpoint has an invalid shape");
+  }
+  const expectedKeys = [
+    "version", "chainId", "registry", "wallet", "tentacleId", "xmtpInboxId", "fromBlock",
+    "throughBlock", "throughBlockHash", "associatedAgentIds", "walletRegistrations",
+    "operatorOwners", "checkpointFingerprint",
+    ...(value.mintAuthorization === undefined ? [] : ["mintAuthorization"]),
+  ];
+  try {
+    exactKeys(value, expectedKeys);
+    if (value.version !== 1 || value.chainId !== ERC8004_CHAIN_ID) throw new Error("version");
+    const registry = walletAddress(value.registry);
+    if (registry !== ERC8004_IDENTITY_REGISTRY) throw new Error("registry");
+    if (!Array.isArray(value.associatedAgentIds) || value.associatedAgentIds.length > MAX_DISCOVERY_IDS ||
+        value.associatedAgentIds.some((id) => typeof id !== "string" || decimalId(id) !== id) ||
+        new Set(value.associatedAgentIds).size !== value.associatedAgentIds.length) throw new Error("ids");
+    if (!Array.isArray(value.walletRegistrations) || value.walletRegistrations.length > MAX_DISCOVERY_IDS) throw new Error("registrations");
+    const walletRegistrations = value.walletRegistrations.map((entry) => {
+      if (!isRecord(entry)) throw new Error("registration");
+      exactKeys(entry, ["agentId", "transactionHash"]);
+      return { agentId: decimalId(entry.agentId), transactionHash: transactionHash(entry.transactionHash) };
+    });
+    if (!Array.isArray(value.operatorOwners) || value.operatorOwners.length > MAX_OPERATOR_OWNERS) throw new Error("owners");
+    const operatorOwners = value.operatorOwners.map(walletAddress);
+    const parsed = {
+      version: 1 as const,
+      chainId: ERC8004_CHAIN_ID as 8453,
+      registry,
+      wallet: walletAddress(value.wallet),
+      tentacleId: boundedString(value.tentacleId, "tentacleId", MAX_TENTACLE_ID_BYTES),
+      xmtpInboxId: xmtpInboxId(value.xmtpInboxId),
+      fromBlock: decimalId(value.fromBlock),
+      throughBlock: decimalId(value.throughBlock),
+      throughBlockHash: transactionHash(value.throughBlockHash),
+      associatedAgentIds: value.associatedAgentIds as string[],
+      walletRegistrations,
+      operatorOwners,
+    };
+    const checkpointFingerprint = fingerprint(value.checkpointFingerprint, "checkpoint fingerprint");
+    if (sha256Hex(parsed) !== checkpointFingerprint) throw new Error("fingerprint");
+    return {
+      ...parsed,
+      checkpointFingerprint,
+      ...(value.mintAuthorization === undefined
+        ? {}
+        : { mintAuthorization: mintAuthorization(value.mintAuthorization) }),
+    };
+  } catch (error) {
+    if (error instanceof RecoverableSignerError) throw error;
+    throw new RecoverableSignerError(
+      "discovery_checkpoint",
+      "identity-discovery checkpoint is incomplete or does not match its provenance",
+    );
+  }
+}
+
+async function readDiscoveryJournal(identity: LoadedIdentity): Promise<DiscoveryJournal> {
+  const target = discoveryJournalPath(identity);
+  const stat = await lstat(target);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_DISCOVERY_JOURNAL_BYTES) {
+    throw new RecoverableSignerError(
+      "discovery_checkpoint",
+      "identity-discovery checkpoint is not a bounded regular file",
+    );
+  }
+  await chmod(target, 0o600);
+  return parseDiscoveryJournal(await readFile(target, "utf8"));
+}
+
+async function persistDiscoveryJournal(
+  identity: LoadedIdentity,
+  journal: DiscoveryJournal,
+): Promise<void> {
+  const encoded = `${JSON.stringify(journal)}\n`;
+  if (Buffer.byteLength(encoded, "utf8") > MAX_DISCOVERY_JOURNAL_BYTES) {
+    throw new PermanentSignerError("discovery_journal", "identity-discovery checkpoint exceeds its bound");
+  }
+  await replacePrivateFile(discoveryJournalPath(identity), encoded);
+}
+
+function mintAuthorizationBase(value: MintAuthorization): Omit<MintAuthorization, "fingerprint"> {
+  const { fingerprint: _fingerprint, ...base } = value;
+  return base;
+}
+
+function assertMintAuthorizationFingerprint(value: MintAuthorization): void {
+  if (sha256Hex(mintAuthorizationBase(value)) !== value.fingerprint) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "mint authorization does not match its canonical discovery fingerprint",
+    );
+  }
+}
+
+async function readNonceAtCanonicalCoverage(
+  publicClient: PublicClient,
+  wallet: Address,
+  blockNumber: bigint,
+  blockHash: Hex,
+): Promise<number> {
+  const before = await publicClient.getBlock({ blockNumber });
+  if (before.hash !== blockHash) {
+    throw new RecoverableSignerError(
+      "discovery_reorg",
+      "complete discovery coverage is no longer canonical",
+    );
+  }
+  const rawNonce: unknown = await publicClient.request({
+    method: "eth_getTransactionCount",
+    params: [wallet, { blockHash, requireCanonical: true }],
+  } as never);
+  if (
+    typeof rawNonce !== "string" ||
+    !/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/u.test(rawNonce)
+  ) {
+    throw new RecoverableSignerError(
+      "registration_nonce_state",
+      "provider returned an invalid nonce at complete discovery coverage",
+    );
+  }
+  const parsed = BigInt(rawNonce);
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new PermanentSignerError(
+      "registration_nonce_state",
+      "production wallet nonce exceeds the exact signer range",
+    );
+  }
+  const after = await publicClient.getBlock({ blockNumber });
+  if (after.hash !== blockHash) {
+    throw new RecoverableSignerError(
+      "discovery_reorg",
+      "complete discovery coverage changed during the nonce read",
+    );
+  }
+  return Number(parsed);
+}
+
+type MintAuthorizationAllocation = {
+  version: 1;
+  fingerprint: string;
+  actionId: string;
+  nonce: string;
+};
+
+function mintAuthorizationAllocationPath(identity: LoadedIdentity): string {
+  return path.join(
+    path.dirname(identity.identityPath),
+    "erc8004-registration-mint-v1.json",
+  );
+}
+
+function parseMintAuthorizationAllocation(raw: string): MintAuthorizationAllocation {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "registration mint authorization journal is not valid JSON",
+    );
+  }
+  if (!isRecord(value)) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "registration mint authorization journal has an invalid shape",
+    );
+  }
+  exactKeys(value, ["version", "fingerprint", "actionId", "nonce"]);
+  if (value.version !== 1) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "registration mint authorization journal has another protocol version",
+    );
+  }
+  return {
+    version: 1,
+    fingerprint: fingerprint(value.fingerprint, "allocated mint authorization fingerprint"),
+    actionId: boundedString(value.actionId, "allocated registration actionId", 128),
+    nonce: transactionNonce(value.nonce),
+  };
+}
+
+async function readMintAuthorizationAllocation(
+  identity: LoadedIdentity,
+): Promise<MintAuthorizationAllocation | undefined> {
+  const target = mintAuthorizationAllocationPath(identity);
+  let stat;
+  try {
+    stat = await lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SIGNER_JOURNAL_BYTES) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "registration mint authorization journal is not a bounded regular file",
+    );
+  }
+  await chmod(target, 0o600);
+  return parseMintAuthorizationAllocation(await readFile(target, "utf8"));
+}
+
+export async function selectDiscoveryMintAuthorization(
+  identity: LoadedIdentity,
+  candidate: MintAuthorization | undefined,
+  registrationActionId?: string,
+  registrationNonce?: string,
+): Promise<MintAuthorization | undefined> {
+  if (candidate === undefined) return undefined;
+  const allocation = await readMintAuthorizationAllocation(identity);
+  if (allocation === undefined) return candidate;
+  return registrationActionId === allocation.actionId && registrationNonce === allocation.nonce
+    ? candidate
+    : undefined;
+}
+
+export function buildPublicDiscoveryResult(
+  discovered: Record<string, unknown>,
+  checkpoint: { version: 1; fingerprint: string; throughBlock: string; throughBlockHash: Hex },
+  mintAuthorization: MintAuthorization | undefined,
+): Record<string, unknown> {
+  const result = { ...discovered };
+  // The internal discovery result is deliberately optimistic so it can be journaled. The
+  // allocation decision is a separate owner-only boundary; absence or mismatch must remove,
+  // not merely decline to overwrite, the optimistic proof.
+  delete result.mintAuthorization;
+  result.checkpoint = checkpoint;
+  if (mintAuthorization !== undefined) result.mintAuthorization = mintAuthorization;
+  return result;
+}
+
+async function bindMintAuthorizationUse(
+  identity: LoadedIdentity,
+  authorization: MintAuthorization,
+  actionId: string,
+  nonce: string,
+): Promise<void> {
+  const target = mintAuthorizationAllocationPath(identity);
+  const allocation: MintAuthorizationAllocation = {
+    version: 1 as const,
+    fingerprint: authorization.fingerprint,
+    actionId,
+    nonce,
+  };
+  const encoded = `${JSON.stringify(allocation)}\n`;
+  const installed = await installSignerAllocation(target, encoded);
+  if (!installed) {
+    const existing = await readMintAuthorizationAllocation(identity);
+    if (
+      existing === undefined ||
+      existing.actionId !== allocation.actionId ||
+      existing.nonce !== allocation.nonce
+    ) {
+      throw new PermanentSignerError(
+        "mint_authorization_reused",
+        "complete discovery already authorized another registration action",
+      );
+    }
+  }
+}
+
+export async function authorizeRegistrationMint(
+  publicClient: PublicClient,
+  identity: LoadedIdentity,
+  actionId: string,
+  operation: Extract<WriteOperation, { type: "register" }>,
+): Promise<void> {
+  const authorization = operation.mintAuthorization;
+  if (authorization === undefined) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "register requires positively complete historical identity discovery",
+    );
+  }
+  const wallet = assertProductionIdentity(identity, authorization.wallet);
+  assertMintAuthorizationFingerprint(authorization);
+  if (
+    authorization.chainId !== ERC8004_CHAIN_ID ||
+    authorization.registry !== ERC8004_IDENTITY_REGISTRY ||
+    authorization.fromBlock !== ERC8004_START_BLOCK.toString()
+  ) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "mint authorization does not cover the canonical ERC-8004 deployment history",
+    );
+  }
+  const allocation = await readMintAuthorizationAllocation(identity);
+  const exactReplay = allocation !== undefined &&
+    allocation.actionId === actionId &&
+    allocation.nonce === operation.nonce;
+  if (allocation !== undefined && !exactReplay) {
+    throw new PermanentSignerError(
+      "mint_authorization_reused",
+      "complete discovery already authorized another registration action",
+    );
+  }
+  const journal = await readDiscoveryJournal(identity);
+  if (
+    journal.wallet !== wallet ||
+    journal.tentacleId !== authorization.tentacleId ||
+    journal.xmtpInboxId !== authorization.xmtpInboxId ||
+    BigInt(journal.throughBlock) < BigInt(authorization.throughBlock) ||
+    (!exactReplay && (
+      journal.mintAuthorization === undefined ||
+      JSON.stringify(journal.mintAuthorization) !== JSON.stringify(authorization)
+    ))
+  ) {
+    throw new PermanentSignerError(
+      "mint_authorization",
+      "register authorization does not match the owner-only discovery journal",
+    );
+  }
+  const canonical = await publicClient.getBlock({ blockNumber: BigInt(authorization.throughBlock) });
+  if (canonical.hash !== authorization.throughBlockHash) {
+    throw new RecoverableSignerError(
+      "mint_authorization_reorg",
+      "the complete identity-discovery authorization block is no longer canonical",
+    );
+  }
+  const context = {
+    tentacleId: authorization.tentacleId,
+    xmtpInboxId: authorization.xmtpInboxId,
+  };
+  const refreshed = await discoverAgents(
+    publicClient,
+    wallet,
+    undefined,
+    "exhaustive",
+    context,
+    journal,
+    "latest",
+  ) as DiscoveryResultWithInternal;
+  const candidates = Array.isArray(refreshed.candidates) ? refreshed.candidates : [];
+  if (candidates.some((candidate) =>
+    isRecord(candidate) && (candidate.sameTentacle === true || candidate.ambiguousTentacle === true))) {
+    throw new RecoverableSignerError(
+      "mint_authorization_stale",
+      "canonical discovery found an existing or ambiguous Cthuwu identity; refusing to register",
+    );
+  }
+  const coverageBlock = BigInt(decimalId(refreshed.observedBlockNumber));
+  const coverageHash = transactionHash(refreshed.observedBlockHash);
+  if (!exactReplay) {
+    const [pendingNonce, coveredNonce] = await Promise.all([
+      publicClient.getTransactionCount({ address: wallet, blockTag: "pending" }),
+      readNonceAtCanonicalCoverage(publicClient, wallet, coverageBlock, coverageHash),
+    ]);
+    if (
+      !Number.isSafeInteger(pendingNonce) ||
+      !Number.isSafeInteger(coveredNonce) ||
+      pendingNonce < coveredNonce
+    ) {
+      throw new RecoverableSignerError(
+        "registration_nonce_state",
+        "provider returned an invalid production wallet nonce window",
+      );
+    }
+    if (pendingNonce !== coveredNonce) {
+      throw new RecoverableSignerError(
+        "registration_nonce_uncertain",
+        "a transaction confirmed or pending beyond complete discovery coverage blocks first ERC-8004 registration",
+      );
+    }
+    assertTransactionNonceWindow(operation.nonce, pendingNonce, coveredNonce, false);
+  }
+  const currentHead = await publicClient.getBlock({ blockTag: "latest" });
+  if (currentHead.number !== coverageBlock || currentHead.hash !== coverageHash) {
+    throw new RecoverableSignerError(
+      "registration_head_advanced",
+      "canonical Base advanced after complete discovery; retry before ERC-8004 registration",
+    );
+  }
+  // Allocate this proof globally before the signer can be reached. The fixed owner-only
+  // journal permits an exact lost-response replay, but no second proof/action/nonce can ever
+  // authorize another registration from this durable installation.
+  await bindMintAuthorizationUse(identity, authorization, actionId, operation.nonce);
+  const refreshedJournal = buildDiscoveryJournal(refreshed, wallet, context);
+  await persistDiscoveryJournal(identity, refreshedJournal);
 }
 
 function envBigInt(name: string, fallback: bigint): bigint {
@@ -2136,6 +3077,9 @@ async function executeWrite(
   rpcEndpoint: string,
 ): Promise<unknown> {
   assertProductionIdentity(identity);
+  if (operation.type === "register") {
+    await authorizeRegistrationMint(publicClient, identity, actionId, operation);
+  }
   const account = privateKeyToAccount(identity.walletKey);
   const fees = await feeParameters(publicClient);
   const gasCeiling = envBigInt("CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION", DEFAULT_MAX_GAS_PER_TRANSACTION);
@@ -3311,15 +4255,77 @@ export async function handleErc8004Request(
         await verifyCanonicalDeployment(publicClient);
         result = await inspectAgent(publicClient, operation.agentId, getAddress(operation.wallet));
         break;
-      case "discover":
+      case "discover": {
         await verifyCanonicalDeployment(publicClient);
-        result = await discoverAgents(
+        const context = operation.tentacleId === undefined || operation.xmtpInboxId === undefined
+          ? undefined
+          : { tentacleId: operation.tentacleId, xmtpInboxId: operation.xmtpInboxId };
+        let identity: LoadedIdentity | undefined;
+        let checkpoint: DiscoveryJournal | undefined;
+        if (context !== undefined || operation.checkpoint !== undefined) {
+          identity = await loadIdentity();
+          assertProductionIdentity(identity, operation.wallet);
+        }
+        if (operation.checkpoint !== undefined) {
+          if (identity === undefined || context === undefined) {
+            throw new PermanentSignerError(
+              "discovery_checkpoint",
+              "checkpoint reuse requires exact local Tentacle identity evidence",
+            );
+          }
+          checkpoint = await readDiscoveryJournal(identity);
+          if (
+            checkpoint.checkpointFingerprint !== operation.checkpoint.fingerprint ||
+            checkpoint.wallet !== getAddress(operation.wallet) ||
+            checkpoint.tentacleId !== context.tentacleId ||
+            checkpoint.xmtpInboxId !== context.xmtpInboxId
+          ) {
+            throw new RecoverableSignerError(
+              "discovery_checkpoint",
+              "requested identity-discovery checkpoint does not match local durable provenance",
+            );
+          }
+        }
+        const discovered = await discoverAgents(
           publicClient,
           getAddress(operation.wallet),
           operation.registrationNonce,
           operation.scope,
+          context,
+          checkpoint,
         );
+        if (context !== undefined && identity !== undefined && operation.scope === "exhaustive") {
+          const journal = buildDiscoveryJournal(
+            discovered as DiscoveryResultWithInternal,
+            getAddress(operation.wallet),
+            context,
+          );
+          await persistDiscoveryJournal(identity, journal);
+          // `discoverAgents` carries its freshly-derived authorization internally. Never
+          // publish that field until the durable allocation journal confirms this is either
+          // an unallocated proof or the exact persisted action+nonce replay.
+          const checkpointResult = {
+            version: 1,
+            fingerprint: journal.checkpointFingerprint,
+            throughBlock: journal.throughBlock,
+            throughBlockHash: journal.throughBlockHash,
+          } as const;
+          const publishableAuthorization = await selectDiscoveryMintAuthorization(
+            identity,
+            journal.mintAuthorization,
+            operation.registrationActionId,
+            operation.registrationNonce,
+          );
+          result = buildPublicDiscoveryResult(
+            discovered as Record<string, unknown>,
+            checkpointResult,
+            publishableAuthorization,
+          );
+        } else {
+          result = discovered;
+        }
         break;
+      }
       case "receipt":
         await verifyCanonicalDeployment(publicClient);
         result = await inspectReceipt(publicClient, operation.transactionHash as Hex);

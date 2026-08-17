@@ -15,11 +15,21 @@ export function readTentacleDisplayHint(
   if (!agentId || !storage) return undefined;
   const snapshot = readLeaderboardCache(storage);
   if (!snapshot) return undefined;
-  for (const identity of [
-    ...snapshot.rankedWallets.flatMap((wallet) => wallet.identities),
-    ...snapshot.suspended,
-  ]) {
-    if (identity.agentId !== agentId) continue;
+  const canonicalAgentId = snapshot.duplicateAgentAliases?.find(
+    ({ aliasAgentId }) => aliasAgentId === agentId,
+  )?.canonicalAgentId ?? agentId;
+  for (const wallet of snapshot.rankedWallets) {
+    const identity = wallet.identities.find(
+      (candidate) => candidate.agentId === canonicalAgentId,
+    );
+    if (!identity) continue;
+    return {
+      name: identity.profile.name,
+      ...(identity.profile.description ? { description: identity.profile.description } : {}),
+    };
+  }
+  for (const identity of snapshot.suspended) {
+    if (identity.agentId !== canonicalAgentId) continue;
     return {
       name: identity.profile.name,
       ...(identity.profile.description ? { description: identity.profile.description } : {}),

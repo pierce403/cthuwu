@@ -20,6 +20,7 @@ mod names;
 mod operator;
 pub mod personality;
 mod principal;
+mod repository_maintenance;
 pub mod scales;
 mod sidecar;
 mod storage;
@@ -48,8 +49,8 @@ use economics::{
 };
 use erc8004::{
     BASE_MAINNET_CHAIN_ID as ERC8004_CHAIN_ID, IDENTITY_REGISTRY, REPUTATION_REGISTRY,
-    RegistrationConfig, SharedRegistrationControl, SidecarErc8004Gateway, TentacleRegistration,
-    active_operator_inboxes,
+    RegistrationConfig, RegistrationPhase, SharedRegistrationControl, SidecarErc8004Gateway,
+    TentacleRegistration, active_operator_inboxes,
 };
 use evolution::{LifecycleAction, LifecycleReceipt, LifecycleReceiptStatus, LineageStore};
 use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions, MandatoryRecoveryKind};
@@ -213,7 +214,7 @@ struct Cli {
     #[arg(long, env = "CTHUWU_ERC8004_REPUTATION_REGISTRY", default_value = REPUTATION_REGISTRY)]
     erc8004_reputation_registry: String,
 
-    /// Explicit persisted-identity selection. It is verified and never silently replaces another.
+    /// Optional migration/diagnostic hint. It is verified and never selects over the canonical ID.
     #[arg(long, env = "CTHUWU_ERC8004_AGENT_ID")]
     erc8004_agent_id: Option<String>,
 
@@ -356,7 +357,7 @@ struct Cli {
     #[arg(
         long,
         env = "UWUBOT_OPERATOR_TOOL_TIMEOUT_SECONDS",
-        default_value_t = 120
+        default_value_t = 240
     )]
     operator_tool_timeout_seconds: u64,
 
@@ -554,6 +555,41 @@ impl EconomicDependencies {
             propagation_minimum_stake_basis_points,
             executor,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfiguredAgentIdAction {
+    AlreadyCanonical,
+    IgnoreProvenDuplicate,
+    IgnoreNoncanonicalConflict,
+    AdoptAmbiguousCandidate,
+    DeferUntilVerified,
+}
+
+fn configured_agent_id_action(
+    selected: &str,
+    confirmed: Option<&str>,
+    ignored_duplicates: &[String],
+    candidates: &[String],
+    phase: RegistrationPhase,
+) -> ConfiguredAgentIdAction {
+    match confirmed {
+        Some(canonical) if canonical == selected => ConfiguredAgentIdAction::AlreadyCanonical,
+        Some(_)
+            if ignored_duplicates
+                .iter()
+                .any(|agent_id| agent_id == selected) =>
+        {
+            ConfiguredAgentIdAction::IgnoreProvenDuplicate
+        }
+        Some(_) => ConfiguredAgentIdAction::IgnoreNoncanonicalConflict,
+        None if phase == RegistrationPhase::FailedRecoverable
+            && candidates.iter().any(|agent_id| agent_id == selected) =>
+        {
+            ConfiguredAgentIdAction::AdoptAmbiguousCandidate
+        }
+        None => ConfiguredAgentIdAction::DeferUntilVerified,
     }
 }
 
@@ -839,17 +875,52 @@ async fn main() -> Result<()> {
     )?));
     if let Some(selected) = cli.erc8004_agent_id.as_deref() {
         let mut registration_guard = registration.lock().await;
-        match registration_guard.snapshot().confirmed_agent_id.as_deref() {
-            Some(existing) if existing != selected => bail!(
-                "CTHUWU_ERC8004_AGENT_ID {selected} conflicts with persisted agent ID {existing}"
-            ),
-            None => {
-                registration_guard
-                    .adopt(selected)
-                    .await
-                    .context("adopting the explicitly selected ERC-8004 identity")?;
+        registration_guard.guard_configured_agent_id(selected);
+    }
+    {
+        // Complete the fail-closed identity-integrity pass before the long-running XMTP sidecar
+        // reads the registration snapshot for liveness, routing, chat control, or Branding. A
+        // recoverable provider failure leaves registration gated/degraded while direct DMs can
+        // still start; the supervisor repeats the audit and delivers any pending receipt later.
+        let mut registration_guard = registration.lock().await;
+        if let Err(error) = registration_guard.maintain_startup().await {
+            warn!(
+                %error,
+                "startup ERC-8004 identity integrity check failed; identity-sensitive behavior remains disabled"
+            );
+        }
+        if let Some(selected) = cli.erc8004_agent_id.as_deref() {
+            let snapshot = registration_guard.snapshot();
+            let configured_action = configured_agent_id_action(
+                selected,
+                snapshot.confirmed_agent_id.as_deref(),
+                &snapshot.ignored_duplicate_agent_ids,
+                &snapshot.candidate_agent_ids,
+                snapshot.phase,
+            );
+            match configured_action {
+                ConfiguredAgentIdAction::AlreadyCanonical => {}
+                ConfiguredAgentIdAction::IgnoreProvenDuplicate => warn!(
+                    configured_agent_id = selected,
+                    canonical_agent_id =
+                        snapshot.confirmed_agent_id.as_deref().unwrap_or("unknown"),
+                    "configured ERC-8004 agent ID is a proven higher duplicate and was ignored"
+                ),
+                ConfiguredAgentIdAction::IgnoreNoncanonicalConflict => warn!(
+                    configured_agent_id = selected,
+                    canonical_agent_id =
+                        snapshot.confirmed_agent_id.as_deref().unwrap_or("unknown"),
+                    "configured ERC-8004 agent ID conflicts with the verified canonical identity and was ignored"
+                ),
+                ConfiguredAgentIdAction::AdoptAmbiguousCandidate => warn!(
+                    configured_agent_id = selected,
+                    "configured ERC-8004 identity remains an ambiguous candidate after complete discovery; operator review is required and registration is blocked"
+                ),
+                ConfiguredAgentIdAction::DeferUntilVerified => warn!(
+                    configured_agent_id = selected,
+                    "configured ERC-8004 agent ID was deferred because startup discovery has not proven it as an ambiguous adoption candidate"
+                ),
             }
-            Some(_) => {}
         }
     }
     let registry_control = Arc::new(SharedRegistrationControl::new(registration.clone()).await);
@@ -1998,15 +2069,11 @@ async fn run_management_command(
             let mut registration =
                 TentacleRegistration::open(&cli.data_dir, &tentacle_id, wallet, config, gateway)?;
             if let Some(selected) = cli.erc8004_agent_id.as_deref() {
-                match registration.snapshot().confirmed_agent_id.as_deref() {
-                    Some(existing) if existing != selected => bail!(
-                        "CTHUWU_ERC8004_AGENT_ID {selected} conflicts with persisted agent ID {existing}"
-                    ),
-                    None => {
-                        println!("{}", registration.adopt(selected).await?);
-                    }
-                    Some(_) => {}
-                }
+                registration.guard_configured_agent_id(selected);
+            }
+            let startup_notices = registration.maintain_startup().await?;
+            for notice in startup_notices {
+                println!("{}", notice.text);
             }
             match command {
                 RegistryCommand::Status => {
@@ -2173,6 +2240,54 @@ mod tests {
         assert!(registration_config_from_cli(&disabled).is_ok());
         assert!(ensure_registration_identity_environment(true, "dev").is_err());
         assert!(ensure_registration_identity_environment(true, "production").is_ok());
+    }
+
+    #[test]
+    fn stale_configured_higher_duplicate_cannot_override_a_repaired_canonical_binding() {
+        assert_eq!(
+            configured_agent_id_action(
+                "63846",
+                Some("61766"),
+                &["63846".to_owned()],
+                &["61766".to_owned(), "63846".to_owned()],
+                RegistrationPhase::Active,
+            ),
+            ConfiguredAgentIdAction::IgnoreProvenDuplicate
+        );
+        assert_eq!(
+            configured_agent_id_action(
+                "70000",
+                Some("61766"),
+                &["63846".to_owned()],
+                &["61766".to_owned(), "63846".to_owned(), "70000".to_owned()],
+                RegistrationPhase::Active,
+            ),
+            ConfiguredAgentIdAction::IgnoreNoncanonicalConflict
+        );
+    }
+
+    #[test]
+    fn configured_agent_id_is_only_an_ambiguous_post_discovery_adoption_hint() {
+        assert_eq!(
+            configured_agent_id_action(
+                "70000",
+                None,
+                &[],
+                &["70000".to_owned()],
+                RegistrationPhase::FailedRecoverable,
+            ),
+            ConfiguredAgentIdAction::AdoptAmbiguousCandidate
+        );
+        assert_eq!(
+            configured_agent_id_action(
+                "70000",
+                None,
+                &[],
+                &["70000".to_owned()],
+                RegistrationPhase::DiscoveryIncomplete,
+            ),
+            ConfiguredAgentIdAction::DeferUntilVerified
+        );
     }
 
     #[test]

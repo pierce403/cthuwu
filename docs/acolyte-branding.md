@@ -153,7 +153,10 @@ prove all of the following:
 
 For an existing Branding, the verified wallet is its current NFT owner. For mint, purchase, and
 claim, the acquiring wallet is the caller. Every transition binds that wallet to the exact supplied
-agent ID rather than choosing another agent associated with the same wallet.
+agent ID rather than choosing another agent associated with the same wallet. Cthuwu separately
+canonicalizes identities proven to be historical registrations of one durable Tentacle: new
+controller selection uses the lowest such ID, while the contract continues to verify the exact ID
+already stored in an existing Branding. An unproven shared-wallet collision is never substituted.
 
 A registry revert, malformed response, missing code, or unknown version is
 `RegistryUnavailable`, not proof of ineligibility. Contract state must fail closed: an outage
@@ -402,8 +405,12 @@ must verify:
 4. the canonical Identity Registry deployment and version;
 5. exact `getAgentWallet` and current owner-or-authorized control for that agent ID;
 6. byte-exact allegiance and protocol metadata; and
-7. that same agent's current on-chain ERC-8004 registration resolves to the production XMTP
-   endpoint being selected.
+7. that same agent's current on-chain ERC-8004 registration resolves to production XMTP; and
+8. complete Agent0 directory pagination pinned to a canonical Base block, followed by bounded Base
+   registry-event discovery through the assignment block, identifies every credible controller
+   alias; and fresh reads at the assignment block prove any lower canonical ID has the same wallet,
+   authorization, exact Cthuwu markers, and Tentacle identity before its production XMTP endpoint is
+   selected.
 
 That final step is not a loose service-name lookup. The block-pinned `tokenURI(agentId)` must be a
 bounded active `registration-v1` data URI with exactly one matching canonical Base registry entry,
@@ -413,10 +420,12 @@ must bind the same chain `8453`, Identity Registry, agent ID, XMTP `production` 
 outer endpoint, with a bounded capability list containing `direct-xmtp-messaging`. Missing,
 duplicated, or inconsistent outer/nested bindings are unavailable rather than routable.
 
-Agent0 and the leaderboard cache may suggest a candidate or supply display details, but they are
-never routing authority. Every authoritative input is revalidated against canonical Base state at
-the same block. A nonzero historical controller field or human-readable Tentacle/group name is not
-sufficient.
+The complete pinned Agent0 directory is a bounded discovery source, not authority. The browser
+bridges its indexed block to the assignment block with canonical registry events and directly
+revalidates every candidate at that assignment block; the local leaderboard cache is never used to
+authorize a controller alias. A nonzero historical controller field, shared wallet, or
+human-readable Tentacle/group name is not sufficient. The application neither rewrites the
+Branding nor mutates the higher ERC-8004 NFT when it routes through a proven lower canonical alias.
 
 Assignment outcomes preserve the contract's failure semantics:
 
@@ -571,7 +580,8 @@ The version-1 contract test plan covers:
 
 - token ID/address binding and immutable subject/referrer;
 - EIP-712 EOA and ERC-1271 consent, nonce/deadline/replay, and wrong-field signatures;
-- exact current ERC-8004 eligibility, including shared-wallet multiple-agent cases;
+- exact current ERC-8004 eligibility, including proven duplicate collapse and ambiguous
+  shared-wallet multiple-agent cases;
 - registry outage and unknown version never becoming claimability;
 - upward-rounded 0.1% upkeep, early-payment window, prepaid cap, and exact expiry boundary;
 - immediate decreases, delayed increases, fixed activation time, and no mempool repricing escape;

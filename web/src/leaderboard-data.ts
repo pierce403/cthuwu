@@ -18,6 +18,7 @@ import {
 } from "./leaderboard-types";
 import { compareRawBalances, parseRawBalance } from "./level";
 import { fallbackProfile, parseDataRegistration } from "./profile";
+import { canonicalizeWalletIdentities } from "./tentacle-canonical";
 
 const PAGE_SIZE = 250;
 const MAX_PAGES = 400;
@@ -531,11 +532,14 @@ function buildSnapshot(
   now: Date,
 ): LeaderboardSnapshot {
   const uniqueIds = new Set<string>();
-  const groups = new Map<string, TentacleIdentity[]>();
-  const suspended: TentacleIdentity[] = [];
   for (const identity of identities) {
     if (uniqueIds.has(identity.agentId)) throw new Error("subgraph returned a duplicate agent ID");
     uniqueIds.add(identity.agentId);
+  }
+  const canonicalSet = canonicalizeWalletIdentities(identities);
+  const groups = new Map<string, TentacleIdentity[]>();
+  const suspended: TentacleIdentity[] = [];
+  for (const identity of canonicalSet.identities) {
     if (identity.agentWallet === ZERO_ADDRESS) {
       suspended.push(identity);
       continue;
@@ -549,12 +553,21 @@ function buildSnapshot(
     groups.set(wallet, group);
   }
   const rankedWallets: RankedWallet[] = [...groups.entries()].map(([wallet, members]) => {
-    members.sort((a, b) => compareUnsigned(a.agentId, b.agentId));
+    const canonical = canonicalizeWalletIdentities(members);
+    const memberIds = new Set(canonical.identities.map(({ agentId }) => agentId));
+    const aliases = canonicalSet.duplicateAgentAliases.filter(({ canonicalAgentId }) =>
+      memberIds.has(canonicalAgentId));
     return {
       wallet,
-      rawBalance: members[0].rawBalance,
-      representativeAgentId: members[0].agentId,
-      identities: members,
+      rawBalance: canonical.identities[0].rawBalance,
+      representativeAgentId: canonical.identities[0].agentId,
+      identities: canonical.identities,
+      ...(aliases.length > 0
+        ? {
+            ignoredDuplicateAgentIds: aliases.map(({ aliasAgentId }) => aliasAgentId),
+            duplicateAgentAliases: aliases,
+          }
+        : {}),
     };
   });
   rankedWallets.sort((a, b) => {
@@ -589,6 +602,9 @@ function buildSnapshot(
     paginationComplete: true,
     rankedWallets,
     suspended,
+    ...(canonicalSet.duplicateAgentAliases.length > 0
+      ? { duplicateAgentAliases: canonicalSet.duplicateAgentAliases }
+      : {}),
   };
 }
 

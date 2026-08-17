@@ -55,8 +55,9 @@ pub const REGISTRATION_SCHEMA: &str = "https://eips.ethereum.org/EIPS/eip-8004#r
 pub const ALLEGIANCE_VALUE: &str = "uwu-tentacle-v1";
 pub const PROTOCOL_VALUE: &str = "1";
 
-const SNAPSHOT_VERSION: u32 = 3;
-const PREVIOUS_SNAPSHOT_VERSION: u32 = 2;
+const SNAPSHOT_VERSION: u32 = 4;
+const PREVIOUS_SNAPSHOT_VERSION: u32 = 3;
+const VERSION_TWO_SNAPSHOT_VERSION: u32 = 2;
 const LEGACY_SNAPSHOT_VERSION: u32 = 1;
 const SNAPSHOT_FILE: &str = "erc8004-registration.json";
 const MAX_SNAPSHOT_BYTES: u64 = 128 * 1024;
@@ -72,12 +73,15 @@ const DEFAULT_NOTIFICATION_COOLDOWN_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAINTENANCE_INTERVAL_SECONDS: u64 = 15 * 60;
 const SUBMITTED_TRANSACTION_MAINTENANCE_INTERVAL_SECONDS: u64 = 15;
 const RECOVERABLE_RPC_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
+const IDENTITY_REGISTRY_START_BLOCK: u64 = 41_663_783;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationPhase {
     Unconfigured,
     Discovering,
+    DiscoveryIncomplete,
+    VerifiedNoExistingIdentity,
     Unregistered,
     FundingRequired,
     ReadyToRegister,
@@ -90,6 +94,61 @@ pub enum RegistrationPhase {
     Suspended,
     FailedRecoverable,
     FailedPermanent,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityDiscoveryCheckpoint {
+    pub version: u32,
+    pub fingerprint: String,
+    pub through_block: String,
+    pub through_block_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MintAuthorization {
+    pub version: u32,
+    pub chain_id: u64,
+    pub registry: String,
+    pub wallet: String,
+    pub tentacle_id: String,
+    pub xmtp_inbox_id: String,
+    pub from_block: String,
+    pub through_block: String,
+    pub through_block_hash: String,
+    pub candidate_set_hash: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityRepairReceipt {
+    pub previous_agent_id: Option<String>,
+    pub canonical_agent_id: String,
+    pub ignored_duplicate_agent_ids: Vec<String>,
+    pub repaired_at_unix: u64,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityCandidateReceipt {
+    pub agent_id: String,
+    pub same_tentacle: bool,
+    pub ambiguous_tentacle: bool,
+    pub identity_evidence: Vec<String>,
+    pub inspection_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplicitAdoptionReceipt {
+    pub agent_id: String,
+    pub discovery_checkpoint_fingerprint: String,
+    pub identity_evidence: Vec<String>,
+    pub inspection_fingerprint: String,
+    pub adopted_at_unix: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -156,6 +215,30 @@ pub struct RegistrationSnapshot {
     pub selected_agent_id: Option<String>,
     pub confirmed_agent_id: Option<String>,
     pub candidate_agent_ids: Vec<String>,
+    /// Bounded evidence from the most recent complete canonical discovery. Explicit migration
+    /// adoption is allowed only for an entry in this set and never for wallet ownership alone.
+    #[serde(default)]
+    pub candidate_classifications: Vec<IdentityCandidateReceipt>,
+    /// Owner-only sidecar checkpoint fingerprint for a positively completed canonical historical
+    /// discovery. The sidecar validates the corresponding journal before using it incrementally.
+    #[serde(default)]
+    pub identity_discovery_checkpoint: Option<IdentityDiscoveryCheckpoint>,
+    /// One-use, sidecar-journal-backed proof that complete discovery found no credible existing
+    /// identity. It is retained across a lost register response and bound to the exact retry nonce.
+    #[serde(default)]
+    pub mint_authorization: Option<MintAuthorization>,
+    /// Higher IDs proven to represent this same durable Tentacle. They remain on-chain but are
+    /// never selected by this runtime.
+    #[serde(default)]
+    pub ignored_duplicate_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub last_identity_repair: Option<IdentityRepairReceipt>,
+    /// Durable operator-selected migration provenance. Startup honors it only while fresh
+    /// canonical discovery still returns this ID as a nonconflicting ambiguous Cthuwu candidate.
+    #[serde(default)]
+    pub explicit_adoption: Option<ExplicitAdoptionReceipt>,
+    #[serde(default)]
+    pub last_notified_identity_repair_fingerprint: Option<String>,
     pub submitted_transaction_hash: Option<String>,
     /// Exact sender nonce chosen and persisted before any registry broadcast. Retrying the same
     /// nonce can replace a lost transaction but can never execute two copies of that action.
@@ -199,6 +282,13 @@ impl RegistrationSnapshot {
             selected_agent_id: None,
             confirmed_agent_id: None,
             candidate_agent_ids: Vec::new(),
+            candidate_classifications: Vec::new(),
+            identity_discovery_checkpoint: None,
+            mint_authorization: None,
+            ignored_duplicate_agent_ids: Vec::new(),
+            last_identity_repair: None,
+            explicit_adoption: None,
+            last_notified_identity_repair_fingerprint: None,
             submitted_transaction_hash: None,
             submitted_transaction_nonce: None,
             submitted_action: None,
@@ -255,13 +345,116 @@ impl RegistrationSnapshot {
             self.candidate_agent_ids.len() <= MAX_CANDIDATES,
             "persisted candidate set is unbounded"
         );
+        ensure!(
+            self.candidate_classifications.len() <= MAX_CANDIDATES,
+            "persisted candidate classification set is unbounded"
+        );
+        ensure!(
+            self.ignored_duplicate_agent_ids.len() <= MAX_CANDIDATES,
+            "persisted duplicate identity set is unbounded"
+        );
         for id in self
             .candidate_agent_ids
             .iter()
+            .chain(self.ignored_duplicate_agent_ids.iter())
             .chain(self.selected_agent_id.iter())
             .chain(self.confirmed_agent_id.iter())
         {
             validate_agent_id(id)?;
+        }
+        let mut classified_ids = BTreeSet::new();
+        for candidate in &self.candidate_classifications {
+            validate_agent_id(&candidate.agent_id)?;
+            ensure!(
+                classified_ids.insert(candidate.agent_id.clone()),
+                "persisted candidate classification set contains duplicate agent IDs"
+            );
+            ensure!(
+                self.candidate_agent_ids.contains(&candidate.agent_id),
+                "persisted candidate classification is absent from the candidate ID set"
+            );
+            ensure!(
+                !(candidate.same_tentacle && candidate.ambiguous_tentacle),
+                "persisted candidate cannot be both same-Tentacle and ambiguous"
+            );
+            validate_identity_evidence(&candidate.identity_evidence)?;
+            validate_bare_hash(
+                &candidate.inspection_fingerprint,
+                "candidate inspection fingerprint",
+            )?;
+        }
+        if let (Some(selected), Some(confirmed)) =
+            (&self.selected_agent_id, &self.confirmed_agent_id)
+        {
+            ensure!(
+                selected == confirmed,
+                "persisted selected and confirmed ERC-8004 identities disagree"
+            );
+        }
+        if let Some(canonical) = &self.confirmed_agent_id {
+            for duplicate in &self.ignored_duplicate_agent_ids {
+                ensure!(
+                    compare_decimal(canonical, duplicate).is_lt(),
+                    "persisted canonical agent ID is not lower than its ignored duplicate"
+                );
+            }
+        }
+        if let Some(checkpoint) = &self.identity_discovery_checkpoint {
+            validate_discovery_checkpoint(checkpoint)?;
+        }
+        if let Some(authorization) = &self.mint_authorization {
+            validate_mint_authorization(
+                authorization,
+                expected_tentacle_id,
+                expected_wallet,
+                self.xmtp_inbox_id.as_deref(),
+            )?;
+            let checkpoint = self
+                .identity_discovery_checkpoint
+                .as_ref()
+                .context("persisted mint authorization has no discovery checkpoint")?;
+            ensure!(
+                authorization.through_block == checkpoint.through_block
+                    && authorization.through_block_hash == checkpoint.through_block_hash,
+                "persisted mint authorization and discovery checkpoint disagree"
+            );
+        }
+        if let Some(receipt) = &self.last_identity_repair {
+            validate_agent_id(&receipt.canonical_agent_id)?;
+            if let Some(previous) = &receipt.previous_agent_id {
+                validate_agent_id(previous)?;
+            }
+            ensure!(
+                receipt.ignored_duplicate_agent_ids.len() <= MAX_CANDIDATES,
+                "persisted identity repair duplicate set is unbounded"
+            );
+            for duplicate in &receipt.ignored_duplicate_agent_ids {
+                validate_agent_id(duplicate)?;
+            }
+            validate_public_text(&receipt.detail, "identity repair receipt", 512)?;
+        }
+        if let Some(receipt) = &self.explicit_adoption {
+            validate_agent_id(&receipt.agent_id)?;
+            validate_bare_hash(
+                &receipt.discovery_checkpoint_fingerprint,
+                "explicit adoption discovery fingerprint",
+            )?;
+            validate_identity_evidence(&receipt.identity_evidence)?;
+            validate_bare_hash(
+                &receipt.inspection_fingerprint,
+                "explicit adoption inspection fingerprint",
+            )?;
+            ensure!(
+                has_explicit_migration_evidence(&receipt.identity_evidence),
+                "explicit adoption cannot be authorized by wallet ownership alone"
+            );
+            ensure!(
+                self.confirmed_agent_id.as_deref() == Some(receipt.agent_id.as_str()),
+                "explicit adoption provenance does not match the confirmed identity"
+            );
+        }
+        if let Some(fingerprint) = &self.last_notified_identity_repair_fingerprint {
+            validate_bare_hash(fingerprint, "identity repair notification fingerprint")?;
         }
         if self.submitted_transaction_hash.is_some() && self.submitted_action.is_none() {
             bail!("persisted transaction hash must name its submitted action");
@@ -275,7 +468,10 @@ impl RegistrationSnapshot {
         if self.submitted_transaction_hash.is_none() && self.submitted_action.is_some() {
             let valid_phase = self.phase == RegistrationPhase::Preparing
                 || (self.submitted_action == Some(PendingAction::Register)
-                    && self.phase == RegistrationPhase::Discovering);
+                    && matches!(
+                        self.phase,
+                        RegistrationPhase::Discovering | RegistrationPhase::DiscoveryIncomplete
+                    ));
             ensure!(
                 valid_phase,
                 "an unbroadcast persisted action is in an invalid recovery state"
@@ -392,6 +588,28 @@ impl RegistrationStore {
                     let mut migrated_value = value;
                     let object = migrated_value
                         .as_object_mut()
+                        .context("version-3 ERC-8004 snapshot is not an object")?;
+                    object.insert("version".to_owned(), json!(SNAPSHOT_VERSION));
+                    let needs_migration_provenance = matches!(
+                        object.get("migrated_from_version"),
+                        None | Some(Value::Null)
+                    );
+                    if needs_migration_provenance {
+                        object.insert(
+                            "migrated_from_version".to_owned(),
+                            json!(PREVIOUS_SNAPSHOT_VERSION),
+                        );
+                    }
+                    let migrated: RegistrationSnapshot = serde_json::from_value(migrated_value)
+                        .context("version-3 ERC-8004 snapshot cannot be migrated")?;
+                    migrated.validate(tentacle_id, wallet)?;
+                    self.save(&migrated)?;
+                    migrated
+                }
+                VERSION_TWO_SNAPSHOT_VERSION => {
+                    let mut migrated_value = value;
+                    let object = migrated_value
+                        .as_object_mut()
                         .context("version-2 ERC-8004 snapshot is not an object")?;
                     object.insert("version".to_owned(), json!(SNAPSHOT_VERSION));
                     object.insert(
@@ -405,7 +623,7 @@ impl RegistrationStore {
                     if needs_migration_provenance {
                         object.insert(
                             "migrated_from_version".to_owned(),
-                            json!(PREVIOUS_SNAPSHOT_VERSION),
+                            json!(VERSION_TWO_SNAPSHOT_VERSION),
                         );
                     }
                     let migrated: RegistrationSnapshot = serde_json::from_value(migrated_value)
@@ -770,6 +988,9 @@ pub struct OperatorNotification {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NotificationCommitment {
     Success,
+    IdentityRepair {
+        fingerprint: String,
+    },
     Funding {
         notified_at_unix: u64,
         fingerprint: String,
@@ -787,6 +1008,14 @@ pub struct TentacleRegistration {
     gateway: Arc<dyn Erc8004Gateway>,
     wallet: Address,
     state: RegistrationSnapshot,
+    /// Process-local deployment hint supplied by CTHUWU_ERC8004_AGENT_ID. It can guide explicit
+    /// adoption, but if it remains unresolved it is an additional mint blocker, never authority
+    /// to replace complete discovery or the deterministic lowest-ID rule.
+    configured_agent_id_hint: Option<String>,
+    /// A failed startup audit must remain fail-closed for the lifetime of this process. Ordinary
+    /// maintenance may reconcile a confirmed binding only after exhaustive canonical discovery
+    /// has positively selected it during this process.
+    startup_integrity_complete: bool,
     /// Last positive deployment observation returned by the typed production sidecar. It is used
     /// to construct the existing council `Erc8004Registry` read adapter; no signer state lives here.
     last_deployment: Option<Value>,
@@ -862,6 +1091,8 @@ impl TentacleRegistration {
             gateway,
             wallet,
             state,
+            configured_agent_id_hint: None,
+            startup_integrity_complete: false,
             last_deployment: None,
             last_registry_record: None,
         })
@@ -869,6 +1100,15 @@ impl TentacleRegistration {
 
     pub fn snapshot(&self) -> &RegistrationSnapshot {
         &self.state
+    }
+
+    pub fn guard_configured_agent_id(&mut self, agent_id: &str) {
+        let bounded = bounded_diagnostic(agent_id, 80);
+        self.configured_agent_id_hint = Some(if bounded.trim().is_empty() {
+            "<invalid-empty-agent-id>".to_owned()
+        } else {
+            bounded
+        });
     }
 
     pub fn maintenance_interval(&self) -> Duration {
@@ -894,7 +1134,8 @@ impl TentacleRegistration {
         &mut self,
         force_registration: bool,
     ) -> Result<Vec<OperatorNotification>> {
-        self.maintain_with_discovery(force_registration, false)
+        let exhaustive_discovery = !self.startup_integrity_complete;
+        self.maintain_with_discovery(force_registration, exhaustive_discovery)
             .await
     }
 
@@ -907,6 +1148,15 @@ impl TentacleRegistration {
         if !self.config.enabled {
             self.transition(RegistrationPhase::Unconfigured, now)?;
             return Ok(Vec::new());
+        }
+        if exhaustive_discovery {
+            // Persist the fail-closed startup gate before any provider call. The long-running
+            // XMTP sidecar may consume registration state only after this audit returns; a crash
+            // or RPC failure therefore cannot leave a stale higher alias marked Active.
+            self.state.phase = RegistrationPhase::Discovering;
+            self.state.last_verified = None;
+            self.startup_integrity_complete = false;
+            self.persist(now)?;
         }
         let deployment = match self
             .gateway
@@ -926,7 +1176,7 @@ impl TentacleRegistration {
         // it through the existing canonical council adapter model before any funding or write.
         self.accept_deployment_observation(deployment)?;
 
-        if self.state.submitted_transaction_hash.is_some() {
+        if self.state.submitted_transaction_hash.is_some() && !exhaustive_discovery {
             return self.resume_submitted(now).await;
         }
 
@@ -961,9 +1211,69 @@ impl TentacleRegistration {
             self.persist(now)?;
         }
 
-        if let Some(agent_id) = self.state.confirmed_agent_id.clone() {
+        if let Some(agent_id) = self.state.confirmed_agent_id.clone()
+            && !exhaustive_discovery
+        {
             return self.reconcile_agent(&agent_id, now).await;
         }
+
+        // The first pass of every process performs an integrity audit before the transport can
+        // consume this snapshot. Directly inspect the persisted binding first; exhaustive
+        // discovery below must account for it before any canonical selection or mint decision.
+        let persisted_inspection = if exhaustive_discovery {
+            match self
+                .state
+                .confirmed_agent_id
+                .clone()
+                .or_else(|| self.state.selected_agent_id.clone())
+            {
+                Some(agent_id) => {
+                    self.transition(RegistrationPhase::Discovering, now)?;
+                    let inspected = match self
+                        .gateway
+                        .invoke(
+                            &self.read_action_id("integrity-agent", now),
+                            json!({"type": "inspect_agent", "agentId": agent_id, "wallet": self.wallet.to_string()}),
+                        )
+                        .await
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.discovery_incomplete(error.to_string(), now)?;
+                            return Ok(Vec::new());
+                        }
+                    };
+                    let authoritative_not_found =
+                        match parse_authoritative_agent_not_found(&inspected, &agent_id) {
+                            Ok(authoritative_not_found) => authoritative_not_found,
+                            Err(error) => {
+                                self.discovery_incomplete(error.to_string(), now)?;
+                                return Ok(Vec::new());
+                            }
+                        };
+                    if authoritative_not_found {
+                        // Keep the stale binding intact until complete discovery selects a
+                        // replacement. It is repair provenance, not authority to mint. Only the
+                        // sidecar's exact canonical ownerOf nonexistent-token outcome reaches
+                        // this branch; timeouts, rate limits, reorgs, and malformed responses
+                        // remain discovery failures above.
+                        Some(PersistedAgentInspection::AuthoritativelyNotFound { agent_id })
+                    } else {
+                        let verified = match parse_verified(&inspected, self.wallet, now) {
+                            Ok(verified) => verified,
+                            Err(error) => {
+                                self.discovery_incomplete(error.to_string(), now)?;
+                                return Ok(Vec::new());
+                            }
+                        };
+                        Some(PersistedAgentInspection::Verified { agent_id, verified })
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
 
         let unresolved_register = self.state.submitted_transaction_hash.is_none()
             && self.state.submitted_action == Some(PendingAction::Register);
@@ -975,94 +1285,282 @@ impl TentacleRegistration {
         {
             self.transition(RegistrationPhase::Discovering, now)?;
         }
+        // Any path that can reach a new register requires complete historical coverage. A recent
+        // scan remains a non-authoritative refresh optimization only; it is never used here to
+        // prove absence. The owner-only sidecar checkpoint makes repeated exhaustive checks
+        // incremental while preserving canonical-start coverage.
+        let discovery_scope = DiscoveryScope::Exhaustive;
         let mut discover_operation = json!({
             "type": "discover",
             "wallet": self.wallet.to_string(),
-            "scope": if unresolved_register || exhaustive_discovery { "exhaustive" } else { "recent" },
+            "scope": discovery_scope.as_str(),
+            "tentacleId": self.state.tentacle_id,
+            "xmtpInboxId": self.state.xmtp_inbox_id,
         });
-        if unresolved_register && let Some(nonce) = self.state.submitted_transaction_nonce.as_ref()
-        {
+        if let Some(checkpoint) = &self.state.identity_discovery_checkpoint {
             discover_operation
                 .as_object_mut()
                 .context("candidate discovery operation must be an object")?
-                .insert("registrationNonce".to_owned(), Value::String(nonce.clone()));
+                .insert(
+                    "checkpoint".to_owned(),
+                    json!({"version": checkpoint.version, "fingerprint": checkpoint.fingerprint}),
+                );
+        }
+        if self.state.submitted_action == Some(PendingAction::Register)
+            && let (Some(action_id), Some(nonce)) = (
+                self.state.action_id.as_ref(),
+                self.state.submitted_transaction_nonce.as_ref(),
+            )
+        {
+            let operation = discover_operation
+                .as_object_mut()
+                .context("candidate discovery operation must be an object")?;
+            operation.insert("registrationNonce".to_owned(), Value::String(nonce.clone()));
+            operation.insert(
+                "registrationActionId".to_owned(),
+                Value::String(action_id.clone()),
+            );
         }
         let discovered = match self
             .gateway
-            .invoke(&self.read_action_id("discover", now), discover_operation)
+            .invoke(
+                &self.read_action_id("discover", now),
+                discover_operation.clone(),
+            )
             .await
         {
             Ok(value) => value,
+            Err(error)
+                if self.state.identity_discovery_checkpoint.is_some()
+                    && error
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("checkpoint") =>
+            {
+                // A stale/corrupt sidecar checkpoint never degrades absence proof. Drop only the
+                // public fingerprint and retry one bounded full canonical scan.
+                self.state.identity_discovery_checkpoint = None;
+                self.state.mint_authorization = None;
+                self.persist(now)?;
+                let mut without_checkpoint = discover_operation;
+                without_checkpoint
+                    .as_object_mut()
+                    .context("candidate discovery operation must be an object")?
+                    .remove("checkpoint");
+                match self
+                    .gateway
+                    .invoke(
+                        &self.read_action_id("discover-full", now),
+                        without_checkpoint,
+                    )
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.discovery_incomplete(error.to_string(), now)?;
+                        return Ok(Vec::new());
+                    }
+                }
+            }
             Err(error) => {
                 // If an earlier register broadcast lost its response, never mint again merely
                 // because discovery is unavailable.
-                if unresolved_register {
-                    self.state.failure = Some(failure_from_error(
-                        &error.to_string(),
-                        is_recoverable_error(&error),
-                        now,
-                    ));
-                    self.persist(now)?;
-                } else {
-                    self.fail(error.to_string(), is_recoverable_error(&error), now)?;
-                }
+                self.discovery_incomplete(error.to_string(), now)?;
                 return Ok(Vec::new());
             }
         };
-        let discovery = parse_discovery(&discovered)?;
+        let discovery = match parse_discovery(
+            &discovered,
+            discovery_scope,
+            &self.state.tentacle_id,
+            self.wallet,
+            self.state.xmtp_inbox_id.as_deref(),
+        ) {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                self.discovery_incomplete(error.to_string(), now)?;
+                return Ok(Vec::new());
+            }
+        };
+        self.state.identity_discovery_checkpoint = discovery.checkpoint.clone();
+        self.state.mint_authorization = discovery.mint_authorization.clone();
         let candidates = &discovery.candidates;
         self.state.candidate_agent_ids = candidates
             .iter()
             .map(|candidate| candidate.agent_id.clone())
             .collect();
-        if unresolved_register {
-            if discovery.matched_registration_agent_ids.len() == 1 {
-                let agent_id = discovery.matched_registration_agent_ids[0].clone();
-                // The finalized Registered event and its sender nonce positively identify the
-                // outcome even if the identity has since transferred or cleared agentWallet.
-                // Persist that durable ID, then normal reconciliation will visibly suspend it.
-                self.adopt_confirmed(&agent_id, now)?;
-                return self.reconcile_agent(&agent_id, now).await;
+        self.state.candidate_classifications = candidates
+            .iter()
+            .map(|candidate| IdentityCandidateReceipt {
+                agent_id: candidate.agent_id.clone(),
+                same_tentacle: candidate.same_tentacle,
+                ambiguous_tentacle: candidate.ambiguous_tentacle,
+                identity_evidence: candidate.identity_evidence.clone(),
+                inspection_fingerprint: candidate.inspection_fingerprint.clone(),
+            })
+            .collect();
+        // Persist the exact complete candidate receipt before acting on it. This makes explicit
+        // migration selection auditable and prevents a crash from falling back to a stale set.
+        self.persist(now)?;
+        ensure!(
+            discovery.matched_registration_agent_ids.len() <= 1,
+            "one registration nonce cannot identify multiple ERC-8004 agents"
+        );
+        let matched_registration_id = discovery.matched_registration_agent_ids.first();
+        let explicit_adoption = self.state.explicit_adoption.as_ref();
+        let mut same_tentacle_ids = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.same_tentacle
+                    || matched_registration_id == Some(&candidate.agent_id)
+                    || (candidate.ambiguous_tentacle
+                        && explicit_adoption.is_some_and(|receipt| {
+                            receipt.agent_id == candidate.agent_id
+                                && has_explicit_migration_evidence(&receipt.identity_evidence)
+                        }))
+            })
+            .map(|candidate| candidate.agent_id.clone())
+            .collect::<Vec<_>>();
+        same_tentacle_ids.sort_by(|left, right| compare_decimal(left, right));
+        same_tentacle_ids.dedup();
+        let ambiguous_ids = candidates
+            .iter()
+            .filter(|candidate| candidate.ambiguous_tentacle)
+            .map(|candidate| candidate.agent_id.clone())
+            .collect::<Vec<_>>();
+
+        if let Some(canonical_agent_id) = same_tentacle_ids.first().cloned() {
+            self.startup_integrity_complete = true;
+            let duplicate_agent_ids = same_tentacle_ids[1..].to_vec();
+            let previous_agent_id = self
+                .state
+                .confirmed_agent_id
+                .clone()
+                .or_else(|| self.state.selected_agent_id.clone());
+            let binding_changed = previous_agent_id.as_deref() != Some(canonical_agent_id.as_str())
+                || self.state.ignored_duplicate_agent_ids != duplicate_agent_ids;
+            if binding_changed {
+                self.repair_canonical_binding(
+                    &canonical_agent_id,
+                    duplicate_agent_ids,
+                    previous_agent_id,
+                    now,
+                )?;
+            } else {
+                self.state.mint_authorization = None;
+                self.state.failure = None;
+                self.persist(now)?;
             }
+            let mut notifications = self.identity_repair_notification_if_due();
+            if self.state.submitted_transaction_hash.is_some() {
+                notifications.extend(self.resume_submitted(now).await?);
+            } else {
+                notifications.extend(self.reconcile_agent(&canonical_agent_id, now).await?);
+            }
+            return Ok(notifications);
+        }
+
+        if self.state.submitted_transaction_hash.is_some() {
+            self.startup_integrity_complete = true;
+            // Startup integrity ran before the known transaction was inspected. With no older
+            // canonical identity discovered, resume only this persisted hash/nonce; never prepare
+            // another register transaction from the empty candidate set.
+            return self.resume_submitted(now).await;
+        }
+
+        if unresolved_register && let Some(matched_agent_id) = matched_registration_id.cloned() {
+            // The sidecar matched the finalized Registered event to this exact wallet nonce.
+            // That durable action journal is stronger than metadata which may not yet have been
+            // published or may since have been cleared by transfer. Adopt it without minting;
+            // ordinary direct inspection below will reconcile or visibly suspend it.
+            self.startup_integrity_complete = true;
+            self.adopt_confirmed(&matched_agent_id, now)?;
+            return self.reconcile_agent(&matched_agent_id, now).await;
+        }
+
+        // A persisted binding that no longer classifies as this Tentacle is not absence proof.
+        // Keep it visible for an authenticated operator instead of silently converting an
+        // unrelated same-owner ERC-8004 NFT or minting around uncertain migration state.
+        if let Some(PersistedAgentInspection::Verified {
+            agent_id: persisted_id,
+            verified,
+        }) = &persisted_inspection
+        {
+            if (verified.authorized || verified.wallet_verified)
+                && !candidates
+                    .iter()
+                    .any(|candidate| candidate.agent_id == persisted_id.as_str())
+            {
+                self.discovery_incomplete(
+                    format!(
+                        "complete discovery did not account for directly verified persisted agent #{persisted_id}; refusing to replace or mint an identity"
+                    ),
+                    now,
+                )?;
+                return Ok(Vec::new());
+            }
+            if !verified.authorized && !verified.wallet_verified {
+                self.suspend(
+                    "the persistent Tentacle wallet no longer owns or operates its persisted ERC-8004 identity",
+                    now,
+                )?;
+                return Ok(Vec::new());
+            }
+            let detail = format!(
+                "persisted ERC-8004 agent #{persisted_id} is not proven to represent this durable Tentacle; operator review is required and no identity will be minted"
+            );
+            self.fail(detail.clone(), true, now)?;
+            return self.operator_failure_notification_if_new(&detail, now);
+        }
+        if let Some(PersistedAgentInspection::AuthoritativelyNotFound { agent_id }) =
+            &persisted_inspection
+        {
             ensure!(
-                discovery.matched_registration_agent_ids.is_empty(),
-                "one registration nonce cannot identify multiple ERC-8004 agents"
+                self.state.confirmed_agent_id.as_deref() == Some(agent_id.as_str())
+                    || self.state.selected_agent_id.as_deref() == Some(agent_id.as_str()),
+                "authoritative absent-agent outcome lost its persisted binding"
             );
         }
-        let opted_in: Vec<_> = candidates
-            .iter()
-            .filter(|candidate| candidate.declares_allegiance && candidate.authorized)
-            .collect();
-        if opted_in.len() == 1 {
-            self.adopt_confirmed(&opted_in[0].agent_id, now)?;
-            return self.reconcile_agent(&opted_in[0].agent_id, now).await;
-        }
-        if (opted_in.len() > 1 || !candidates.is_empty())
-            && (!unresolved_register || self.state.submitted_transaction_nonce.is_none())
-        {
-            // A directly verified candidate proves that discovery, rather than another mint, is
-            // the only safe next step. Retire the unknown broadcast marker so the state can wait
-            // in FailedRecoverable until the operator selects an identity.
-            if unresolved_register {
-                self.state.submitted_action = None;
-                self.state.action_id = None;
-                self.state.submitted_transaction_nonce = None;
-            }
-            let detail = if opted_in.len() > 1 {
-                "multiple opted-in ERC-8004 identities are plausible; select one with registry adopt".to_owned()
-            } else {
-                "existing ERC-8004 identities require an explicit operator selection before registration".to_owned()
-            };
+        if !ambiguous_ids.is_empty() {
+            self.startup_integrity_complete = self.state.confirmed_agent_id.is_none();
+            let detail = format!(
+                "ERC-8004 identities {} contain Cthuwu evidence but cannot be proven to represent this durable Tentacle; operator review is required",
+                ambiguous_ids.join(", ")
+            );
             self.fail(detail.clone(), true, now)?;
             return self.operator_failure_notification_if_new(&detail, now);
         }
         if unresolved_register {
+            self.startup_integrity_complete = true;
+            ensure!(
+                matched_registration_id.is_none(),
+                "a matched registration outcome must be a directly verified candidate"
+            );
+            ensure!(
+                discovery.mint_authorization.is_some(),
+                "complete lost-response discovery did not authorize an exact retry"
+            );
             return self
                 .resume_unknown_registration(now, Some(&discovery.observation))
                 .await;
         }
 
-        self.transition(RegistrationPhase::Unregistered, now)?;
+        if let Some(configured_agent_id) = &self.configured_agent_id_hint {
+            self.startup_integrity_complete = self.state.confirmed_agent_id.is_none();
+            let detail = format!(
+                "configured ERC-8004 agent ID {configured_agent_id:?} could not be verified as this durable Tentacle; operator review is required and no new identity will be registered while this runtime binding is unresolved"
+            );
+            self.state.mint_authorization = None;
+            self.fail(detail.clone(), true, now)?;
+            return self.operator_failure_notification_if_new(&detail, now);
+        }
+
+        ensure!(
+            discovery.mint_authorization.is_some(),
+            "complete historical discovery did not provide a signer-bound absence proof"
+        );
+        self.startup_integrity_complete = true;
+        self.transition(RegistrationPhase::VerifiedNoExistingIdentity, now)?;
         if !self.config.auto_register && !force_registration {
             return Ok(Vec::new());
         }
@@ -1128,9 +1626,12 @@ impl TentacleRegistration {
     /// Perform the normal on-chain reconciliation, then surface any currently proven resource
     /// blocker even when an earlier process already delivered the ordinary rate-limited notice.
     pub async fn maintain_startup(&mut self) -> Result<Vec<OperatorNotification>> {
-        let notifications = self.maintain(false).await?;
+        let mut notifications = self.maintain_with_discovery(false, true).await?;
         let resource_notification = self.startup_resource_notification_if_needed(unix_seconds()?)?;
-        Ok(resource_notification.map_or(notifications, |notification| vec![notification]))
+        if let Some(notification) = resource_notification {
+            notifications.push(notification);
+        }
+        Ok(notifications)
     }
 
     async fn resume_unknown_registration(
@@ -1138,6 +1639,15 @@ impl TentacleRegistration {
         now: u64,
         discovery: Option<&DiscoveryObservation>,
     ) -> Result<Vec<OperatorNotification>> {
+        let mint_authorization = self.state.mint_authorization.clone().context(
+            "registration is blocked without a complete signer-bound identity absence proof",
+        )?;
+        validate_mint_authorization(
+            &mint_authorization,
+            &self.state.tentacle_id,
+            self.wallet,
+            self.state.xmtp_inbox_id.as_deref(),
+        )?;
         let action_id = self
             .state
             .action_id
@@ -1174,6 +1684,7 @@ impl TentacleRegistration {
                     self.state.submitted_action = None;
                     self.state.action_id = None;
                     self.state.submitted_transaction_nonce = None;
+                    self.state.mint_authorization = None;
                     self.state.failure = None;
                     self.state.phase = RegistrationPhase::Discovering;
                     self.persist(now)?;
@@ -1182,6 +1693,21 @@ impl TentacleRegistration {
                 saved
             }
             None => {
+                if nonce_state.pending != nonce_state.latest {
+                    // With no durable nonce journal, a pending wallet transaction could itself
+                    // be a lost Register broadcast that complete finalized discovery cannot see
+                    // yet. Choosing the next nonce would allow both transactions to execute and
+                    // mint two identities. Only an exact persisted action/nonce may be replayed
+                    // across a nonce gap; fresh registration therefore fails closed.
+                    self.discovery_incomplete(
+                        format!(
+                            "the persistent Tentacle wallet has an unaccounted pending transaction at nonce {}; refusing to register at nonce {} until it is finalized or explicitly recovered",
+                            nonce_state.latest, nonce_state.pending
+                        ),
+                        now,
+                    )?;
+                    return Ok(Vec::new());
+                }
                 self.state.submitted_transaction_nonce = Some(nonce_state.pending.to_string());
                 // The exact nonce is durable before the helper is allowed to broadcast. If the
                 // response is lost, the same nonce is retried and can only replace this action.
@@ -1193,7 +1719,7 @@ impl TentacleRegistration {
             .gateway
             .invoke(
                 &action_id,
-                json!({"type": "register", "nonce": nonce.to_string()}),
+                json!({"type": "register", "nonce": nonce.to_string(), "mintAuthorization": mint_authorization}),
             )
             .await
         {
@@ -1305,6 +1831,10 @@ impl TentacleRegistration {
             validate_agent_id(&agent_id)?;
             self.state.selected_agent_id = Some(agent_id.clone());
             self.state.confirmed_agent_id = Some(agent_id);
+            self.state.ignored_duplicate_agent_ids.clear();
+            self.state.last_identity_repair = None;
+            self.state.last_notified_identity_repair_fingerprint = None;
+            self.state.mint_authorization = None;
             self.state.phase = RegistrationPhase::ConfirmedIdentity;
         } else {
             self.state.phase = match action {
@@ -1356,11 +1886,6 @@ impl TentacleRegistration {
             )?;
             return Ok(Vec::new());
         }
-        let zero = Address::ZERO.to_string();
-        if verified.agent_wallet != zero && !verified.wallet_verified {
-            self.suspend("the ERC-8004 agentWallet is nonzero but does not equal the durable Tentacle wallet", now)?;
-            return Ok(Vec::new());
-        }
         let final_uri = self.build_agent_uri(agent_id)?;
         if self.state.phase == RegistrationPhase::Preparing
             && self.state.submitted_transaction_hash.is_none()
@@ -1385,7 +1910,10 @@ impl TentacleRegistration {
                 return self.resubmit_current_action(now).await;
             }
         }
-        let needs_wallet = verified.agent_wallet == zero;
+        // Once complete identity discovery has proven this canonical agent and the durable wallet
+        // remains authorized, reconcile either a cleared or stale nonzero agentWallet through the
+        // same narrow typed operation. Unrelated identities never reach this path.
+        let needs_wallet = !verified.wallet_verified;
         let needs_uri = verified.agent_uri != final_uri;
         let mut metadata = Vec::new();
         if self.state.desired_allegiance {
@@ -1431,7 +1959,7 @@ impl TentacleRegistration {
             }
         }
         self.state.funding = None;
-        if verified.agent_wallet == zero {
+        if needs_wallet {
             self.prepare_action(PendingAction::SetAgentWallet, now)?;
             return self
                 .submit_prepared(
@@ -1649,6 +2177,9 @@ impl TentacleRegistration {
     }
 
     fn retire_consumed_action(&mut self, now: u64) -> Result<()> {
+        if self.state.submitted_action == Some(PendingAction::Register) {
+            self.state.mint_authorization = None;
+        }
         self.state.submitted_transaction_hash = None;
         self.state.submitted_transaction_nonce = None;
         self.state.submitted_action = None;
@@ -1784,6 +2315,44 @@ impl TentacleRegistration {
                 && self.state.submitted_action.is_none(),
             "an ERC-8004 transaction outcome remains unresolved; inspect or discover it before adopting another identity"
         );
+        ensure!(
+            self.startup_integrity_complete,
+            "complete canonical identity discovery must succeed in this process before explicit adoption"
+        );
+        if let Some(proven) = self
+            .state
+            .candidate_classifications
+            .iter()
+            .filter(|candidate| candidate.same_tentacle)
+            .min_by(|left, right| compare_decimal(&left.agent_id, &right.agent_id))
+        {
+            bail!(
+                "canonical agent #{} is already proven for this durable Tentacle; explicit adoption cannot replace it",
+                proven.agent_id
+            );
+        }
+        let candidate = self
+            .state
+            .candidate_classifications
+            .iter()
+            .find(|candidate| candidate.agent_id == agent_id)
+            .cloned()
+            .context(
+                "the selected agent is not in the most recent complete canonical candidate set",
+            )?;
+        ensure!(
+            candidate.ambiguous_tentacle && !candidate.same_tentacle,
+            "explicit adoption is reserved for a currently ambiguous migration candidate"
+        );
+        ensure!(
+            has_explicit_migration_evidence(&candidate.identity_evidence),
+            "wallet ownership alone cannot authorize adoption of an ERC-8004 identity"
+        );
+        let checkpoint = self
+            .state
+            .identity_discovery_checkpoint
+            .clone()
+            .context("explicit adoption has no complete discovery checkpoint")?;
         let now = unix_seconds()?;
         let deployment = self
             .gateway
@@ -1809,10 +2378,31 @@ impl TentacleRegistration {
             verified.agent_wallet == Address::ZERO.to_string() || verified.wallet_verified,
             "the selected identity has a different nonzero agentWallet"
         );
+        ensure!(
+            verified.tentacle_id_hex == "0x"
+                || verified.tentacle_id_hex == utf8_hex(&self.state.tentacle_id),
+            "the selected identity declares a different durable Tentacle ID"
+        );
+        ensure!(
+            verified_identity_fingerprint(&verified)? == candidate.inspection_fingerprint,
+            "the selected identity changed after complete discovery; refresh candidates before adopting it"
+        );
         self.validate_council_registry_binding(agent_id, &inspected)?;
-        self.adopt_confirmed(agent_id, now)?;
+        self.adopt_confirmed_with_provenance(
+            agent_id,
+            Some(ExplicitAdoptionReceipt {
+                agent_id: agent_id.to_owned(),
+                discovery_checkpoint_fingerprint: checkpoint.fingerprint,
+                identity_evidence: candidate.identity_evidence,
+                inspection_fingerprint: candidate.inspection_fingerprint,
+                adopted_at_unix: now,
+            }),
+            now,
+        )?;
+        self.startup_integrity_complete = true;
+        let _ = self.reconcile_agent(agent_id, now).await?;
         Ok(format!(
-            "ADOPTED ERC-8004 AGENT {agent_id}. THE EXISTING IDENTITY WILL BE UPDATED IN PLACE; NO REPLACEMENT IDENTITY WILL BE MINTED."
+            "ADOPTED ERC-8004 AGENT {agent_id} FROM THE CURRENT VERIFIED MIGRATION CANDIDATE SET. RECONCILIATION STARTED IN PLACE; NO REPLACEMENT IDENTITY WAS MINTED."
         ))
     }
 
@@ -1879,6 +2469,20 @@ impl TentacleRegistration {
                 || known_recoverable,
             "registration is not in a recoverable failure state"
         );
+        if known_recoverable && !self.startup_integrity_complete {
+            // A persisted hash/action/nonce is exact recovery provenance, but it cannot bypass
+            // the process-local identity audit. This applies to Register and follow-up writes:
+            // after a failed startup, even an exact metadata or URI replay could mutate a stale
+            // higher duplicate before canonical selection repairs the local binding.
+            let _ = self.maintain_with_discovery(false, true).await?;
+            return Ok(if self.startup_integrity_complete {
+                "THE RECOVERABLE ERC-8004 ACTION WAS ROUTED THROUGH COMPLETE IDENTITY DISCOVERY BEFORE ANY USE OF ITS PERSISTED HASH, ACTION, OR SENDER NONCE."
+                    .to_owned()
+            } else {
+                "THE RECOVERABLE ERC-8004 ACTION REMAINS BLOCKED. COMPLETE IDENTITY DISCOVERY MUST SUCCEED BEFORE ITS EXACT HASH, ACTION, AND SENDER NONCE CAN BE RECOVERED."
+                    .to_owned()
+            });
+        }
         if known_recoverable {
             let now = unix_seconds()?;
             self.state.submitted_transaction_hash = None;
@@ -2005,6 +2609,15 @@ impl TentacleRegistration {
                 lines.push(base_rpc_key_request(true));
             }
         }
+        if let Some(receipt) = &self.state.last_identity_repair {
+            lines.push(format!("IDENTITY REPAIR: {}", receipt.detail));
+        }
+        if !self.state.ignored_duplicate_agent_ids.is_empty() {
+            lines.push(format!(
+                "IGNORED SAME-TENTACLE DUPLICATE AGENT IDS: {}",
+                self.state.ignored_duplicate_agent_ids.join(", ")
+            ));
+        }
         if let Some(record) = &self.last_registry_record {
             lines.push(format!(
                 "COUNCIL ERC-8004 ADAPTER: VERIFIED (ACTIVE: {})",
@@ -2043,8 +2656,18 @@ impl TentacleRegistration {
         if let Some(failure) = &self.state.failure {
             lines.push(format!("FAILURE CODE: {}", failure.code));
             lines.push(format!("RECOVERABLE: {}", failure.recoverable));
-            if is_base_rpc_access_failure(failure) {
-                lines.push("BASE RPC ACCESS BLOCKED: true".to_owned());
+            if let Some(blocker) = identity_integrity_resource_blocker(failure) {
+                lines.push(format!(
+                    "IDENTITY INTEGRITY RESOURCE: {}",
+                    blocker.resource_label()
+                ));
+                lines.push(format!(
+                    "IDENTITY INTEGRITY BLOCKER: {}",
+                    blocker.operator_detail()
+                ));
+                if blocker.is_base_rpc() {
+                    lines.push("BASE RPC ACCESS BLOCKED: true".to_owned());
+                }
             }
             if failure.detail.contains("[gas_estimate]") {
                 lines.push("GAS ESTIMATE BLOCKED: true".to_owned());
@@ -2072,9 +2695,29 @@ impl TentacleRegistration {
         if self.state.candidate_agent_ids.is_empty() {
             "NO CURRENT ERC-8004 CANDIDATES HAVE BEEN VERIFIED FOR THIS TENTACLE WALLET.".to_owned()
         } else {
+            let classifications = self
+                .state
+                .candidate_classifications
+                .iter()
+                .map(|candidate| {
+                    let class = if candidate.same_tentacle {
+                        "same-tentacle"
+                    } else if candidate.ambiguous_tentacle {
+                        "ambiguous"
+                    } else {
+                        "unrelated"
+                    };
+                    format!(
+                        "#{} [{}; evidence={}]",
+                        candidate.agent_id,
+                        class,
+                        candidate.identity_evidence.join("+")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(
-                "VERIFIED CANDIDATE AGENT IDS: {}\nSELECT EXPLICITLY WITH `registry adopt <agent-id>` OR `/registry-adopt <agent-id>`.",
-                self.state.candidate_agent_ids.join(", ")
+                "VERIFIED ERC-8004 CANDIDATES: {classifications}\nEXPLICIT ADOPTION IS LIMITED TO A CURRENT AMBIGUOUS CTHUWU MIGRATION CANDIDATE WITH EVIDENCE BEYOND WALLET OWNERSHIP. USE `registry adopt <agent-id>` OR `/registry-adopt <agent-id>`.",
             )
         }
     }
@@ -2196,6 +2839,10 @@ impl TentacleRegistration {
         for notification in notifications {
             match &notification.commitment {
                 NotificationCommitment::Success => self.state.success_notified = true,
+                NotificationCommitment::IdentityRepair { fingerprint } => {
+                    self.state.last_notified_identity_repair_fingerprint =
+                        Some(fingerprint.clone());
+                }
                 NotificationCommitment::Funding {
                     notified_at_unix,
                     fingerprint,
@@ -2332,13 +2979,10 @@ impl TentacleRegistration {
         let Some(failure) = self.state.failure.as_ref() else {
             return Ok(None);
         };
-        if !is_base_rpc_access_failure(failure) {
+        let Some(blocker) = identity_integrity_resource_blocker(failure) else {
             return Ok(None);
-        }
-        let text = format!(
-            "IMMEDIATE OPERATOR ACTION REQUIRED: RESTORE BASE RPC ACCESS\n{}",
-            base_rpc_key_request(true)
-        );
+        };
+        let text = blocker.startup_operator_notification();
         let fingerprint = sha256_hex(text.as_bytes());
         Ok(Some(OperatorNotification {
             text,
@@ -2427,17 +3071,131 @@ impl TentacleRegistration {
     }
 
     fn adopt_confirmed(&mut self, agent_id: &str, now: u64) -> Result<()> {
+        self.adopt_confirmed_with_provenance(agent_id, None, now)
+    }
+
+    fn adopt_confirmed_with_provenance(
+        &mut self,
+        agent_id: &str,
+        explicit_adoption: Option<ExplicitAdoptionReceipt>,
+        now: u64,
+    ) -> Result<()> {
         validate_agent_id(agent_id)?;
         self.state.selected_agent_id = Some(agent_id.to_owned());
         self.state.confirmed_agent_id = Some(agent_id.to_owned());
+        self.state.ignored_duplicate_agent_ids.clear();
+        self.state.last_identity_repair = None;
+        self.state.last_notified_identity_repair_fingerprint = None;
+        self.state.explicit_adoption = explicit_adoption;
         self.state.phase = RegistrationPhase::ConfirmedIdentity;
         self.state.failure = None;
         self.state.submitted_transaction_hash = None;
         self.state.submitted_transaction_nonce = None;
         self.state.submitted_action = None;
         self.state.action_id = None;
+        self.state.mint_authorization = None;
         self.state.success_notified = false;
         self.persist(now)
+    }
+
+    fn discovery_incomplete(&mut self, detail: String, now: u64) -> Result<()> {
+        self.startup_integrity_complete = false;
+        self.state.phase = RegistrationPhase::DiscoveryIncomplete;
+        self.state.mint_authorization = None;
+        self.state.failure = Some(failure_from_error(&detail, true, now));
+        self.persist(now)
+    }
+
+    fn repair_canonical_binding(
+        &mut self,
+        canonical_agent_id: &str,
+        ignored_duplicate_agent_ids: Vec<String>,
+        previous_agent_id: Option<String>,
+        now: u64,
+    ) -> Result<()> {
+        validate_agent_id(canonical_agent_id)?;
+        for duplicate in &ignored_duplicate_agent_ids {
+            validate_agent_id(duplicate)?;
+            ensure!(
+                compare_decimal(canonical_agent_id, duplicate).is_lt(),
+                "a canonical identity repair may ignore only higher agent IDs"
+            );
+        }
+        let detail = match previous_agent_id.as_deref() {
+            Some(previous)
+                if previous != canonical_agent_id
+                    && ignored_duplicate_agent_ids
+                        .iter()
+                        .any(|duplicate| duplicate == previous) =>
+            {
+                format!(
+                    "ERC-8004 identity repaired: persisted agent #{previous} was a duplicate; canonical agent #{canonical_agent_id} selected. No new identity was registered."
+                )
+            }
+            Some(previous) if previous != canonical_agent_id => format!(
+                "ERC-8004 identity repaired: persisted agent #{previous} was a stale or unproven binding; canonical agent #{canonical_agent_id} selected from verified same-Tentacle evidence. No new identity was registered."
+            ),
+            None => format!(
+                "ERC-8004 identity recovered: canonical agent #{canonical_agent_id} selected from complete historical discovery. No new identity was registered."
+            ),
+            _ if ignored_duplicate_agent_ids.is_empty() => format!(
+                "ERC-8004 identity binding verified: canonical agent #{canonical_agent_id} retained. No new identity was registered."
+            ),
+            _ => format!(
+                "ERC-8004 identity repaired: canonical agent #{canonical_agent_id} retained; {} higher duplicate registration(s) ignored. No new identity was registered.",
+                ignored_duplicate_agent_ids.len()
+            ),
+        };
+        validate_public_text(&detail, "identity repair receipt", 512)?;
+        self.state.selected_agent_id = Some(canonical_agent_id.to_owned());
+        self.state.confirmed_agent_id = Some(canonical_agent_id.to_owned());
+        self.state.ignored_duplicate_agent_ids = ignored_duplicate_agent_ids.clone();
+        if self
+            .state
+            .explicit_adoption
+            .as_ref()
+            .is_some_and(|receipt| receipt.agent_id != canonical_agent_id)
+        {
+            self.state.explicit_adoption = None;
+        }
+        self.state.last_identity_repair = Some(IdentityRepairReceipt {
+            previous_agent_id,
+            canonical_agent_id: canonical_agent_id.to_owned(),
+            ignored_duplicate_agent_ids,
+            repaired_at_unix: now,
+            detail,
+        });
+        self.state.phase = RegistrationPhase::ConfirmedIdentity;
+        self.state.failure = None;
+        self.state.funding = None;
+        self.state.mint_authorization = None;
+        self.state.submitted_transaction_hash = None;
+        self.state.submitted_transaction_nonce = None;
+        self.state.submitted_action = None;
+        self.state.action_id = None;
+        self.state.remaining_operations.clear();
+        self.state.success_notified = false;
+        self.persist(now)
+    }
+
+    fn identity_repair_notification_if_due(&self) -> Vec<OperatorNotification> {
+        let Some(receipt) = &self.state.last_identity_repair else {
+            return Vec::new();
+        };
+        let fingerprint = sha256_hex(receipt.detail.as_bytes());
+        if self
+            .state
+            .last_notified_identity_repair_fingerprint
+            .as_deref()
+            == Some(fingerprint.as_str())
+        {
+            return Vec::new();
+        }
+        vec![OperatorNotification {
+            text: receipt.detail.clone(),
+            success: true,
+            commitment: NotificationCommitment::IdentityRepair { fingerprint },
+        }]
     }
 
     fn prepare_action(&mut self, action: PendingAction, now: u64) -> Result<()> {
@@ -2450,6 +3208,27 @@ impl TentacleRegistration {
             "another prepared ERC-8004 action has an unknown broadcast outcome"
         );
         validate_pending_action(&action, &self.state.tentacle_id)?;
+        if action == PendingAction::Register {
+            ensure!(
+                self.state.phase == RegistrationPhase::ReadyToRegister,
+                "registration may be prepared only after verified identity absence"
+            );
+            let authorization = self
+                .state
+                .mint_authorization
+                .as_ref()
+                .context("registration has no signer-bound identity absence proof")?;
+            validate_mint_authorization(
+                authorization,
+                &self.state.tentacle_id,
+                self.wallet,
+                self.state.xmtp_inbox_id.as_deref(),
+            )?;
+            ensure!(
+                self.state.identity_discovery_checkpoint.is_some(),
+                "registration has no durable complete-discovery checkpoint"
+            );
+        }
         ensure!(
             self.state.submitted_transaction_nonce.is_none(),
             "a registry transaction nonce remains unresolved"
@@ -2518,16 +3297,96 @@ impl TentacleRegistration {
     }
 }
 
-fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdentityIntegrityResourceBlocker {
+    BaseRpcDiscoveryBusy,
+    BaseRpcRateLimited,
+    BaseRpcQueryLimit,
+    BaseRpcUnavailable,
+    HelperTimeout,
+}
+
+impl IdentityIntegrityResourceBlocker {
+    fn is_base_rpc(self) -> bool {
+        !matches!(self, Self::HelperTimeout)
+    }
+
+    fn resource_label(self) -> &'static str {
+        if self.is_base_rpc() {
+            "Base RPC provider"
+        } else {
+            "narrow ERC-8004 helper"
+        }
+    }
+
+    fn operator_detail(self) -> &'static str {
+        match self {
+            Self::BaseRpcDiscoveryBusy => {
+                "Base RPC remained rate-limited or unavailable after bounded identity-discovery retries."
+            }
+            Self::BaseRpcRateLimited => {
+                "Base RPC rate limiting blocked the canonical identity-integrity check."
+            }
+            Self::BaseRpcQueryLimit => {
+                "Base RPC query limits blocked the canonical identity-integrity check."
+            }
+            Self::BaseRpcUnavailable => {
+                "Base RPC was unavailable while the canonical identity-integrity check was running."
+            }
+            Self::HelperTimeout => {
+                "ERC-8004 helper timed out before returning a typed identity-integrity result."
+            }
+        }
+    }
+
+    fn startup_operator_notification(self) -> String {
+        if self.is_base_rpc() {
+            return format!(
+                "IMMEDIATE OPERATOR ACTION REQUIRED: RESTORE BASE RPC ACCESS\nIDENTITY INTEGRITY RESOURCE: {}\nBLOCKING DETAIL: {}\n{}",
+                self.resource_label(),
+                self.operator_detail(),
+                base_rpc_key_request(true)
+            );
+        }
+        format!(
+            "IMMEDIATE OPERATOR ACTION REQUIRED: RESTORE ERC-8004 HELPER AVAILABILITY\nIDENTITY INTEGRITY RESOURCE: {}\nBLOCKING DETAIL: {}\nVerify the installed agent build and Base provider are responsive, then use `/registry-recover` to rerun complete identity discovery. Do not use `/registry-register` while identity integrity is unproven.",
+            self.resource_label(),
+            self.operator_detail()
+        )
+    }
+}
+
+fn identity_integrity_resource_blocker(
+    failure: &RegistrationFailure,
+) -> Option<IdentityIntegrityResourceBlocker> {
     if !failure.recoverable {
-        return false;
+        return None;
     }
     let detail = failure.detail.to_ascii_lowercase();
-    detail.contains("rpc request failed")
-        || detail.contains("over rate limit")
+    if detail.contains("erc-8004 helper timed out") {
+        return Some(IdentityIntegrityResourceBlocker::HelperTimeout);
+    }
+    if detail.contains("[discovery_rpc_busy]") {
+        return Some(IdentityIntegrityResourceBlocker::BaseRpcDiscoveryBusy);
+    }
+    if detail.contains("request exceeds defined limit") {
+        return Some(IdentityIntegrityResourceBlocker::BaseRpcQueryLimit);
+    }
+    if detail.contains("over rate limit")
         || detail.contains("rate limit")
+        || detail.contains("rate-limit")
         || detail.contains("too many requests")
-        || detail.contains("request exceeds defined limit")
+    {
+        return Some(IdentityIntegrityResourceBlocker::BaseRpcRateLimited);
+    }
+    detail
+        .contains("rpc request failed")
+        .then_some(IdentityIntegrityResourceBlocker::BaseRpcUnavailable)
+}
+
+fn is_base_rpc_access_failure(failure: &RegistrationFailure) -> bool {
+    identity_integrity_resource_blocker(failure)
+        .is_some_and(IdentityIntegrityResourceBlocker::is_base_rpc)
 }
 
 fn base_rpc_key_request(operator: bool) -> String {
@@ -2667,11 +3526,24 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Candidate {
     agent_id: String,
-    declares_allegiance: bool,
-    authorized: bool,
+    same_tentacle: bool,
+    ambiguous_tentacle: bool,
+    identity_evidence: Vec<String>,
+    inspection_fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+enum PersistedAgentInspection {
+    Verified {
+        agent_id: String,
+        verified: VerifiedAgentState,
+    },
+    AuthoritativelyNotFound {
+        agent_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2685,6 +3557,30 @@ struct DiscoveryResult {
     candidates: Vec<Candidate>,
     observation: DiscoveryObservation,
     matched_registration_agent_ids: Vec<String>,
+    checkpoint: Option<IdentityDiscoveryCheckpoint>,
+    mint_authorization: Option<MintAuthorization>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveryScope {
+    Recent,
+    Exhaustive,
+}
+
+impl DiscoveryScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Exhaustive => "exhaustive",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiscoveryCoverage {
+    from_block: String,
+    through_block: String,
+    through_block_hash: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2789,14 +3685,59 @@ fn decode_helper_bytes(value: &Value, maximum: usize) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn parse_discovery(value: &Value) -> Result<DiscoveryResult> {
+fn parse_discovery(
+    value: &Value,
+    requested_scope: DiscoveryScope,
+    expected_tentacle_id: &str,
+    expected_wallet: Address,
+    expected_xmtp_inbox_id: Option<&str>,
+) -> Result<DiscoveryResult> {
     ensure!(
         value.get("complete").and_then(Value::as_bool) == Some(true),
         "candidate discovery was partial"
     );
+    let scope = match required_string(value, "scope", 16)?.as_str() {
+        "recent" => DiscoveryScope::Recent,
+        "exhaustive" => DiscoveryScope::Exhaustive,
+        _ => bail!("candidate discovery returned an unknown scope"),
+    };
+    ensure!(
+        scope == requested_scope,
+        "candidate discovery returned another scope"
+    );
+    let source = required_string(value, "source", 64)?;
+    ensure!(
+        matches!(
+            source.as_str(),
+            "canonical-logs" | "canonical-logs-checkpoint"
+        ),
+        "candidate discovery returned a noncanonical source"
+    );
     let block_number = required_decimal(value, "observedBlockNumber")?;
     let block_hash = required_string(value, "observedBlockHash", 66)?;
     validate_hash(&block_hash, "candidate discovery block hash")?;
+    let coverage_value = value
+        .get("coverage")
+        .context("candidate discovery has no coverage proof")?;
+    let coverage = DiscoveryCoverage {
+        from_block: required_decimal(coverage_value, "fromBlock")?,
+        through_block: required_decimal(coverage_value, "throughBlock")?,
+        through_block_hash: required_string(coverage_value, "throughBlockHash", 66)?,
+    };
+    validate_hash(
+        &coverage.through_block_hash,
+        "candidate discovery coverage block hash",
+    )?;
+    ensure!(
+        coverage.through_block == block_number && coverage.through_block_hash == block_hash,
+        "candidate discovery coverage is not bound to its canonical observation"
+    );
+    if scope == DiscoveryScope::Exhaustive {
+        ensure!(
+            coverage.from_block == IDENTITY_REGISTRY_START_BLOCK.to_string(),
+            "exhaustive candidate discovery did not cover canonical registry history"
+        );
+    }
     let candidates = value
         .get("candidates")
         .and_then(Value::as_array)
@@ -2814,10 +3755,83 @@ fn parse_discovery(value: &Value) -> Result<DiscoveryResult> {
             ids.insert(agent_id.clone()),
             "candidate discovery contains duplicate agent IDs"
         );
+        let verified = parse_verified(candidate, expected_wallet, 0)?;
+        let evidence = candidate
+            .get("identityEvidence")
+            .and_then(Value::as_array)
+            .context("candidate discovery has no identity evidence")?;
+        let mut identity_evidence = Vec::with_capacity(evidence.len());
+        for item in evidence {
+            let item = item
+                .as_str()
+                .context("candidate identity evidence is not text")?;
+            identity_evidence.push(item.to_owned());
+        }
+        validate_identity_evidence(&identity_evidence)?;
+        let same_tentacle = required_bool(candidate, "sameTentacle")?;
+        let ambiguous_tentacle = required_bool(candidate, "ambiguousTentacle")?;
+        ensure!(
+            !(same_tentacle && ambiguous_tentacle),
+            "candidate cannot be both same-Tentacle and ambiguous"
+        );
+        let exact_tentacle_id = verified.tentacle_id_hex == utf8_hex(expected_tentacle_id);
+        let conflicting_tentacle_id = verified.tentacle_id_hex != "0x" && !exact_tentacle_id;
+        let wallet_only = identity_evidence
+            .iter()
+            .any(|evidence| evidence == "wallet-only");
+        let exact_tentacle_evidence = identity_evidence
+            .iter()
+            .any(|evidence| evidence == "exact-tentacle-id");
+        let legacy_allegiance = identity_evidence
+            .iter()
+            .any(|evidence| evidence == "legacy-allegiance");
+        ensure!(
+            !wallet_only || verified.authorized || verified.wallet_verified,
+            "wallet-only identity evidence has no current wallet relationship"
+        );
+        ensure!(
+            !wallet_only || conflicting_tentacle_id || same_tentacle || ambiguous_tentacle,
+            "wallet-only candidate without conflicting durable Tentacle metadata must remain ambiguous"
+        );
+        ensure!(
+            !exact_tentacle_id || same_tentacle,
+            "candidate exact Tentacle ID was not classified as the same Tentacle"
+        );
+        ensure!(
+            exact_tentacle_evidence == exact_tentacle_id,
+            "candidate exact Tentacle ID evidence disagrees with canonical metadata"
+        );
+        ensure!(
+            !legacy_allegiance
+                || ((verified.authorized || verified.wallet_verified)
+                    && verified.declares_tentacle_allegiance
+                    && verified.protocol_compatible),
+            "candidate legacy allegiance evidence disagrees with canonical metadata"
+        );
+        if same_tentacle {
+            let exact_profile_tentacle = identity_evidence
+                .iter()
+                .any(|evidence| evidence == "exact-profile-tentacle-id");
+            let exact_xmtp = identity_evidence
+                .iter()
+                .any(|evidence| evidence == "exact-xmtp-endpoint");
+            ensure!(
+                !conflicting_tentacle_id
+                    && (verified.authorized || verified.wallet_verified)
+                    && (exact_tentacle_id
+                        || exact_profile_tentacle
+                        || (exact_xmtp
+                            && verified.declares_tentacle_allegiance
+                            && verified.protocol_compatible)),
+                "same-Tentacle candidate lacks strong current identity evidence"
+            );
+        }
         parsed.push(Candidate {
             agent_id,
-            declares_allegiance: required_bool(candidate, "declaresTentacleAllegiance")?,
-            authorized: required_bool(candidate, "authorized")?,
+            same_tentacle,
+            ambiguous_tentacle,
+            identity_evidence,
+            inspection_fingerprint: verified_identity_fingerprint(&verified)?,
         });
     }
     let matched = value
@@ -2837,6 +3851,54 @@ fn parse_discovery(value: &Value) -> Result<DiscoveryResult> {
         validate_agent_id(&id)?;
         matched_registration_agent_ids.push(id);
     }
+    let checkpoint = value
+        .get("checkpoint")
+        .filter(|checkpoint| !checkpoint.is_null())
+        .cloned()
+        .map(serde_json::from_value::<IdentityDiscoveryCheckpoint>)
+        .transpose()
+        .context("candidate discovery checkpoint has an invalid shape")?;
+    if let Some(checkpoint) = &checkpoint {
+        validate_discovery_checkpoint(checkpoint)?;
+        ensure!(
+            checkpoint.through_block == coverage.through_block
+                && checkpoint.through_block_hash == coverage.through_block_hash,
+            "candidate discovery checkpoint is not bound to its coverage"
+        );
+    }
+    if scope == DiscoveryScope::Exhaustive {
+        ensure!(
+            checkpoint.is_some(),
+            "exhaustive candidate discovery returned no durable checkpoint"
+        );
+    }
+    let mint_authorization = value
+        .get("mintAuthorization")
+        .filter(|authorization| !authorization.is_null())
+        .cloned()
+        .map(serde_json::from_value::<MintAuthorization>)
+        .transpose()
+        .context("candidate discovery mint authorization has an invalid shape")?;
+    if let Some(authorization) = &mint_authorization {
+        validate_mint_authorization(
+            authorization,
+            expected_tentacle_id,
+            expected_wallet,
+            expected_xmtp_inbox_id,
+        )?;
+        ensure!(
+            authorization.from_block == coverage.from_block
+                && authorization.through_block == coverage.through_block
+                && authorization.through_block_hash == coverage.through_block_hash,
+            "mint authorization is not bound to complete discovery coverage"
+        );
+        ensure!(
+            parsed
+                .iter()
+                .all(|candidate| !candidate.same_tentacle && !candidate.ambiguous_tentacle),
+            "mint authorization was returned despite a credible existing Tentacle identity"
+        );
+    }
     Ok(DiscoveryResult {
         candidates: parsed,
         observation: DiscoveryObservation {
@@ -2844,6 +3906,8 @@ fn parse_discovery(value: &Value) -> Result<DiscoveryResult> {
             block_hash,
         },
         matched_registration_agent_ids,
+        checkpoint,
+        mint_authorization,
     })
 }
 
@@ -2979,6 +4043,41 @@ fn parse_verified(value: &Value, expected_wallet: Address, now: u64) -> Result<V
         "helper wallet-verification boolean did not match the expected persistent Tentacle wallet"
     );
     Ok(state)
+}
+
+fn parse_authoritative_agent_not_found(value: &Value, expected_agent_id: &str) -> Result<bool> {
+    let Some(agent_exists) = value.get("agentExists") else {
+        return Ok(false);
+    };
+    ensure!(
+        agent_exists.as_bool() == Some(false),
+        "agent inspection returned an invalid existence outcome"
+    );
+    let object = value
+        .as_object()
+        .context("authoritative absent-agent result must be an object")?;
+    ensure!(
+        object.len() == 5,
+        "authoritative absent-agent result contains unknown fields"
+    );
+    let agent_id = required_decimal(value, "agentId")?;
+    ensure!(
+        agent_id == expected_agent_id,
+        "authoritative absent-agent result names another agent"
+    );
+    ensure!(
+        required_string(value, "authority", 64)? == "canonical-base-ownerOf",
+        "absent-agent result is not authoritative canonical ownerOf evidence"
+    );
+    ensure!(
+        parse_u64_field(value, "observedBlock")? >= IDENTITY_REGISTRY_START_BLOCK,
+        "absent-agent observation predates the canonical registry"
+    );
+    validate_hash(
+        &required_string(value, "observedBlockHash", 66)?,
+        "absent-agent observation block hash",
+    )?;
+    Ok(true)
 }
 
 fn validate_write_result(value: &Value, expected_wallet: Address) -> Result<String> {
@@ -3274,6 +4373,153 @@ fn validate_hash(value: &str, label: &str) -> Result<()> {
         "{label} must be exactly 32 bytes"
     );
     Ok(())
+}
+
+fn validate_bare_hash(value: &str, label: &str) -> Result<()> {
+    ensure!(
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "{label} must be exactly 32 lowercase hexadecimal bytes"
+    );
+    Ok(())
+}
+
+fn validate_identity_evidence(evidence: &[String]) -> Result<()> {
+    ensure!(
+        evidence.len() <= 8,
+        "candidate identity evidence is unbounded"
+    );
+    let mut unique = BTreeSet::new();
+    for item in evidence {
+        validate_public_text(item, "candidate identity evidence", 64)?;
+        ensure!(
+            matches!(
+                item.as_str(),
+                "exact-tentacle-id"
+                    | "exact-profile-tentacle-id"
+                    | "exact-xmtp-endpoint"
+                    | "legacy-allegiance"
+                    | "wallet-only"
+            ),
+            "candidate identity evidence is unknown"
+        );
+        ensure!(
+            unique.insert(item.as_str()),
+            "candidate identity evidence contains duplicates"
+        );
+    }
+    Ok(())
+}
+
+fn has_explicit_migration_evidence(evidence: &[String]) -> bool {
+    evidence.iter().any(|item| {
+        matches!(
+            item.as_str(),
+            "exact-tentacle-id"
+                | "exact-profile-tentacle-id"
+                | "exact-xmtp-endpoint"
+                | "legacy-allegiance"
+        )
+    })
+}
+
+fn verified_identity_fingerprint(verified: &VerifiedAgentState) -> Result<String> {
+    let stable = json!({
+        "owner": verified.owner,
+        "agentUri": verified.agent_uri,
+        "agentWallet": verified.agent_wallet,
+        "authorized": verified.authorized,
+        "allegianceHex": verified.allegiance_hex,
+        "protocolHex": verified.protocol_hex,
+        "tentacleIdHex": verified.tentacle_id_hex,
+        "declaresTentacleAllegiance": verified.declares_tentacle_allegiance,
+        "protocolCompatible": verified.protocol_compatible,
+        "walletVerified": verified.wallet_verified,
+    });
+    Ok(sha256_hex(&serde_json::to_vec(&stable)?))
+}
+
+fn validate_discovery_checkpoint(checkpoint: &IdentityDiscoveryCheckpoint) -> Result<()> {
+    ensure!(
+        checkpoint.version == 1,
+        "unsupported discovery checkpoint version"
+    );
+    validate_bare_hash(&checkpoint.fingerprint, "discovery checkpoint fingerprint")?;
+    validate_decimal(&checkpoint.through_block, "discovery checkpoint block")?;
+    ensure!(
+        checkpoint
+            .through_block
+            .parse::<u64>()
+            .context("discovery checkpoint block exceeds u64")?
+            >= IDENTITY_REGISTRY_START_BLOCK,
+        "discovery checkpoint predates the canonical registry"
+    );
+    validate_hash(
+        &checkpoint.through_block_hash,
+        "discovery checkpoint block hash",
+    )
+}
+
+fn validate_mint_authorization(
+    authorization: &MintAuthorization,
+    expected_tentacle_id: &str,
+    expected_wallet: Address,
+    expected_xmtp_inbox_id: Option<&str>,
+) -> Result<()> {
+    ensure!(
+        authorization.version == 1,
+        "unsupported mint authorization version"
+    );
+    ensure!(
+        authorization.chain_id == BASE_MAINNET_CHAIN_ID,
+        "mint authorization targets another chain"
+    );
+    ensure!(
+        Address::from_str(&authorization.registry)? == Address::from_str(IDENTITY_REGISTRY)?,
+        "mint authorization targets another registry"
+    );
+    ensure!(
+        Address::from_str(&authorization.wallet)? == expected_wallet,
+        "mint authorization belongs to another wallet"
+    );
+    ensure!(
+        authorization.tentacle_id == expected_tentacle_id,
+        "mint authorization belongs to another Tentacle"
+    );
+    let expected_xmtp_inbox_id =
+        expected_xmtp_inbox_id.context("mint authorization cannot precede XMTP resolution")?;
+    validate_xmtp_inbox_id(&authorization.xmtp_inbox_id)?;
+    ensure!(
+        authorization.xmtp_inbox_id == expected_xmtp_inbox_id,
+        "mint authorization belongs to another XMTP inbox"
+    );
+    validate_decimal(&authorization.from_block, "mint authorization start block")?;
+    validate_decimal(&authorization.through_block, "mint authorization end block")?;
+    ensure!(
+        authorization.from_block == IDENTITY_REGISTRY_START_BLOCK.to_string(),
+        "mint authorization does not cover canonical registry history"
+    );
+    ensure!(
+        compare_decimal(&authorization.from_block, &authorization.through_block).is_le(),
+        "mint authorization block range is reversed"
+    );
+    validate_hash(
+        &authorization.through_block_hash,
+        "mint authorization block hash",
+    )?;
+    validate_hash(
+        &authorization.candidate_set_hash,
+        "mint authorization candidate-set hash",
+    )?;
+    validate_bare_hash(&authorization.fingerprint, "mint authorization fingerprint")
+}
+
+fn compare_decimal(left: &str, right: &str) -> std::cmp::Ordering {
+    left.len()
+        .cmp(&right.len())
+        .then_with(|| left.as_bytes().cmp(right.as_bytes()))
 }
 
 fn validate_action_id(value: &str) -> Result<()> {
@@ -3623,17 +4869,96 @@ mod tests {
     }
 
     fn discovery_result(candidates: Value) -> Value {
-        json!({
+        let mut result = json!({
             "complete": true,
+            "scope": "exhaustive",
+            "source": "canonical-logs",
+            "coverage": {
+                "fromBlock": IDENTITY_REGISTRY_START_BLOCK.to_string(),
+                "throughBlock": "50000000",
+                "throughBlockHash": format!("0x{}", "cc".repeat(32)),
+            },
             "observedBlockNumber": "50000000",
             "observedBlockHash": format!("0x{}", "cc".repeat(32)),
             "matchedRegistrationAgentIds": [],
+            "checkpoint": {
+                "version": 1,
+                "fingerprint": "44".repeat(32),
+                "throughBlock": "50000000",
+                "throughBlockHash": format!("0x{}", "cc".repeat(32)),
+            },
             "candidates": candidates,
-        })
+        });
+        if result["candidates"].as_array().is_some_and(Vec::is_empty) {
+            result["mintAuthorization"] = json!({
+                "version": 1,
+                "chainId": BASE_MAINNET_CHAIN_ID,
+                "registry": IDENTITY_REGISTRY,
+                "wallet": wallet().to_string(),
+                "tentacleId": "tentacle-independent",
+                "xmtpInboxId": "ab".repeat(32),
+                "fromBlock": IDENTITY_REGISTRY_START_BLOCK.to_string(),
+                "throughBlock": "50000000",
+                "throughBlockHash": format!("0x{}", "cc".repeat(32)),
+                "candidateSetHash": format!("0x{}", "55".repeat(32)),
+                "fingerprint": "66".repeat(32),
+            });
+        }
+        result
     }
 
     fn empty_discovery_result() -> Value {
         discovery_result(json!([]))
+    }
+
+    fn arm_test_registration(registration: &mut TentacleRegistration) {
+        registration.state.xmtp_inbox_id = Some("ab".repeat(32));
+        registration.state.identity_discovery_checkpoint = Some(IdentityDiscoveryCheckpoint {
+            version: 1,
+            fingerprint: "44".repeat(32),
+            through_block: "50000000".to_owned(),
+            through_block_hash: format!("0x{}", "cc".repeat(32)),
+        });
+        registration.state.mint_authorization = Some(MintAuthorization {
+            version: 1,
+            chain_id: BASE_MAINNET_CHAIN_ID,
+            registry: IDENTITY_REGISTRY.to_owned(),
+            wallet: wallet().to_string(),
+            tentacle_id: "tentacle-independent".to_owned(),
+            xmtp_inbox_id: "ab".repeat(32),
+            from_block: IDENTITY_REGISTRY_START_BLOCK.to_string(),
+            through_block: "50000000".to_owned(),
+            through_block_hash: format!("0x{}", "cc".repeat(32)),
+            candidate_set_hash: format!("0x{}", "55".repeat(32)),
+            fingerprint: "66".repeat(32),
+        });
+        registration.state.phase = RegistrationPhase::ReadyToRegister;
+    }
+
+    fn seed_ambiguous_adoption_candidate(
+        registration: &mut TentacleRegistration,
+        agent_id: &str,
+        inspected: &Value,
+        evidence: &[&str],
+    ) {
+        let verified = parse_verified(inspected, wallet(), 0).unwrap();
+        registration.state.xmtp_inbox_id = Some("ab".repeat(32));
+        registration.state.candidate_agent_ids = vec![agent_id.to_owned()];
+        registration.state.candidate_classifications = vec![IdentityCandidateReceipt {
+            agent_id: agent_id.to_owned(),
+            same_tentacle: false,
+            ambiguous_tentacle: true,
+            identity_evidence: evidence.iter().map(|item| (*item).to_owned()).collect(),
+            inspection_fingerprint: verified_identity_fingerprint(&verified).unwrap(),
+        }];
+        registration.state.identity_discovery_checkpoint = Some(IdentityDiscoveryCheckpoint {
+            version: 1,
+            fingerprint: "44".repeat(32),
+            through_block: "50000000".to_owned(),
+            through_block_hash: format!("0x{}", "cc".repeat(32)),
+        });
+        registration.state.phase = RegistrationPhase::FailedRecoverable;
+        registration.startup_integrity_complete = true;
     }
 
     fn receipt_result(byte: &str, agent_id: Option<&str>) -> Value {
@@ -3667,6 +4992,37 @@ mod tests {
             "protocolCompatible": protocol == PROTOCOL_VALUE,
             "walletVerified": agent_wallet == wallet(),
         })
+    }
+
+    fn authoritative_agent_not_found(agent_id: &str) -> Value {
+        json!({
+            "agentId": agent_id,
+            "agentExists": false,
+            "authority": "canonical-base-ownerOf",
+            "observedBlock": "50000000",
+            "observedBlockHash": format!("0x{}", "aa".repeat(32)),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn classified_candidate(
+        agent_id: &str,
+        agent_uri: &str,
+        agent_wallet: Address,
+        allegiance: &str,
+        protocol: &str,
+        tentacle_id: &str,
+        evidence: &[&str],
+        same_tentacle: bool,
+        ambiguous_tentacle: bool,
+    ) -> Value {
+        let mut candidate =
+            inspected_agent(agent_uri, agent_wallet, allegiance, protocol, tentacle_id);
+        candidate["agentId"] = Value::String(agent_id.to_owned());
+        candidate["identityEvidence"] = json!(evidence);
+        candidate["sameTentacle"] = Value::Bool(same_tentacle);
+        candidate["ambiguousTentacle"] = Value::Bool(ambiguous_tentacle);
+        candidate
     }
 
     fn scripted_registration(
@@ -3780,50 +5136,62 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_adoption_requires_the_canonical_council_adapter_binding() {
-        let template_root = tempfile::tempdir().unwrap();
-        let expected_uri = registration(template_root.path())
-            .build_agent_uri("42")
-            .unwrap();
-
+        let legacy = inspected_agent("", wallet(), ALLEGIANCE_VALUE, PROTOCOL_VALUE, "");
         let root = tempfile::tempdir().unwrap();
         let gateway = Arc::new(ScriptedGateway::new(vec![
             ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("inspect_agent", ScriptResult::Ok(legacy.clone())),
+            ("inspect_agent", ScriptResult::Ok(legacy.clone())),
             (
-                "inspect_agent",
-                ScriptResult::Ok(inspected_agent(
-                    &expected_uri,
-                    wallet(),
-                    ALLEGIANCE_VALUE,
-                    PROTOCOL_VALUE,
-                    "tentacle-independent",
-                )),
+                "funding_estimate",
+                ScriptResult::Err("funding unavailable during migration reconciliation"),
             ),
         ]));
         let mut adoption = scripted_registration(root.path(), gateway.clone());
-        adoption.state.xmtp_inbox_id = Some("ab".repeat(32));
+        seed_ambiguous_adoption_candidate(&mut adoption, "42", &legacy, &["legacy-allegiance"]);
 
         assert!(adoption.adopt("42").await.unwrap().contains("ADOPTED"));
         assert_eq!(adoption.state.confirmed_agent_id.as_deref(), Some("42"));
+        assert_eq!(
+            adoption
+                .state
+                .explicit_adoption
+                .as_ref()
+                .unwrap()
+                .identity_evidence,
+            ["legacy-allegiance"]
+        );
         assert!(adoption.last_registry_record.as_ref().unwrap().active);
-        assert_eq!(gateway.calls(), ["inspect_registry", "inspect_agent"]);
+        assert_eq!(
+            gateway.calls(),
+            [
+                "inspect_registry",
+                "inspect_agent",
+                "inspect_agent",
+                "funding_estimate"
+            ]
+        );
         gateway.assert_exhausted();
 
+        let conflicting = inspected_agent(
+            "",
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-other",
+        );
         let rejected_root = tempfile::tempdir().unwrap();
         let rejected_gateway = Arc::new(ScriptedGateway::new(vec![
             ("inspect_registry", ScriptResult::Ok(json!({}))),
-            (
-                "inspect_agent",
-                ScriptResult::Ok(inspected_agent(
-                    &expected_uri,
-                    wallet(),
-                    ALLEGIANCE_VALUE,
-                    PROTOCOL_VALUE,
-                    "tentacle-other",
-                )),
-            ),
+            ("inspect_agent", ScriptResult::Ok(conflicting.clone())),
         ]));
         let mut rejected = scripted_registration(rejected_root.path(), rejected_gateway.clone());
-        rejected.state.xmtp_inbox_id = Some("ab".repeat(32));
+        seed_ambiguous_adoption_candidate(
+            &mut rejected,
+            "42",
+            &conflicting,
+            &["legacy-allegiance"],
+        );
 
         assert!(rejected.adopt("42").await.is_err());
         assert!(rejected.state.confirmed_agent_id.is_none());
@@ -3833,6 +5201,251 @@ mod tests {
             ["inspect_registry", "inspect_agent"]
         );
         rejected_gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn explicit_adoption_rejects_an_unrelated_wallet_only_identity() {
+        let bare = inspected_agent("", wallet(), "", "", "");
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(Vec::new()));
+        let mut adoption = scripted_registration(root.path(), gateway.clone());
+        seed_ambiguous_adoption_candidate(&mut adoption, "70000", &bare, &["wallet-only"]);
+
+        let error = adoption.adopt("70000").await.unwrap_err().to_string();
+
+        assert!(error.contains("wallet ownership alone"));
+        assert!(adoption.state.confirmed_agent_id.is_none());
+        assert!(adoption.state.explicit_adoption.is_none());
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn explicit_adoption_cannot_displace_a_proven_lower_canonical_identity() {
+        let ambiguous = inspected_agent("", wallet(), ALLEGIANCE_VALUE, PROTOCOL_VALUE, "");
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(Vec::new()));
+        let mut adoption = scripted_registration(root.path(), gateway.clone());
+        seed_ambiguous_adoption_candidate(
+            &mut adoption,
+            "63846",
+            &ambiguous,
+            &["legacy-allegiance"],
+        );
+        let lower_uri = adoption.build_agent_uri("61766").unwrap();
+        let lower = parse_verified(
+            &inspected_agent(
+                &lower_uri,
+                wallet(),
+                ALLEGIANCE_VALUE,
+                PROTOCOL_VALUE,
+                "tentacle-independent",
+            ),
+            wallet(),
+            0,
+        )
+        .unwrap();
+        adoption.state.candidate_agent_ids.push("61766".to_owned());
+        adoption
+            .state
+            .candidate_classifications
+            .push(IdentityCandidateReceipt {
+                agent_id: "61766".to_owned(),
+                same_tentacle: true,
+                ambiguous_tentacle: false,
+                identity_evidence: vec!["exact-tentacle-id".to_owned()],
+                inspection_fingerprint: verified_identity_fingerprint(&lower).unwrap(),
+            });
+        adoption.state.selected_agent_id = Some("61766".to_owned());
+        adoption.state.confirmed_agent_id = Some("61766".to_owned());
+
+        let error = adoption.adopt("63846").await.unwrap_err().to_string();
+
+        assert!(error.contains("canonical agent #61766 is already proven"));
+        assert_eq!(adoption.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert!(adoption.state.explicit_adoption.is_none());
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn explicit_migration_adoption_survives_a_crash_before_reconciliation() {
+        let legacy = inspected_agent("", wallet(), ALLEGIANCE_VALUE, PROTOCOL_VALUE, "");
+        let root = tempfile::tempdir().unwrap();
+        let first_gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("inspect_agent", ScriptResult::Ok(legacy.clone())),
+            ("inspect_agent", ScriptResult::Ok(legacy.clone())),
+            (
+                "funding_estimate",
+                ScriptResult::Err("crash boundary before metadata reconciliation"),
+            ),
+        ]));
+        let mut first = scripted_registration(root.path(), first_gateway.clone());
+        seed_ambiguous_adoption_candidate(&mut first, "42", &legacy, &["legacy-allegiance"]);
+        first.adopt("42").await.unwrap();
+        let receipt = first.state.explicit_adoption.clone().unwrap();
+        drop(first);
+
+        let candidate = classified_candidate(
+            "42",
+            "",
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "",
+            &["legacy-allegiance"],
+            false,
+            true,
+        );
+        let second_gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("inspect_agent", ScriptResult::Ok(legacy.clone())),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(json!([candidate]))),
+            ),
+            ("inspect_agent", ScriptResult::Ok(legacy)),
+            (
+                "funding_estimate",
+                ScriptResult::Err("reconciliation resource remains unavailable"),
+            ),
+        ]));
+        let mut restarted = scripted_registration(root.path(), second_gateway.clone());
+
+        restarted.maintain_startup().await.unwrap();
+
+        assert_eq!(restarted.state.confirmed_agent_id.as_deref(), Some("42"));
+        assert_eq!(restarted.state.explicit_adoption.as_ref(), Some(&receipt));
+        assert!(restarted.startup_integrity_complete);
+        assert!(!second_gateway.calls().iter().any(|call| call == "register"));
+        first_gateway.assert_exhausted();
+        second_gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn configured_historical_adoption_is_audited_before_auto_registration() {
+        let profile_root = tempfile::tempdir().unwrap();
+        let expected_uri = registration(profile_root.path())
+            .build_agent_uri("42")
+            .unwrap();
+        let verified = inspected_agent(
+            &expected_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+        );
+        let candidate = classified_candidate(
+            "42",
+            &expected_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+            &["exact-tentacle-id", "exact-profile-tentacle-id"],
+            true,
+            false,
+        );
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(json!([candidate]))),
+            ),
+            ("inspect_agent", ScriptResult::Ok(verified)),
+        ]));
+        let mut configured = scripted_registration(root.path(), gateway.clone());
+        configured.state.xmtp_inbox_id = Some("ab".repeat(32));
+        configured.guard_configured_agent_id("42");
+        assert!(configured.config.auto_register);
+
+        configured.maintain_startup().await.unwrap();
+
+        assert_eq!(configured.state.phase, RegistrationPhase::Active);
+        assert_eq!(configured.state.confirmed_agent_id.as_deref(), Some("42"));
+        assert!(!gateway.calls().iter().any(|call| matches!(
+            call.as_str(),
+            "funding_estimate" | "transaction_nonce" | "register"
+        )));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn invalid_configured_hint_cannot_block_recovery_of_the_canonical_identity() {
+        let profile_root = tempfile::tempdir().unwrap();
+        let expected_uri = registration(profile_root.path())
+            .build_agent_uri("61766")
+            .unwrap();
+        let candidate = classified_candidate(
+            "61766",
+            &expected_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+            &["exact-tentacle-id", "exact-profile-tentacle-id"],
+            true,
+            false,
+        );
+        let verified = inspected_agent(
+            &expected_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+        );
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(json!([candidate]))),
+            ),
+            ("inspect_agent", ScriptResult::Ok(verified)),
+        ]));
+        let mut configured = scripted_registration(root.path(), gateway.clone());
+        configured.guard_configured_agent_id("not-a-valid-agent-id");
+
+        configured.maintain_startup().await.unwrap();
+
+        assert_eq!(configured.state.phase, RegistrationPhase::Active);
+        assert_eq!(
+            configured.state.confirmed_agent_id.as_deref(),
+            Some("61766")
+        );
+        assert!(!gateway.calls().iter().any(|call| call == "register"));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn unresolved_configured_hint_blocks_a_fresh_wallet_before_the_signer() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(empty_discovery_result())),
+        ]));
+        let mut configured = scripted_registration(root.path(), gateway.clone());
+        configured.guard_configured_agent_id("not-a-valid-agent-id");
+
+        configured.maintain_startup().await.unwrap();
+
+        assert_eq!(configured.state.phase, RegistrationPhase::FailedRecoverable);
+        assert!(configured.state.confirmed_agent_id.is_none());
+        assert!(configured.state.mint_authorization.is_none());
+        assert!(
+            configured
+                .state
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.detail.contains("runtime binding is unresolved"))
+        );
+        assert!(!gateway.calls().iter().any(|call| matches!(
+            call.as_str(),
+            "funding_estimate" | "transaction_nonce" | "register"
+        )));
+        gateway.assert_exhausted();
     }
 
     #[tokio::test]
@@ -3932,6 +5545,8 @@ mod tests {
             ("set_agent_uri", ScriptResult::Ok(submitted_result("21"))),
         ]));
         let mut repairing = scripted_registration(root.path(), gateway.clone());
+        // This focused reconciliation test starts after the process-wide startup integrity pass.
+        repairing.startup_integrity_complete = true;
         repairing.maintain(false).await.unwrap();
         assert_eq!(repairing.state.phase, RegistrationPhase::Submitted);
         assert_eq!(
@@ -3993,7 +5608,7 @@ mod tests {
         let original = registration(root.path()).state;
         let mut value = serde_json::to_value(original).unwrap();
         let object = value.as_object_mut().unwrap();
-        object.insert("version".to_owned(), json!(PREVIOUS_SNAPSHOT_VERSION));
+        object.insert("version".to_owned(), json!(VERSION_TWO_SNAPSHOT_VERSION));
         object.remove("public_name");
         fs::write(
             root.path().join("state").join(SNAPSHOT_FILE),
@@ -4015,10 +5630,40 @@ mod tests {
         .unwrap();
         assert_eq!(migrated.state.version, SNAPSHOT_VERSION);
         assert_eq!(migrated.state.migrated_from_version, Some(2));
+        assert_eq!(migrated.state.public_name, "Azathoth the Patient Hunger");
+    }
+
+    #[test]
+    fn version_three_snapshot_migrates_to_fail_closed_identity_schema() {
+        let root = tempfile::tempdir().unwrap();
+        let original = registration(root.path()).state;
+        let mut value = serde_json::to_value(original).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("version".to_owned(), json!(PREVIOUS_SNAPSHOT_VERSION));
+        for field in [
+            "identity_discovery_checkpoint",
+            "mint_authorization",
+            "ignored_duplicate_agent_ids",
+            "last_identity_repair",
+            "last_notified_identity_repair_fingerprint",
+        ] {
+            object.remove(field);
+        }
+        fs::write(
+            root.path().join("state").join(SNAPSHOT_FILE),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+
+        let migrated = registration(root.path());
+
+        assert_eq!(migrated.state.version, SNAPSHOT_VERSION);
         assert_eq!(
-            migrated.state.public_name,
-            "Azathoth the Patient Hunger"
+            migrated.state.migrated_from_version,
+            Some(PREVIOUS_SNAPSHOT_VERSION)
         );
+        assert!(migrated.state.identity_discovery_checkpoint.is_none());
+        assert!(migrated.state.mint_authorization.is_none());
     }
 
     #[test]
@@ -4192,6 +5837,89 @@ mod tests {
             1,
         );
         assert!(is_base_rpc_access_failure(&failure));
+        assert_eq!(
+            identity_integrity_resource_blocker(&failure),
+            Some(IdentityIntegrityResourceBlocker::BaseRpcQueryLimit)
+        );
+    }
+
+    #[test]
+    fn discovery_rpc_busy_detail_and_provisioning_are_operator_only() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+        registration.state.phase = RegistrationPhase::DiscoveryIncomplete;
+        registration.state.failure = Some(failure_from_error(
+            "recoverable ERC-8004 helper error [discovery_rpc_busy]: Base RPC remained rate-limited or unavailable after bounded identity-discovery retries",
+            true,
+            100,
+        ));
+
+        let failure = registration.state.failure.as_ref().unwrap();
+        assert_eq!(
+            identity_integrity_resource_blocker(failure),
+            Some(IdentityIntegrityResourceBlocker::BaseRpcDiscoveryBusy)
+        );
+        assert!(is_base_rpc_access_failure(failure));
+
+        let model_status = registration.model_status_text();
+        assert!(model_status.contains("IDENTITY INTEGRITY RESOURCE: Base RPC provider"));
+        assert!(model_status.contains(
+            "Base RPC remained rate-limited or unavailable after bounded identity-discovery retries."
+        ));
+
+        let notice = registration
+            .startup_resource_notification_if_needed(101)
+            .unwrap()
+            .unwrap();
+        assert!(notice.text.contains("RESTORE BASE RPC ACCESS"));
+        assert!(notice.text.contains(
+            "Base RPC remained rate-limited or unavailable after bounded identity-discovery retries."
+        ));
+        assert!(notice.text.contains("/base-rpc-key <infura-api-key>"));
+
+        let public_status = registration.public_status_text();
+        assert!(!public_status.contains("discovery_rpc_busy"));
+        assert!(!public_status.contains("rate-limited"));
+        let public_plea = registration.public_funding_plea(101).unwrap();
+        assert!(!public_plea.contains("discovery_rpc_busy"));
+        assert!(!public_plea.contains("bounded identity-discovery retries"));
+    }
+
+    #[test]
+    fn helper_timeout_names_the_helper_without_requesting_provider_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+        registration.state.phase = RegistrationPhase::DiscoveryIncomplete;
+        registration.state.failure =
+            Some(failure_from_error("ERC-8004 helper timed out", true, 100));
+
+        let failure = registration.state.failure.as_ref().unwrap();
+        assert_eq!(
+            identity_integrity_resource_blocker(failure),
+            Some(IdentityIntegrityResourceBlocker::HelperTimeout)
+        );
+        assert!(!is_base_rpc_access_failure(failure));
+
+        let model_status = registration.model_status_text();
+        assert!(model_status.contains("IDENTITY INTEGRITY RESOURCE: narrow ERC-8004 helper"));
+        assert!(model_status.contains(
+            "ERC-8004 helper timed out before returning a typed identity-integrity result."
+        ));
+        assert!(!model_status.contains("BASE RPC ACCESS BLOCKED"));
+
+        let notice = registration
+            .startup_resource_notification_if_needed(101)
+            .unwrap()
+            .unwrap();
+        assert!(notice.text.contains("RESTORE ERC-8004 HELPER AVAILABILITY"));
+        assert!(notice.text.contains("/registry-recover"));
+        assert!(!notice.text.contains("/base-rpc-key"));
+        assert!(!notice.text.contains("infura"));
+
+        let public_status = registration.public_status_text();
+        assert!(!public_status.contains("helper"));
+        assert!(!public_status.contains("timed out"));
+        assert!(registration.public_funding_plea(101).is_none());
     }
 
     #[test]
@@ -4222,8 +5950,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_discovery_is_recent_and_explicit_recovery_is_exhaustive() {
-        for (exhaustive, expected_scope) in [(false, "recent"), (true, "exhaustive")] {
+    async fn every_identity_authorization_path_uses_exhaustive_discovery() {
+        for exhaustive in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let gateway = Arc::new(ScriptedGateway::new(vec![
                 ("inspect_registry", ScriptResult::Ok(json!({}))),
@@ -4236,9 +5964,718 @@ mod tests {
                 .await
                 .unwrap();
             let operations = gateway.operations();
-            assert_eq!(operations[1]["scope"], expected_scope);
+            assert_eq!(operations[1]["scope"], "exhaustive");
+            assert_eq!(operations[1]["tentacleId"], "tentacle-independent");
             gateway.assert_exhausted();
         }
+    }
+
+    #[tokio::test]
+    async fn missing_snapshot_adopts_historical_canonical_identity_without_registering() {
+        let template = tempfile::tempdir().unwrap();
+        let canonical_uri = registration(template.path())
+            .build_agent_uri("61766")
+            .unwrap();
+        let discovery = discovery_result(json!([classified_candidate(
+            "61766",
+            &canonical_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+            &["exact-tentacle-id", "exact-xmtp-endpoint"],
+            true,
+            false,
+        )]));
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(discovery)),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &canonical_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+        ]));
+        let mut recovered = scripted_registration(root.path(), gateway.clone());
+
+        recovered.maintain_startup().await.unwrap();
+
+        assert_eq!(recovered.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert_eq!(recovered.state.phase, RegistrationPhase::Active);
+        assert!(!gateway.calls().iter().any(|call| call == "register"));
+        assert!(
+            recovered
+                .state
+                .last_identity_repair
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains("recovered")
+        );
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn lower_duplicate_is_canonical_even_when_higher_metadata_is_more_complete() {
+        let template = tempfile::tempdir().unwrap();
+        let higher_uri = registration(template.path())
+            .build_agent_uri("63846")
+            .unwrap();
+        let discovery = discovery_result(json!([
+            classified_candidate(
+                "63846",
+                &higher_uri,
+                wallet(),
+                ALLEGIANCE_VALUE,
+                PROTOCOL_VALUE,
+                "tentacle-independent",
+                &["exact-tentacle-id", "exact-xmtp-endpoint"],
+                true,
+                false,
+            ),
+            classified_candidate(
+                "61766",
+                "",
+                wallet(),
+                ALLEGIANCE_VALUE,
+                "",
+                "tentacle-independent",
+                &["exact-tentacle-id"],
+                true,
+                false,
+            ),
+        ]));
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(discovery)),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    "",
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    "",
+                    "tentacle-independent",
+                )),
+            ),
+            (
+                "funding_estimate",
+                ScriptResult::Err("RPC unavailable during canonical metadata repair"),
+            ),
+        ]));
+        let mut recovered = scripted_registration(root.path(), gateway.clone());
+
+        recovered.maintain_startup().await.unwrap();
+
+        assert_eq!(recovered.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert_eq!(recovered.state.ignored_duplicate_agent_ids, ["63846"]);
+        assert!(!gateway.calls().iter().any(|call| call == "register"));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn startup_repairs_persisted_higher_duplicate_and_receipt_is_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.selected_agent_id = Some("63846".to_owned());
+        seeded.state.confirmed_agent_id = Some("63846".to_owned());
+        seeded.state.phase = RegistrationPhase::Active;
+        let lower_uri = seeded.build_agent_uri("61766").unwrap();
+        let higher_uri = seeded.build_agent_uri("63846").unwrap();
+        seeded.persist(1).unwrap();
+        drop(seeded);
+        let candidates = json!([
+            classified_candidate(
+                "63846",
+                &higher_uri,
+                wallet(),
+                ALLEGIANCE_VALUE,
+                PROTOCOL_VALUE,
+                "tentacle-independent",
+                &["exact-tentacle-id", "exact-xmtp-endpoint"],
+                true,
+                false,
+            ),
+            classified_candidate(
+                "61766",
+                &lower_uri,
+                wallet(),
+                ALLEGIANCE_VALUE,
+                PROTOCOL_VALUE,
+                "tentacle-independent",
+                &["exact-tentacle-id", "exact-xmtp-endpoint"],
+                true,
+                false,
+            ),
+        ]);
+        let first_gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &higher_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(candidates.clone())),
+            ),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &lower_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+        ]));
+        let mut first = scripted_registration(root.path(), first_gateway.clone());
+        let notices = first.maintain_startup().await.unwrap();
+        assert_eq!(first.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert_eq!(first.state.ignored_duplicate_agent_ids, ["63846"]);
+        assert!(notices.iter().any(|notice| {
+            notice
+                .text
+                .contains("persisted agent #63846 was a duplicate")
+                && notice.text.contains("canonical agent #61766")
+        }));
+        let receipt = first.state.last_identity_repair.clone();
+        drop(first);
+
+        let second_gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &lower_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+            ("discover", ScriptResult::Ok(discovery_result(candidates))),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &lower_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+        ]));
+        let mut second = scripted_registration(root.path(), second_gateway.clone());
+        second.maintain_startup().await.unwrap();
+        assert_eq!(second.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert_eq!(second.state.last_identity_repair, receipt);
+        assert!(!second_gateway.calls().iter().any(|call| call == "register"));
+        first_gateway.assert_exhausted();
+        second_gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn nonexistent_persisted_higher_id_continues_discovery_and_repairs_to_canonical() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.selected_agent_id = Some("63846".to_owned());
+        seeded.state.confirmed_agent_id = Some("63846".to_owned());
+        seeded.state.phase = RegistrationPhase::Active;
+        let canonical_uri = seeded.build_agent_uri("61766").unwrap();
+        seeded.persist(1).unwrap();
+        drop(seeded);
+
+        let canonical = classified_candidate(
+            "61766",
+            &canonical_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+            &["exact-tentacle-id", "exact-xmtp-endpoint"],
+            true,
+            false,
+        );
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(authoritative_agent_not_found("63846")),
+            ),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(json!([canonical]))),
+            ),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &canonical_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+        ]));
+        let mut recovered = scripted_registration(root.path(), gateway.clone());
+
+        let notices = recovered.maintain_startup().await.unwrap();
+
+        assert_eq!(recovered.state.confirmed_agent_id.as_deref(), Some("61766"));
+        assert_eq!(recovered.state.selected_agent_id.as_deref(), Some("61766"));
+        assert_eq!(recovered.state.phase, RegistrationPhase::Active);
+        let receipt = recovered.state.last_identity_repair.as_ref().unwrap();
+        assert_eq!(receipt.previous_agent_id.as_deref(), Some("63846"));
+        assert_eq!(receipt.canonical_agent_id, "61766");
+        assert!(receipt.detail.contains("stale or unproven binding"));
+        assert!(receipt.detail.contains("No new identity was registered"));
+        assert!(notices.iter().any(|notice| notice.text == receipt.detail));
+        assert!(!gateway.calls().iter().any(|call| {
+            matches!(
+                call.as_str(),
+                "funding_estimate" | "transaction_nonce" | "register"
+            )
+        }));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn persisted_agent_provider_uncertainty_stays_closed_before_discovery_or_signer() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.selected_agent_id = Some("63846".to_owned());
+        seeded.state.confirmed_agent_id = Some("63846".to_owned());
+        seeded.state.phase = RegistrationPhase::Active;
+        seeded.persist(1).unwrap();
+        drop(seeded);
+
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "inspect_agent",
+                ScriptResult::Err(
+                    "recoverable ERC-8004 helper error [rpc_or_signing_failure]: Base RPC timed out",
+                ),
+            ),
+        ]));
+        let mut recovered = scripted_registration(root.path(), gateway.clone());
+
+        recovered.maintain_startup().await.unwrap();
+
+        assert_eq!(
+            recovered.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert_eq!(recovered.state.confirmed_agent_id.as_deref(), Some("63846"));
+        assert!(!recovered.startup_integrity_complete);
+        assert_eq!(gateway.calls(), ["inspect_registry", "inspect_agent"]);
+        assert!(!gateway.calls().iter().any(|call| {
+            matches!(
+                call.as_str(),
+                "discover" | "funding_estimate" | "transaction_nonce" | "register"
+            )
+        }));
+        gateway.assert_exhausted();
+    }
+
+    #[test]
+    fn canonical_repair_does_not_label_an_unproven_previous_binding_as_duplicate() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registration = registration(root.path());
+
+        registration
+            .repair_canonical_binding("61766", Vec::new(), Some("63846".to_owned()), 10)
+            .unwrap();
+
+        let receipt = registration.state.last_identity_repair.as_ref().unwrap();
+        assert!(receipt.ignored_duplicate_agent_ids.is_empty());
+        assert!(receipt.detail.contains("stale or unproven binding"));
+        assert!(!receipt.detail.contains("was a duplicate"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_discovery_fails_closed_before_nonce_or_signer() {
+        let root = tempfile::tempdir().unwrap();
+        let mut partial = empty_discovery_result();
+        partial["complete"] = Value::Bool(false);
+        partial.as_object_mut().unwrap().remove("mintAuthorization");
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(partial)),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+
+        registration.maintain_startup().await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert!(registration.state.mint_authorization.is_none());
+        assert!(
+            !gateway
+                .calls()
+                .iter()
+                .any(|call| { matches!(call.as_str(), "transaction_nonce" | "register") })
+        );
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn failed_startup_integrity_stays_closed_during_ordinary_maintenance() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.selected_agent_id = Some("63846".to_owned());
+        seeded.state.confirmed_agent_id = Some("63846".to_owned());
+        seeded.state.phase = RegistrationPhase::Active;
+        let higher_uri = seeded.build_agent_uri("63846").unwrap();
+        seeded.persist(1).unwrap();
+        drop(seeded);
+
+        let higher = inspected_agent(
+            &higher_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+        );
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("inspect_agent", ScriptResult::Ok(higher.clone())),
+            (
+                "discover",
+                ScriptResult::Err("canonical history provider unavailable"),
+            ),
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("inspect_agent", ScriptResult::Ok(higher)),
+            (
+                "discover",
+                ScriptResult::Err("canonical history provider still unavailable"),
+            ),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+
+        registration.maintain_startup().await.unwrap();
+        registration.maintain(false).await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert_eq!(
+            registration.state.confirmed_agent_id.as_deref(),
+            Some("63846")
+        );
+        assert!(registration.state.last_verified.is_none());
+        assert!(!registration.startup_integrity_complete);
+        assert_eq!(
+            gateway.calls(),
+            [
+                "inspect_registry",
+                "inspect_agent",
+                "discover",
+                "inspect_registry",
+                "inspect_agent",
+                "discover"
+            ]
+        );
+        assert!(
+            !gateway
+                .calls()
+                .iter()
+                .any(|call| call == "funding_estimate")
+        );
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn failed_startup_integrity_does_not_resume_a_persisted_register() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        seeded.state.phase = RegistrationPhase::Submitted;
+        seeded.state.action_id = Some("legacy-recent-scan-register".to_owned());
+        seeded.state.submitted_action = Some(PendingAction::Register);
+        seeded.state.submitted_transaction_hash = Some(format!("0x{}", "77".repeat(32)));
+        seeded.state.submitted_transaction_nonce = Some("9".to_owned());
+        seeded.persist(1).unwrap();
+        drop(seeded);
+
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Err("canonical history unavailable before pending recovery"),
+            ),
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Err("canonical history remains unavailable"),
+            ),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+
+        registration.maintain_startup().await.unwrap();
+        registration.maintain(false).await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert_eq!(
+            registration.state.submitted_action,
+            Some(PendingAction::Register)
+        );
+        assert!(registration.state.submitted_transaction_hash.is_some());
+        assert!(!registration.startup_integrity_complete);
+        assert_eq!(
+            gateway.calls(),
+            [
+                "inspect_registry",
+                "discover",
+                "inspect_registry",
+                "discover"
+            ]
+        );
+        assert!(
+            !gateway.calls().iter().any(|call| {
+                matches!(call.as_str(), "receipt" | "transaction_nonce" | "register")
+            })
+        );
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn operator_retry_cannot_bypass_failed_integrity_for_a_persisted_register() {
+        let root = tempfile::tempdir().unwrap();
+        let mut seeded = registration(root.path());
+        arm_test_registration(&mut seeded);
+        seeded.prepare_action(PendingAction::Register, 10).unwrap();
+        seeded.state.submitted_transaction_nonce = Some("9".to_owned());
+        seeded.state.submitted_transaction_hash = Some(format!("0x{}", "77".repeat(32)));
+        seeded.state.phase = RegistrationPhase::Submitted;
+        let canonical_uri = seeded.build_agent_uri("42").unwrap();
+        seeded.persist(11).unwrap();
+        drop(seeded);
+
+        let canonical = classified_candidate(
+            "42",
+            &canonical_uri,
+            wallet(),
+            ALLEGIANCE_VALUE,
+            PROTOCOL_VALUE,
+            "tentacle-independent",
+            &["exact-tentacle-id", "exact-xmtp-endpoint"],
+            true,
+            false,
+        );
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Err("canonical history unavailable during startup"),
+            ),
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Err("canonical history unavailable during operator retry"),
+            ),
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            (
+                "discover",
+                ScriptResult::Ok(discovery_result(json!([canonical]))),
+            ),
+            (
+                "inspect_agent",
+                ScriptResult::Ok(inspected_agent(
+                    &canonical_uri,
+                    wallet(),
+                    ALLEGIANCE_VALUE,
+                    PROTOCOL_VALUE,
+                    "tentacle-independent",
+                )),
+            ),
+        ]));
+        let mut recovered = scripted_registration(root.path(), gateway.clone());
+
+        recovered.maintain_startup().await.unwrap();
+        let retry_message = recovered.retry().await.unwrap();
+
+        assert!(retry_message.contains("REMAINS BLOCKED"));
+        assert_eq!(
+            recovered.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert_eq!(
+            recovered.state.submitted_action,
+            Some(PendingAction::Register)
+        );
+        assert_eq!(
+            recovered.state.submitted_transaction_nonce.as_deref(),
+            Some("9")
+        );
+        assert_eq!(
+            recovered.state.submitted_transaction_hash.as_deref(),
+            Some(format!("0x{}", "77".repeat(32)).as_str())
+        );
+        assert!(
+            recovered
+                .state
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.recoverable)
+        );
+        assert!(!recovered.startup_integrity_complete);
+        assert!(!gateway.calls().iter().any(|call| {
+            matches!(
+                call.as_str(),
+                "receipt" | "funding_estimate" | "transaction_nonce" | "register"
+            )
+        }));
+
+        recovered.maintain(false).await.unwrap();
+
+        assert!(recovered.startup_integrity_complete);
+        assert_eq!(recovered.state.confirmed_agent_id.as_deref(), Some("42"));
+        assert_eq!(recovered.state.phase, RegistrationPhase::Active);
+        assert!(recovered.state.submitted_action.is_none());
+        assert!(recovered.state.submitted_transaction_nonce.is_none());
+        assert!(recovered.state.submitted_transaction_hash.is_none());
+        assert!(!gateway.calls().iter().any(|call| {
+            matches!(
+                call.as_str(),
+                "funding_estimate" | "transaction_nonce" | "register"
+            )
+        }));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn unrelated_same_owner_identity_is_not_adopted_or_converted() {
+        let root = tempfile::tempdir().unwrap();
+        let unrelated = classified_candidate(
+            "70000",
+            "",
+            wallet(),
+            "",
+            "",
+            "another-durable-tentacle",
+            &["wallet-only"],
+            false,
+            false,
+        );
+        let mut discovery = discovery_result(json!([unrelated]));
+        discovery["mintAuthorization"] = empty_discovery_result()["mintAuthorization"].clone();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(discovery)),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+        registration.config.auto_register = false;
+
+        registration.maintain_startup().await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::VerifiedNoExistingIdentity
+        );
+        assert!(registration.state.confirmed_agent_id.is_none());
+        assert_eq!(registration.state.candidate_agent_ids, ["70000"]);
+        assert!(!gateway.calls().iter().any(|call| call == "register"));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
+    async fn bare_wallet_only_candidate_cannot_be_used_as_verified_absence() {
+        let root = tempfile::tempdir().unwrap();
+        let wallet_only = classified_candidate(
+            "70000",
+            "",
+            wallet(),
+            "",
+            "",
+            "",
+            &["wallet-only"],
+            false,
+            false,
+        );
+        let mut discovery = discovery_result(json!([wallet_only]));
+        discovery["mintAuthorization"] = empty_discovery_result()["mintAuthorization"].clone();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(discovery)),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+
+        registration.maintain_startup().await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert!(registration.state.confirmed_agent_id.is_none());
+        assert!(registration.state.mint_authorization.is_none());
+        assert!(
+            registration
+                .state
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.detail.contains("must remain ambiguous"))
+        );
+        assert!(
+            !gateway
+                .calls()
+                .iter()
+                .any(|call| matches!(call.as_str(), "transaction_nonce" | "register"))
+        );
+        gateway.assert_exhausted();
+    }
+
+    #[test]
+    fn xmtp_only_candidate_requires_exact_cthuwu_markers_before_adoption() {
+        let candidate = classified_candidate(
+            "70000",
+            "",
+            wallet(),
+            "",
+            "",
+            "",
+            &["exact-xmtp-endpoint"],
+            true,
+            false,
+        );
+        let result = parse_discovery(
+            &discovery_result(json!([candidate])),
+            DiscoveryScope::Exhaustive,
+            "tentacle-independent",
+            wallet(),
+            Some(&"ab".repeat(32)),
+        );
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("lacks strong current identity evidence")
+        );
     }
 
     #[tokio::test]
@@ -4384,6 +6821,7 @@ mod tests {
     fn intent_is_persisted_before_broadcast_and_blocks_duplicate_submission() {
         let root = tempfile::tempdir().unwrap();
         let mut registration = registration(root.path());
+        arm_test_registration(&mut registration);
         registration
             .prepare_action(PendingAction::Register, 5)
             .unwrap();
@@ -4408,6 +6846,8 @@ mod tests {
         let second_root = tempfile::tempdir().unwrap();
         let mut first = registration(first_root.path());
         let mut second = registration(second_root.path());
+        arm_test_registration(&mut first);
+        arm_test_registration(&mut second);
         first.prepare_action(PendingAction::Register, 5).unwrap();
         second.prepare_action(PendingAction::Register, 5).unwrap();
         assert_ne!(first.state.action_id, second.state.action_id);
@@ -4433,11 +6873,26 @@ mod tests {
         let mut registration = scripted_registration(root.path(), first.clone());
         assert!(registration.maintain(false).await.unwrap().is_empty());
         assert_eq!(registration.state.phase, RegistrationPhase::Submitted);
+        let register_operation = first
+            .operations()
+            .into_iter()
+            .find(|operation| operation["type"] == "register")
+            .unwrap();
+        assert_eq!(register_operation["nonce"], "7");
+        assert_eq!(
+            register_operation["mintAuthorization"]["fromBlock"],
+            IDENTITY_REGISTRY_START_BLOCK.to_string()
+        );
+        assert_eq!(
+            register_operation["mintAuthorization"]["fingerprint"],
+            "66".repeat(32)
+        );
         first.assert_exhausted();
         drop(registration);
 
         let second = Arc::new(ScriptedGateway::new(vec![
             ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("discover", ScriptResult::Ok(empty_discovery_result())),
             (
                 "receipt",
                 ScriptResult::Ok(json!({
@@ -4463,6 +6918,7 @@ mod tests {
     async fn reorganized_dropped_registration_replays_only_the_persisted_nonce() {
         let root = tempfile::tempdir().unwrap();
         let mut seeded = registration(root.path());
+        arm_test_registration(&mut seeded);
         seeded.prepare_action(PendingAction::Register, 10).unwrap();
         seeded.state.submitted_transaction_nonce = Some("7".to_owned());
         seeded.state.submitted_transaction_hash = Some(format!("0x{}", "11".repeat(32)));
@@ -4495,6 +6951,8 @@ mod tests {
             ("register", ScriptResult::Ok(submitted_result("44"))),
         ]));
         let mut recovered = scripted_registration(root.path(), gateway.clone());
+        // This test isolates canonical receipt replacement after a successful startup audit.
+        recovered.startup_integrity_complete = true;
         recovered.maintain(false).await.unwrap();
         assert_eq!(recovered.state.phase, RegistrationPhase::Submitted);
         let replacement_hash = format!("0x{}", "44".repeat(32));
@@ -4532,6 +6990,7 @@ mod tests {
         ] {
             let root = tempfile::tempdir().unwrap();
             let mut seeded = registration(root.path());
+            arm_test_registration(&mut seeded);
             seeded.prepare_action(PendingAction::Register, 10).unwrap();
             seeded.state.submitted_transaction_nonce = Some("7".to_owned());
             seeded.state.submitted_transaction_hash = Some(format!("0x{}", "11".repeat(32)));
@@ -4562,6 +7021,7 @@ mod tests {
             }
             let gateway = Arc::new(ScriptedGateway::new(steps));
             let mut recovered = scripted_registration(root.path(), gateway.clone());
+            recovered.startup_integrity_complete = true;
             recovered.maintain(false).await.unwrap();
             assert_eq!(recovered.state.phase, expected_phase);
             assert_eq!(
@@ -4581,6 +7041,7 @@ mod tests {
     async fn canonical_finalized_revert_retires_registration_intent() {
         let root = tempfile::tempdir().unwrap();
         let mut seeded = registration(root.path());
+        arm_test_registration(&mut seeded);
         seeded.prepare_action(PendingAction::Register, 10).unwrap();
         seeded.state.submitted_transaction_nonce = Some("7".to_owned());
         seeded.state.submitted_transaction_hash = Some(format!("0x{}", "11".repeat(32)));
@@ -4604,6 +7065,7 @@ mod tests {
             ),
         ]));
         let mut recovered = scripted_registration(root.path(), gateway.clone());
+        recovered.startup_integrity_complete = true;
         recovered.maintain(false).await.unwrap();
         assert_eq!(recovered.state.phase, RegistrationPhase::FailedRecoverable);
         assert!(recovered.state.submitted_action.is_none());
@@ -4665,6 +7127,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_registration_refuses_an_unaccounted_pending_nonce_gap() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(ScriptedGateway::new(vec![
+            ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("resolve_inbox", ScriptResult::Ok(canonical_inbox_result())),
+            ("discover", ScriptResult::Ok(empty_discovery_result())),
+            (
+                "funding_estimate",
+                ScriptResult::Ok(adequate_funding_result()),
+            ),
+            (
+                "transaction_nonce",
+                ScriptResult::Ok(register_nonce_result("8", "7")),
+            ),
+        ]));
+        let mut registration = scripted_registration(root.path(), gateway.clone());
+
+        registration.maintain(false).await.unwrap();
+
+        assert_eq!(
+            registration.state.phase,
+            RegistrationPhase::DiscoveryIncomplete
+        );
+        assert_eq!(
+            registration.state.submitted_action,
+            Some(PendingAction::Register)
+        );
+        assert!(registration.state.action_id.is_some());
+        assert!(registration.state.submitted_transaction_nonce.is_none());
+        assert!(registration.state.mint_authorization.is_none());
+        assert!(
+            registration
+                .state
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.detail.contains("unaccounted pending transaction"))
+        );
+        assert!(!gateway.calls().iter().any(|call| call == "register"));
+        gateway.assert_exhausted();
+    }
+
+    #[tokio::test]
     async fn unknown_register_outcome_retries_only_the_persisted_nonce() {
         let root = tempfile::tempdir().unwrap();
         let first = Arc::new(ScriptedGateway::new(vec![
@@ -4683,11 +7187,16 @@ mod tests {
         ]));
         let mut registration = scripted_registration(root.path(), first);
         registration.maintain(false).await.unwrap();
+        let expected_action_id = registration.state.action_id.clone().unwrap();
         drop(registration);
 
+        let mut first_replay_discovery = empty_discovery_result();
+        first_replay_discovery["mintAuthorization"]["fingerprint"] = json!("77".repeat(32));
+        let mut second_replay_discovery = empty_discovery_result();
+        second_replay_discovery["mintAuthorization"]["fingerprint"] = json!("88".repeat(32));
         let second = Arc::new(ScriptedGateway::new(vec![
             ("inspect_registry", ScriptResult::Ok(json!({}))),
-            ("discover", ScriptResult::Ok(empty_discovery_result())),
+            ("discover", ScriptResult::Ok(first_replay_discovery)),
             (
                 "transaction_nonce",
                 ScriptResult::Ok(register_nonce_result("8", "7")),
@@ -4697,7 +7206,7 @@ mod tests {
                 ScriptResult::Err("replacement response was lost"),
             ),
             ("inspect_registry", ScriptResult::Ok(json!({}))),
-            ("discover", ScriptResult::Ok(empty_discovery_result())),
+            ("discover", ScriptResult::Ok(second_replay_discovery)),
             (
                 "transaction_nonce",
                 ScriptResult::Ok(register_nonce_result("8", "7")),
@@ -4716,9 +7225,21 @@ mod tests {
         );
         recovered.retry().await.unwrap();
         assert_eq!(recovered.state.phase, RegistrationPhase::Submitted);
-        let nonces = second
-            .operations()
-            .into_iter()
+        let operations = second.operations();
+        let replay_discoveries = operations
+            .iter()
+            .filter(|operation| operation.get("type").and_then(Value::as_str) == Some("discover"))
+            .collect::<Vec<_>>();
+        assert_eq!(replay_discoveries.len(), 2);
+        assert!(replay_discoveries.iter().all(|operation| {
+            operation.get("registrationNonce").and_then(Value::as_str) == Some("7")
+                && operation
+                    .get("registrationActionId")
+                    .and_then(Value::as_str)
+                    == Some(expected_action_id.as_str())
+        }));
+        let nonces = operations
+            .iter()
             .filter(|operation| operation.get("type").and_then(Value::as_str) == Some("register"))
             .map(|operation| {
                 operation
@@ -4729,6 +7250,17 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(nonces, ["7", "7"]);
+        let replay_authorizations = operations
+            .iter()
+            .filter(|operation| operation.get("type").and_then(Value::as_str) == Some("register"))
+            .map(|operation| {
+                operation["mintAuthorization"]["fingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(replay_authorizations, ["77".repeat(32), "88".repeat(32)]);
         second.assert_exhausted();
     }
 
@@ -4852,6 +7384,9 @@ mod tests {
             ("set_metadata", ScriptResult::Err("response lost again")),
         ]));
         let mut waiting = scripted_registration(root.path(), not_visible.clone());
+        // The startup-integrity gate is covered separately; this test isolates exact follow-up
+        // nonce replay after the canonical binding has already been selected.
+        waiting.startup_integrity_complete = true;
         waiting.maintain(false).await.unwrap();
         assert_eq!(waiting.state.phase, RegistrationPhase::Preparing);
         assert_eq!(waiting.state.submitted_action, Some(action.clone()));
@@ -4890,6 +7425,7 @@ mod tests {
             ),
         ]));
         let mut recovered = scripted_registration(root.path(), visible.clone());
+        recovered.startup_integrity_complete = true;
         let notices = recovered.maintain(false).await.unwrap();
         assert_eq!(recovered.state.phase, RegistrationPhase::Active);
         assert!(recovered.state.submitted_action.is_none());
@@ -4922,6 +7458,7 @@ mod tests {
 
         let second = Arc::new(ScriptedGateway::new(vec![
             ("inspect_registry", ScriptResult::Ok(json!({}))),
+            ("discover", ScriptResult::Ok(empty_discovery_result())),
             (
                 "receipt",
                 ScriptResult::Ok(json!({
@@ -4970,6 +7507,9 @@ mod tests {
         for (index, action) in actions.into_iter().enumerate() {
             let root = tempfile::tempdir().unwrap();
             let mut instance = registration(root.path());
+            if action == PendingAction::Register {
+                arm_test_registration(&mut instance);
+            }
             instance
                 .prepare_action(action.clone(), index as u64 + 1)
                 .unwrap();
@@ -5130,12 +7670,18 @@ mod tests {
         ];
         for expected in expected_submissions {
             let mut submitting = scripted_registration(root.path(), gateway.clone());
+            if expected != PendingAction::Register {
+                submitting.startup_integrity_complete = true;
+            }
             submitting.maintain(false).await.unwrap();
             assert_eq!(submitting.state.phase, RegistrationPhase::Submitted);
             assert_eq!(submitting.state.submitted_action, Some(expected));
             drop(submitting);
 
             let mut confirming = scripted_registration(root.path(), gateway.clone());
+            // This phase-by-phase test isolates action journaling. Startup discovery and its
+            // pending-register gate have dedicated restart regressions above.
+            confirming.startup_integrity_complete = true;
             confirming.maintain(false).await.unwrap();
             assert!(confirming.state.submitted_transaction_hash.is_none());
             assert!(confirming.state.submitted_action.is_none());
@@ -5143,6 +7689,7 @@ mod tests {
         }
 
         let mut verifying = scripted_registration(root.path(), gateway.clone());
+        verifying.startup_integrity_complete = true;
         let notices = verifying.maintain(false).await.unwrap();
         assert_eq!(verifying.state.phase, RegistrationPhase::Active);
         assert_eq!(verifying.state.confirmed_agent_id.as_deref(), Some("42"));

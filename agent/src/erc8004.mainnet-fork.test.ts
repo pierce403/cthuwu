@@ -32,6 +32,8 @@ import {
 const RUN_MAINNET_FORK = process.env.CTHUWU_RUN_MAINNET_FORK_TEST === "1";
 const RPC_ENDPOINT =
   process.env.CTHUWU_ERC8004_FORK_RPC ?? "http://127.0.0.1:8545";
+const TEST_RECENT_DISCOVERY_BLOCKS_ENV =
+  "CTHUWU_TEST_ERC8004_RECENT_DISCOVERY_BLOCKS";
 
 // This is the first compact deterministic fork point after both canonical proxies reached the
 // pinned 2.0.0 implementations. It is only seventeen blocks after the Identity Registry start,
@@ -113,6 +115,7 @@ describe.skipIf(!RUN_MAINNET_FORK)(
     let stateDirectory = "";
     let identity: LoadedIdentity;
     let wallet: Address;
+    let previousRecentDiscoveryBlocks: string | undefined;
 
     const loadIdentity = async (): Promise<LoadedIdentity> => identity;
 
@@ -167,6 +170,9 @@ describe.skipIf(!RUN_MAINNET_FORK)(
     }
 
     beforeAll(async () => {
+      previousRecentDiscoveryBlocks =
+        process.env[TEST_RECENT_DISCOVERY_BLOCKS_ENV];
+      process.env[TEST_RECENT_DISCOVERY_BLOCKS_ENV] = "32";
       stateDirectory = await mkdtemp(
         path.join(tmpdir(), "cthuwu-mainnet-fork-signer-"),
       );
@@ -198,6 +204,11 @@ describe.skipIf(!RUN_MAINNET_FORK)(
       );
       expect(forkBlock.hash).toBe(FORK_BLOCK_HASH);
 
+      // Anvil exposes `finalized` as latest minus 64 blocks. The pinned anchor deliberately sits
+      // only seventeen blocks after registry deployment, so advance local empty blocks before the
+      // first exhaustive discovery while retaining the exact canonical fork-anchor assertion.
+      await rpc("anvil_mine", [toHex(70)]);
+
       // This is an Anvil-only chain-control operation. It funds the ephemeral identity on the local
       // fork and cannot touch Base; every registry transaction still goes through the narrow signer.
       const fundedBalance = 5n * 10n ** 18n;
@@ -213,6 +224,12 @@ describe.skipIf(!RUN_MAINNET_FORK)(
     }, 60_000);
 
     afterAll(async () => {
+      if (previousRecentDiscoveryBlocks === undefined) {
+        delete process.env[TEST_RECENT_DISCOVERY_BLOCKS_ENV];
+      } else {
+        process.env[TEST_RECENT_DISCOVERY_BLOCKS_ENV] =
+          previousRecentDiscoveryBlocks;
+      }
       if (stateDirectory !== "") {
         await rm(stateDirectory, { recursive: true, force: true });
       }
@@ -236,11 +253,29 @@ describe.skipIf(!RUN_MAINNET_FORK)(
           interfaceComplete: true,
         });
 
+        const inboxId = createHash("sha256").update(wallet).digest("hex");
+        const initialDiscovery = successfulResult(
+          await call("mainnet-fork:pre-mint-discovery", {
+            type: "discover",
+            wallet,
+            scope: "exhaustive",
+            tentacleId: TEST_TENTACLE_ID,
+            xmtpInboxId: inboxId,
+          }),
+        );
+        expect(initialDiscovery.complete).toBe(true);
+        expect(initialDiscovery.candidates).toEqual([]);
+        const mintAuthorization = requiredRecord(
+          initialDiscovery.mintAuthorization,
+          "mint authorization",
+        );
+
         const registrationAction = "mainnet-fork:register-lost-response";
         const registrationNonce = await currentNonce(registrationAction);
         const registrationRequest = parsedRequest(registrationAction, {
           type: "register",
           nonce: registrationNonce,
+          mintAuthorization,
         });
         const registrationResponse = await handleErc8004Request(
           registrationRequest,
@@ -254,7 +289,8 @@ describe.skipIf(!RUN_MAINNET_FORK)(
         );
 
         // Model the transport losing the response after broadcast: retry the exact persisted action
-        // without consuming its returned ID. A confirmed nonce is recoverable, never reminted.
+        // without consuming its returned ID. Latest discovery already sees the wallet-controlled
+        // registration, so the consumed proof fails closed before finalized nonce recovery below.
         const replay = await handleErc8004Request(
           registrationRequest,
           RPC_ENDPOINT,
@@ -263,7 +299,7 @@ describe.skipIf(!RUN_MAINNET_FORK)(
         expect(replay).toMatchObject({
           ok: false,
           recoverable: true,
-          code: "nonce_consumed",
+          code: "mint_authorization_stale",
         });
 
         // Anvil models Base's finalized tag as latest minus 64 blocks. Advance only local empty
@@ -353,7 +389,6 @@ describe.skipIf(!RUN_MAINNET_FORK)(
         expect(inspected.agentWallet).toBe(wallet);
         expect(inspected.walletVerified).toBe(true);
 
-        const inboxId = createHash("sha256").update(wallet).digest("hex");
         const manifest = {
           schemaVersion: 1,
           protocol: 1,
@@ -454,8 +489,63 @@ describe.skipIf(!RUN_MAINNET_FORK)(
             utf8: TEST_TENTACLE_ID,
           },
         });
+
+        // Reproduce the 54be471 failure shape without asking Anvil to materialize 20,000 empty
+        // fork blocks. Test mode narrows only the explicitly incomplete recent refresh to 32
+        // blocks; production remains fixed at 20,000 and the unit regression exercises that exact
+        // boundary. Advancing 110 retained-history blocks also clears Anvil's 64-block finalized
+        // lag, placing every registration/profile write outside this scaled recent window.
+        await rpc("anvil_mine", [toHex(110)]);
+        const recent = successfulResult(
+          await call("mainnet-fork:recent-after-history-gap", {
+            type: "discover",
+            wallet,
+            scope: "recent",
+            tentacleId: TEST_TENTACLE_ID,
+            xmtpInboxId: inboxId,
+          }),
+        );
+        expect(recent).toMatchObject({
+          complete: false,
+          rangeComplete: true,
+          scope: "recent",
+          candidates: [],
+        });
+
+        const historical = successfulResult(
+          await call("mainnet-fork:historical-rediscovery", {
+            type: "discover",
+            wallet,
+            scope: "exhaustive",
+            tentacleId: TEST_TENTACLE_ID,
+            xmtpInboxId: inboxId,
+          }),
+        );
+        expect(historical.complete).toBe(true);
+        expect(historical.mintAuthorization).toBeUndefined();
+        expect(historical.candidates).toEqual([
+          expect.objectContaining({
+            agentId,
+            sameTentacle: true,
+            authorized: true,
+            walletVerified: true,
+          }),
+        ]);
+
+        const refusedNonce = await currentNonce("mainnet-fork:refuse-second-register");
+        const refused = await call("mainnet-fork:refuse-second-register", {
+          type: "register",
+          nonce: refusedNonce,
+          mintAuthorization,
+        });
+        expect(refused).toMatchObject({
+          ok: false,
+          recoverable: false,
+          code: "mint_authorization_reused",
+        });
+        expect(await currentNonce("mainnet-fork:after-refused-register")).toBe(refusedNonce);
       },
-      120_000,
+      180_000,
     );
   },
 );

@@ -57,6 +57,7 @@ describe("Acolyte catalog page", () => {
     expect(card?.textContent).toContain("<script>boom()</script>");
     expect(card?.querySelector("h2")?.textContent).toBe(`Acolyte ${acolyteName(acolyte)}`);
     expect(card?.textContent).toContain("NFT name mismatch");
+    expect(card?.textContent).toContain("Stored on-chain controller7");
     expect(card?.querySelector("script")).toBeNull();
     expect(card?.querySelector('a[href^="javascript:"]')).toBeNull();
     expect(card?.querySelector("img")).toBeNull();

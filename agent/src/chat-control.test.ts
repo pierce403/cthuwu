@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { GroupPermissionsOptions, contentTypeText } from "@xmtp/node-sdk";
-import { getAddress } from "viem";
+import { getAddress, stringToHex } from "viem";
 import {
   ASSIGNMENT_CONTENT_TYPE,
   AssignmentCodec,
@@ -31,6 +34,7 @@ import {
   isLivenessJoinControl,
   isLivenessQueryControl,
   isLivenessResponseControl,
+  loadVerifiedRegistration,
   parseControlPayload,
   resolveFreshSenderAddress,
   type AssignmentResolution,
@@ -45,6 +49,12 @@ import {
   type LivenessJoinControl,
   type LivenessQueryControl,
 } from "./chat-control.js";
+import {
+  ALLEGIANCE_VALUE,
+  BRANDING_RUNTIME_CODE_HASH,
+  ERC8004_IDENTITY_REGISTRY,
+  PROTOCOL_VALUE,
+} from "./erc8004.js";
 
 const SELF = "aa".repeat(32);
 const USER = "bb".repeat(32);
@@ -54,6 +64,105 @@ const EVIL = "ee".repeat(32);
 const AGENT_ID = "42";
 const ADDRESS = getAddress("0x1111111111111111111111111111111111111111");
 const REVISION = `50000000:0x${"12".repeat(32)}`;
+const TENTACLE_ID = "fixture-durable-tentacle";
+
+function controllerProfile(agentId: string, tentacleId = TENTACLE_ID): string {
+  const endpoint = `xmtp://${SELF}`;
+  const manifest = {
+    schemaVersion: 1,
+    protocol: 1,
+    tentacleId,
+    erc8004: { chainId: 8453, registry: ERC8004_IDENTITY_REGISTRY, agentId },
+    xmtp: { environment: "production", endpoint },
+    capabilities: ["direct-xmtp-messaging"],
+  };
+  const manifestUri = `data:application/json;base64,${Buffer.from(
+    JSON.stringify(manifest),
+  ).toString("base64")}`;
+  return `data:application/json;base64,${Buffer.from(JSON.stringify({
+    type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+    active: true,
+    services: [
+      { name: "CTHUWU-XMTP", endpoint, version: "1" },
+      { name: "CTHUWU", endpoint: manifestUri, version: "1" },
+    ],
+    registrations: [{
+      agentId,
+      agentRegistry: `eip155:8453:${ERC8004_IDENTITY_REGISTRY}`,
+    }],
+  })).toString("base64")}`;
+}
+
+const temporaryDirectories: string[] = [];
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) =>
+    rm(directory, { recursive: true, force: true })));
+});
+
+async function registrationDirectory(snapshot: Record<string, unknown>): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "cthuwu-registration-loader-"));
+  temporaryDirectories.push(directory);
+  await mkdir(path.join(directory, "state"));
+  await writeFile(
+    path.join(directory, "state", "erc8004-registration.json"),
+    `${JSON.stringify(snapshot)}\n`,
+    { mode: 0o600 },
+  );
+  return directory;
+}
+
+function activeRegistrationSnapshot(agentId = AGENT_ID): Record<string, unknown> {
+  return {
+    version: 4,
+    chain_id: 8453,
+    identity_registry: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+    phase: "active",
+    tentacle_id: TENTACLE_ID,
+    confirmed_agent_id: agentId,
+    selected_agent_id: agentId,
+    ignored_duplicate_agent_ids: agentId === "61766" ? ["63846"] : [],
+    tentacle_wallet: ADDRESS,
+    xmtp_inbox_id: SELF,
+    last_verified: {
+      agent_wallet: ADDRESS,
+      authorized: true,
+      declares_tentacle_allegiance: true,
+      protocol_compatible: true,
+      wallet_verified: true,
+    },
+  };
+}
+
+describe("canonical local registration binding", () => {
+  it("loads only the repaired v4 canonical confirmed identity", async () => {
+    const directory = await registrationDirectory(activeRegistrationSnapshot("61766"));
+    await expect(loadVerifiedRegistration(directory, ADDRESS, SELF)).resolves.toEqual({
+      agentId: "61766",
+      wallet: ADDRESS,
+      inboxId: SELF,
+      tentacleId: TENTACLE_ID,
+      ignoredDuplicateAgentIds: ["63846"],
+    });
+  });
+
+  it("rejects an ignored duplicate as the active liveness/routing binding", async () => {
+    const snapshot = activeRegistrationSnapshot("63846");
+    snapshot.ignored_duplicate_agent_ids = ["63846"];
+    const directory = await registrationDirectory(snapshot);
+    await expect(loadVerifiedRegistration(directory, ADDRESS, SELF)).rejects.toThrow(
+      /not active or does not match/u,
+    );
+  });
+
+  it("rejects pre-repair registration snapshot schemas", async () => {
+    const snapshot = activeRegistrationSnapshot();
+    snapshot.version = 3;
+    const directory = await registrationDirectory(snapshot);
+    await expect(loadVerifiedRegistration(directory, ADDRESS, SELF)).rejects.toThrow(
+      /not active or does not match/u,
+    );
+  });
+});
 
 describe("canonical deployment configuration", () => {
   it("pins the verified Base Branding contract", () => {
@@ -69,8 +178,75 @@ describe("canonical deployment configuration", () => {
         agentId: AGENT_ID,
         wallet: ADDRESS,
         inboxId: SELF,
+        tentacleId: TENTACLE_ID,
+        ignoredDuplicateAgentIds: [],
       },
     })).toThrow(/canonical Base deployment/u);
+  });
+
+  it("maps a directly verified higher Branding alias to the owner-only canonical local ID", async () => {
+    const acolyte = getAddress("0x2222222222222222222222222222222222222222");
+    const blockNumber = 50_000_000n;
+    const blockHash = `0x${"12".repeat(32)}` as const;
+    const verifiedAgentIds: string[] = [];
+    const client = {
+      getChainId: async () => 8453,
+      getBlock: async () => ({ number: blockNumber, hash: blockHash }),
+      getCode: async () => "0x6000",
+      readContract: async ({ functionName, args }: {
+        functionName: string;
+        args?: readonly unknown[];
+      }) => {
+        switch (functionName) {
+          case "brandingOf":
+            return {
+              tokenId: BigInt(acolyte),
+              acolyte,
+              owner: ADDRESS,
+              controllerAgentId: 63_846n,
+              referrer: "0x0000000000000000000000000000000000000000",
+              declaredPrice: 0n,
+              paidThrough: 0n,
+              pendingDeclaredPrice: 0n,
+              pendingPriceActivation: 0n,
+              status: 1,
+            };
+          case "BASE_CHAIN_ID": return 8453n;
+          case "IDENTITY_REGISTRY": return ERC8004_IDENTITY_REGISTRY;
+          case "UWU": return "0x9dBa3AE7002DaEfd7324e7B9f829ed31Cb5f0B07";
+          case "REGISTRY_VERSION":
+          case "getVersion": return "2.0.0";
+          case "getAgentWallet":
+            verifiedAgentIds.push(String(args?.[0]));
+            return ADDRESS;
+          case "isAuthorizedOrOwner": return true;
+          case "getMetadata":
+            return args?.[1] === "cthuwu.allegiance"
+              ? stringToHex(ALLEGIANCE_VALUE)
+              : stringToHex(PROTOCOL_VALUE);
+          case "tokenURI": return controllerProfile(String(args?.[0]));
+          default: throw new Error(`unexpected read ${functionName}`);
+        }
+      },
+    };
+    const resolver = new CanonicalAssignmentResolver({
+      localRegistration: {
+        agentId: "61766",
+        wallet: ADDRESS,
+        inboxId: SELF,
+        tentacleId: TENTACLE_ID,
+        ignoredDuplicateAgentIds: ["63846"],
+      },
+      client: client as never,
+      hashCode: () => BRANDING_RUNTIME_CODE_HASH,
+    });
+    await expect(resolver.resolve(acolyte)).resolves.toMatchObject({
+      kind: "assigned_here",
+      tentacleAgentId: "61766",
+      tentacleInboxId: SELF,
+      enrollment: "controller",
+    });
+    expect(verifiedAgentIds.sort()).toEqual(["61766", "63846"]);
   });
 });
 

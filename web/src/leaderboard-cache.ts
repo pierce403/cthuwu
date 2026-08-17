@@ -8,10 +8,12 @@ import {
   REPUTATION_REGISTRY,
   UWU_CONTRACT,
   ZERO_ADDRESS,
+  type DuplicateAgentAlias,
   type LeaderboardSnapshot,
   type TentacleIdentity,
 } from "./leaderboard-types";
 import { parseRawBalance } from "./level";
+import { canonicalizeWalletIdentities } from "./tentacle-canonical";
 
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const ADDRESS = /^0x[0-9a-f]{40}$/u;
@@ -101,6 +103,146 @@ function discardLeaderboardCache(storage: Storage): void {
   }
 }
 
+function duplicateAliases(value: unknown, label: string): DuplicateAgentAlias[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100_000) {
+    throw new Error(`${label} is invalid`);
+  }
+  const aliases = value.map((entry) => {
+    const alias = object(entry, label);
+    if (
+      Object.keys(alias).length !== 2 ||
+      !("aliasAgentId" in alias) ||
+      !("canonicalAgentId" in alias) ||
+      !unsigned(alias.aliasAgentId) ||
+      !unsigned(alias.canonicalAgentId) ||
+      alias.aliasAgentId === alias.canonicalAgentId ||
+      BigInt(alias.aliasAgentId) <= BigInt(alias.canonicalAgentId)
+    ) {
+      throw new Error(`${label} is invalid`);
+    }
+    return {
+      aliasAgentId: alias.aliasAgentId,
+      canonicalAgentId: alias.canonicalAgentId,
+    };
+  });
+  if (new Set(aliases.map(({ aliasAgentId }) => aliasAgentId)).size !== aliases.length) {
+    throw new Error(`${label} contains duplicate aliases`);
+  }
+  return aliases.sort((left, right) =>
+    BigInt(left.aliasAgentId) < BigInt(right.aliasAgentId) ? -1 : 1);
+}
+
+function normalizeDuplicateComponents(snapshot: LeaderboardSnapshot): void {
+  const rawIds = new Set<string>();
+  const wallets = new Set<string>();
+  for (const group of snapshot.rankedWallets) {
+    object(group, "ranked wallet");
+    if (
+      !ADDRESS.test(group.wallet) ||
+      group.wallet === ZERO_ADDRESS ||
+      wallets.has(group.wallet) ||
+      !Array.isArray(group.identities) ||
+      group.identities.length === 0 ||
+      group.identities.length > 1_000
+    ) throw new Error("invalid wallet group");
+    wallets.add(group.wallet);
+    for (const identity of group.identities) {
+      validateIdentity(identity, rawIds, group.wallet, group.rawBalance, false);
+    }
+  }
+  for (const identity of snapshot.suspended) {
+    validateIdentity(identity, rawIds, ZERO_ADDRESS, "0", true);
+  }
+
+  const canonical = canonicalizeWalletIdentities([
+    ...snapshot.rankedWallets.flatMap((group) => group.identities),
+    ...snapshot.suspended,
+  ]);
+  const aliasesById = new Map<string, string>();
+  const suppliedAliases = [
+    ...duplicateAliases(snapshot.duplicateAgentAliases, "snapshot duplicate aliases"),
+  ];
+  for (const group of snapshot.rankedWallets) {
+    const explicitGroupAliases = duplicateAliases(
+      group.duplicateAgentAliases,
+      "wallet duplicate aliases",
+    );
+    const rawGroupIds = new Set(group.identities.map(({ agentId }) => agentId));
+    for (const alias of explicitGroupAliases) {
+      if (!rawGroupIds.has(alias.canonicalAgentId)) {
+        throw new Error("wallet duplicate alias targets another wallet component");
+      }
+    }
+    suppliedAliases.push(...explicitGroupAliases);
+    const rawIgnored = group.ignoredDuplicateAgentIds;
+    if (rawIgnored === undefined) continue;
+    if (
+      !Array.isArray(rawIgnored) ||
+      rawIgnored.length > 1_000 ||
+      rawIgnored.some((id, index, all) => !unsigned(id) || all.indexOf(id) !== index)
+    ) throw new Error("invalid ignored duplicate identities");
+    if (group.duplicateAgentAliases !== undefined) continue;
+    const groupCanonical = canonicalizeWalletIdentities(group.identities).identities;
+    // Version-one caches predate explicit component mappings. They can be migrated
+    // only when the wallet contains one canonical Tentacle; otherwise mapping every
+    // alias to the wallet representative would conflate unrelated Tentacles.
+    if (rawIgnored.length > 0 && groupCanonical.length !== 1) {
+      throw new Error("legacy duplicate aliases are ambiguous on a shared wallet");
+    }
+    suppliedAliases.push(...rawIgnored.map((aliasAgentId) => ({
+      aliasAgentId,
+      canonicalAgentId: groupCanonical[0]!.agentId,
+    })));
+  }
+  if (suppliedAliases.some(({ aliasAgentId }) => rawIds.has(aliasAgentId))) {
+    throw new Error("ignored duplicate identity is also present as a raw identity");
+  }
+  for (const alias of [...suppliedAliases, ...canonical.duplicateAgentAliases]) {
+    const existing = aliasesById.get(alias.aliasAgentId);
+    if (existing !== undefined && existing !== alias.canonicalAgentId) {
+      throw new Error("duplicate alias maps to multiple canonical identities");
+    }
+    aliasesById.set(alias.aliasAgentId, alias.canonicalAgentId);
+  }
+  const canonicalIds = new Set(canonical.identities.map(({ agentId }) => agentId));
+  const aliases = [...aliasesById].map(([aliasAgentId, canonicalAgentId]) => {
+    if (!canonicalIds.has(canonicalAgentId) || canonicalIds.has(aliasAgentId)) {
+      throw new Error("duplicate alias does not resolve to one canonical identity");
+    }
+    return { aliasAgentId, canonicalAgentId };
+  }).sort((left, right) =>
+    BigInt(left.aliasAgentId) < BigInt(right.aliasAgentId) ? -1 : 1);
+
+  snapshot.rankedWallets = snapshot.rankedWallets.flatMap((group) => {
+    group.identities = group.identities.filter(({ agentId }) => canonicalIds.has(agentId));
+    if (group.identities.length === 0) return [];
+    group.identities.sort((left, right) =>
+      BigInt(left.agentId) < BigInt(right.agentId) ? -1 : 1);
+    group.representativeAgentId = group.identities[0]!.agentId;
+    const groupIds = new Set(group.identities.map(({ agentId }) => agentId));
+    const groupAliases = aliases.filter(({ canonicalAgentId }) => groupIds.has(canonicalAgentId));
+    if (groupAliases.length > 0) {
+      group.duplicateAgentAliases = groupAliases;
+      group.ignoredDuplicateAgentIds = groupAliases.map(({ aliasAgentId }) => aliasAgentId);
+    } else {
+      delete group.duplicateAgentAliases;
+      delete group.ignoredDuplicateAgentIds;
+    }
+    return [group];
+  });
+  snapshot.suspended = snapshot.suspended.filter(({ agentId }) => canonicalIds.has(agentId));
+  snapshot.suspended.sort((left, right) =>
+    BigInt(left.agentId) < BigInt(right.agentId) ? -1 : 1);
+  if (aliases.length > 0) snapshot.duplicateAgentAliases = aliases;
+  else delete snapshot.duplicateAgentAliases;
+  let rank = 0;
+  for (const group of snapshot.rankedWallets) {
+    if (BigInt(group.rawBalance) > 0n) group.rank = ++rank;
+    else delete group.rank;
+  }
+}
+
 function validateSnapshot(value: unknown): LeaderboardSnapshot {
   const snapshot = object(value, "leaderboard snapshot") as unknown as LeaderboardSnapshot;
   if (
@@ -124,6 +266,7 @@ function validateSnapshot(value: unknown): LeaderboardSnapshot {
   ) {
     throw new Error("cached leaderboard metadata is invalid");
   }
+  normalizeDuplicateComponents(snapshot);
   const agentIds = new Set<string>();
   const wallets = new Set<string>();
   let previousBalance: bigint | undefined;
@@ -139,13 +282,50 @@ function validateSnapshot(value: unknown): LeaderboardSnapshot {
       throw new Error("invalid wallet group");
     }
     wallets.add(group.wallet);
-    const balance = parseRawBalance(group.rawBalance);
-    if (previousBalance !== undefined && balance > previousBalance) throw new Error("cache is not ranked");
     if (!Array.isArray(group.identities) || group.identities.length === 0 || group.identities.length > 1_000) {
       throw new Error("invalid wallet identities");
     }
+    const originalAgentIds = new Set<string>();
     for (const identity of group.identities) {
-      validateIdentity(identity, agentIds, group.wallet, group.rawBalance, false);
+      validateIdentity(identity, originalAgentIds, group.wallet, group.rawBalance, false);
+    }
+    if (!originalAgentIds.has(group.representativeAgentId)) {
+      throw new Error("shared-wallet representative is not a member identity");
+    }
+    const canonical = canonicalizeWalletIdentities(group.identities);
+    if (canonical.ignoredDuplicateAgentIds.length > 0) {
+      throw new Error("wallet identities were not globally canonicalized");
+    }
+    group.identities = canonical.identities;
+    const groupAliases = duplicateAliases(group.duplicateAgentAliases, "wallet duplicate aliases");
+    if (groupAliases.length > 1_000) throw new Error("too many wallet duplicate aliases");
+    const ignoredDuplicateAgentIds = groupAliases.map(({ aliasAgentId }) => aliasAgentId);
+    const rawIgnored = group.ignoredDuplicateAgentIds ?? [];
+    if (
+      rawIgnored.length !== ignoredDuplicateAgentIds.length ||
+      rawIgnored.some((id, index) => id !== ignoredDuplicateAgentIds[index])
+    ) throw new Error("ignored duplicate diagnostics do not match component aliases");
+    const memberIds = new Set(group.identities.map(({ agentId }) => agentId));
+    for (const { aliasAgentId, canonicalAgentId } of groupAliases) {
+      if (!memberIds.has(canonicalAgentId) || memberIds.has(aliasAgentId)) {
+        throw new Error("wallet duplicate alias has an invalid component target");
+      }
+    }
+    const balance = parseRawBalance(group.rawBalance);
+    if (previousBalance !== undefined && balance > previousBalance) throw new Error("cache is not ranked");
+    if (
+      group.ignoredDuplicateAgentIds !== undefined &&
+      (!Array.isArray(group.ignoredDuplicateAgentIds) ||
+      group.ignoredDuplicateAgentIds.length > 1_000 ||
+      group.ignoredDuplicateAgentIds.some((id, index, ids) =>
+        !unsigned(id) ||
+        ids.indexOf(id) !== index ||
+        group.identities.some((identity) => identity.agentId === id)))
+    ) throw new Error("invalid ignored duplicate identities");
+    const reservedAgentIds = new Set([...originalAgentIds, ...ignoredDuplicateAgentIds]);
+    for (const reservedAgentId of reservedAgentIds) {
+      if (agentIds.has(reservedAgentId)) throw new Error("duplicate agent identity");
+      agentIds.add(reservedAgentId);
     }
     if (group.representativeAgentId !== group.identities[0].agentId) {
       throw new Error("invalid shared-wallet representative");
@@ -177,6 +357,17 @@ function validateSnapshot(value: unknown): LeaderboardSnapshot {
   }
   for (const identity of snapshot.suspended) {
     validateIdentity(identity, agentIds, ZERO_ADDRESS, "0", true);
+  }
+  const snapshotAliases = duplicateAliases(snapshot.duplicateAgentAliases, "snapshot duplicate aliases");
+  const targetIds = new Set([
+    ...snapshot.rankedWallets.flatMap((group) => group.identities.map(({ agentId }) => agentId)),
+    ...snapshot.suspended.map(({ agentId }) => agentId),
+  ]);
+  for (const { aliasAgentId, canonicalAgentId } of snapshotAliases) {
+    if (!targetIds.has(canonicalAgentId) || targetIds.has(aliasAgentId)) {
+      throw new Error("snapshot duplicate alias has an invalid component target");
+    }
+    if (!agentIds.has(aliasAgentId)) agentIds.add(aliasAgentId);
   }
   return snapshot;
 }

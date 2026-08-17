@@ -659,14 +659,27 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     model cannot substitute, append, or repeat it. Negated, explanatory, capability-only, historical,
     workspace, contact, or tool-output text does not authorize execution. Natural `exec` remains
     unsandboxed RCE as the `uwubot` account. Exact direct `/exec` remains available.
+  - Natural authenticated repository diagnosis/update/fork/test/build/commit/push/PR intent exposes
+    one separate typed `repository_maintenance` schema and never widens `exec`. Exact common
+    “update yourself” and status/test/build phrases route deterministically. The embedded manifest
+    pins canonical `pierce403/cthuwu`, `main`, validation IDs, and restart semantics. The dispatcher
+    contains the Git root, rejects external/symlinked Git state and suspicious configuration,
+    sanitizes remotes/auth receipts, preserves dirty/local work, fast-forwards clean canonical
+    checkouts, normally merges upstream into forks, and leaves conflicts for deliberate resolution.
+    Push and authenticated `gh pr create` occur only for the matching operator request after
+    validation; a canonical PR URL is required before success is claimed. Source updates explicitly
+    leave the answering process old until a clean stop and `./uwu.sh` relaunch. This requires a
+    Git-backed workspace with trusted Git; the stock container has no checkout or Git/`gh`, so its
+    update path is image rebuild and redeployment.
   - When the current message explicitly asks to create or generate a reusable skill, one create-only
     `create_skill` call may write a fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
     canonical frontmatter, bounds the one-line description and Markdown instructions, and rejects
     traversal, symlinks, existing paths, and overwrites. The next operator turn rescans the skill
     index. General model-selected writes and edits remain unavailable; `/write` and `/edit` stay exact
     direct commands, and the compiled creation gate outranks skill prose.
-  - A model-selected tool phase may use at most 30 seconds, allows at most one effectful call, and
-    preserves a final local-completion reserve from the authenticated deadline.
+  - An ordinary model-selected tool phase may use at most 30 seconds. Typed repository maintenance
+    may use up to 240 seconds for its compiled validation sequence. Both allow at most one effectful
+    call and preserve a final local-completion reserve from the authenticated deadline.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -704,6 +717,11 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     current-message command, reject substitutions, repeats, negation, capability questions, and stale
     or workspace-derived authority. Agent-loop tests prove a slow model-selected tool preserves the
     final local completion phase.
+  - [x] Temporary local Git repositories/remotes cover canonical clean fast-forward, dirty-tree
+    refusal/preservation, fork/upstream merge, conflict preservation, missing and mocked authenticated
+    `gh`, successful canonical PR receipt, typed intent/schema authorization, root/ref/path/remote
+    rejection, and command/output/credential sanitization without mutating the real repository or
+    claiming a unit-test PR is live.
   - [x] Tests cover protected Markdown seeding without overwrite, per-operator profile/history
     isolation, project memory/context and skill discovery, bounded file listing, and a workspace
     manifest.
@@ -1336,16 +1354,31 @@ phase.
     opts an identity in.
   - The persistent XMTP wallet is the Tentacle's Base identity and verified nonzero `agentWallet`.
     Transfer, wallet clearing, ownership/operator loss, or wallet mismatch suspends the identity.
-  - Snapshot schema version 3 persists the generated-default or explicitly seeded public name. Version-1 and version-2 records
-    gain exactly one name during explicit migration. The registration-v1 agent URI always uses that
-    persisted name; byte-different on-chain profiles enter the existing funding-aware
-    `SetAgentUri` reconciliation path and resume automatically after the operator supplies Base ETH.
-  - Startup directly reverifies a persisted agent ID. A pristine identity performs only a recent
-    20,000-block candidate scan (at most two 10,000-block log ranges) before funding/registering;
-    exhaustive history is reserved for an unresolved persisted registration nonce or the explicit
-    authenticated operator `registry recover` action. Discovery RPC failures back maintenance from
-    15 minutes to at least one hour. Candidate ambiguity still requires operator selection, and an
-    existing discovered agent can be opted in without minting.
+  - Snapshot schema version 4 persists the generated-default or explicitly seeded public name,
+    historical-discovery checkpoint, ignored duplicate IDs, one-use mint authorization when
+    applicable, and latest repair receipt. Version-1 through version-3 records gain exactly one name
+    during explicit migration. The registration-v1 agent URI always uses that persisted name;
+    byte-different on-chain profiles enter the existing funding-aware `SetAgentUri` reconciliation
+    path and resume automatically after the operator supplies Base ETH.
+  - One durable Tentacle has one canonical ERC-8004 identity. Current canonical reads and exact
+    Tentacle evidence classify candidates; shared ownership or wallet alone is insufficient. Among
+    identities proven to be that same Tentacle, the lowest numeric agent ID is canonical and higher
+    duplicates are ignored without mutating their NFTs. A higher persisted binding is repaired
+    automatically to the lower ID and the lower identity is reconciled even when the duplicate has
+    newer metadata. Only genuinely ambiguous identities require operator review.
+  - Every startup directly reverifies its persisted agent and completes historical integrity
+    discovery before XMTP transport starts or any register intent can be prepared. A canonical
+    block/hash checkpoint makes subsequent scans incremental. `DiscoveryIncomplete` is distinct
+    from `VerifiedNoExistingIdentity`: an empty recent 20,000-block refresh, stale index, timeout,
+    pagination/range/rate failure, malformed response, or other uncertainty never authorizes minting.
+    Only complete canonical-start coverage with no existing or ambiguous identity can produce the
+    signer-bound, one-use mint authorization required by `register()`.
+  - A failed startup integrity pass remains closed on later maintenance: neither a stale confirmed
+    binding nor a persisted Register action can be activated, receipt-recovered, or rebroadcast
+    before exhaustive discovery succeeds. Explicit adoption is restricted to the current complete
+    candidate receipt, requires non-wallet Cthuwu/migration evidence and an unchanged direct read,
+    cannot displace a proven canonical identity, and persists crash-safe adoption provenance before
+    starting in-place reconciliation.
   - The first registration-supervisor pass on every boot is an explicit resource audit. It bypasses
     the ordinary notification cooldown for a currently verified Base ETH shortfall and sends the
     sole operator an immediate, exact Base-only funding demand; a recoverable Base RPC blocker gets
@@ -1389,7 +1422,8 @@ phase.
     wrong deployment/interface, read-only behavior, versioned legacy registry migration, durable
     name precedence, and name-only agent-URI repair.
   - [x] The full workspace suite proves every runtime crash/restart stage, lost response, receipt
-    reorg, candidate ambiguity, notification cooldown, and sidecar policy case.
+    reorg, canonical repair, duplicate canonicalization, incomplete-discovery refusal, candidate
+    ambiguity, notification cooldown, and sidecar policy case.
   - [x] A read-only canonical Base smoke test verifies proxies, implementations, code, version, and
     interface in CI or a credentialed release environment without spending funds.
   - [x] A bounded CI integration test forks canonical Base at verified block `41663800`, generates
@@ -1424,9 +1458,12 @@ phase.
   - A Tentacle with a submitted ERC-8004 transaction polls its receipt on a short bounded cadence,
     then advances the remaining profile and discovery-metadata transactions one confirmed nonce at
     a time; it does not wait the ordinary 15-minute steady-state interval between publication steps.
-  - Exact-allegiance identities are grouped by verified nonzero `agentWallet`; the lowest agent ID
-    represents a shared-wallet group and the balance/rank/future influence appears once. Zero balance
-    remains visible as `UNFUNDED`; zero/unverified wallet is separately suspended.
+  - Exact-allegiance identities are grouped by verified nonzero `agentWallet`, then strong current
+    Cthuwu identity evidence distinguishes proven same-Tentacle duplicates from genuinely shared
+    wallets. A proven set renders only its lowest canonical agent ID; UWU, Level, rank, future
+    influence, liveness, assignment, routing, and Branding controller selection count it once.
+    Ambiguous shared-wallet identities retain a warning rather than being silently collapsed. Zero
+    balance remains visible as `UNFUNDED`; zero/unverified wallet is separately suspended.
   - Default rank is exact raw UWU descending, then earliest registration timestamp and lowest agent ID.
     Level is precision-safe `log10(rawBalance) - 18`, with zero having no numeric Level. Future
     Influence is labeled inactive and no voting semantics are invented.
@@ -1441,7 +1478,8 @@ phase.
   - [x] Fixture tests cover Agent0 current metadata, wallet clearing, indexing errors, same-block
     Base verification, direct UWU reads, reputation samples, and hostile response bounds.
   - [x] Browser tests cover precision, raw sorting, cache-first/atomic refresh, partial/error cases,
-    suspended/shared-wallet rendering, sanitization, mobile controls, and offline snapshot display.
+    canonical duplicate collapse, ambiguous shared-wallet rendering, sanitization, liveness and
+    assignment de-duplication, mobile controls, and offline snapshot display.
   - [x] The static production build uses the checked-in hostname/Agent0-subgraph-restricted public
     Graph key; a production-origin query on 2026-08-12 returned Agent0 without indexing errors.
 

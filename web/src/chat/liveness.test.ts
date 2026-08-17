@@ -94,6 +94,7 @@ describe("first-connect Tentacle liveness directory", () => {
       ...snapshot.rankedWallets[2]!.identities[0]!,
       agentId: "30",
       owner: address(130),
+      tentacleId: "ambiguous-other-tentacle",
       profile: { ...snapshot.rankedWallets[2]!.identities[0]!.profile, xmtpEndpoint: `xmtp://${inbox(10)}` },
     };
     snapshot.rankedWallets[2]!.identities.push(duplicate);
@@ -108,6 +109,27 @@ describe("first-connect Tentacle liveness directory", () => {
     expect(selected.map(({ rank }) => rank)).not.toContain(1);
     expect(selected.map(({ rank }) => rank)).not.toContain(2);
     expect(selected.map(({ rank }) => rank)).not.toContain(3);
+  });
+
+  it("counts a proven duplicate registration once and routes only through the lower ID", async () => {
+    const snapshot = directory(1);
+    const canonical = snapshot.rankedWallets[0]!.identities[0]!;
+    snapshot.rankedWallets[0]!.identities.push({
+      ...structuredClone(canonical),
+      agentId: "63846",
+      profile: { ...canonical.profile, name: "Newer duplicate" },
+    });
+    expect(writeLeaderboardCache(localStorage, snapshot)).toBe(true);
+    const selected = await loadLivenessCandidates(
+      config,
+      address(99),
+      "f".repeat(64),
+      localStorage,
+      { now: () => NOW },
+    );
+    expect(selected).toHaveLength(1);
+    expect(selected[0]!.agentId).toBe(canonical.agentId);
+    expect(selected[0]!.name).toBe(canonical.profile.name);
   });
 
   it("performs one complete injected refresh when no hash-bound cache exists and persists it", async () => {

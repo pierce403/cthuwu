@@ -140,7 +140,10 @@ function renderAcolyte(item: AcolyteCatalogItem): HTMLElement {
   const metrics = createElement("dl", "acolyte-metrics");
   appendMetric(metrics, "Acolyte", addressNode(item.acolyte));
   appendMetric(metrics, "Owner", addressNode(item.owner));
-  appendMetric(metrics, "Controller agent", textNode(item.controllerAgentId));
+  // The catalog is an exact Branding-contract audit view. Canonical alias routing requires a
+  // complete directory plus same-block registry verification and is performed by chat assignment;
+  // never relabel this immutable stored value from an unauthoritative browser cache.
+  appendMetric(metrics, "Stored on-chain controller", textNode(item.controllerAgentId));
   appendMetric(metrics, "Referrer", addressNode(item.referrer));
   appendMetric(metrics, "Declared price", textNode(formatUwu(item.declaredPrice)));
   appendMetric(metrics, "Paid through", timeNode(item.paidThrough));

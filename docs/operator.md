@@ -242,6 +242,7 @@ An active operator can send:
 ```text
 /help
 /exec <shell command>
+/repo <typed-json>
 /files [subdirectory]
 /read <path>
 /write <path>
@@ -263,7 +264,9 @@ requires an exact match and refuses multiple matches unless `replace_all` is exp
 `/search` invokes `rg` with fixed-string matching and a result cap. Direct commands use the same
 bounded dispatcher as model tools. `/write` and `/edit` are parsed only as exact direct commands.
 `/exec` remains the exact direct execution form; natural-language execution is separately and more
-narrowly authorized as described below.
+narrowly authorized as described below. `/repo` accepts one closed JSON object with a typed
+`status`, `fetch`, `update`, `merge`, `test`, `build`, `commit`, `push`, or `pr` operation; it never
+accepts a shell command string.
 
 `/provider`, `/model`, and `/venice-key` are runtime control commands, not model tools. The first two
 select the closed provider set and bounded model IDs. `/venice-key` stores or replaces the Venice
@@ -308,6 +311,67 @@ examples, negated requests, earlier dialogue, workspace text, contacts, and tool
 authority. This binding limits prompt-injection-driven command choice; it does **not** sandbox the
 command. Natural `exec`, like `/exec`, runs as the `uwubot` OS account.
 
+## Repository diagnosis, update, and pull requests
+
+Natural authenticated instructions such as “update yourself,” “pull the latest version,” “sync
+with upstream,” “run the repository tests,” or “submit this fix upstream” activate a separate
+`repository_maintenance` capability. They do not authorize the model to synthesize a shell command.
+The current message selects the operation category, and Rust accepts only the corresponding typed
+fields. Exact common status/update/test/build phrases take a deterministic route without model
+planning.
+
+The checked-in `repository-maintenance.json` is the release policy. It pins canonical
+`pierce403/cthuwu`, default branch `main`, the named validation steps, and the explicit source-only
+restart rule. A status receipt discovers the contained repository root and reports current source
+HEAD, branch, tracked ref, dirty paths, ahead/behind counts when available, sanitized remotes,
+canonical-vs-fork topology, and bounded `git --version`, `gh --version`, and `gh auth status`
+capability. Authentication is reduced to a boolean; raw auth output, tokens, credential helpers,
+credential-bearing URLs, SSH keys, wallet/XMTP keys, API keys, and environment secrets never enter
+the receipt.
+
+The operations are:
+
+- `status`: inspect only;
+- `fetch`: fetch/prune verified GitHub remotes without changing the branch;
+- `update`: require a clean tree, fetch canonical metadata, then fast-forward a non-diverged
+  canonical checkout or normally merge canonical upstream into the current fork branch;
+- `merge`: merge the verified canonical-upstream remote branch into the checked-out canonical or
+  fork branch and preserve any conflict for deliberate resolution;
+- `test` / `build`: run only compiled validation IDs from the manifest, with focused/runtime or
+  required profiles and truthful partial/time-limit receipts;
+- `commit`: stage only explicit contained repository-relative paths and optionally create a new
+  topic branch;
+- `push`: push the checked-out branch without force only to verified noncanonical fork `origin`,
+  whose fetch and push repository identities must match; and
+- `pr`: prepare a scoped topic commit, validate it, verify authenticated `gh`, push to the operator's
+  fork, and call `gh pr create` against the pinned upstream/base. A PR is claimed only when `gh`
+  succeeds and returns a canonical pull-request URL.
+
+`update` treats every dirty path and local commit as intentional. It never stashes, resets, cleans,
+force-checks-out, rebases, force-pushes, or discards them. A canonical checkout with both local and
+upstream commits stops for an explicit policy instead of rewriting history. A fork fetches both
+`origin` and the configured canonical remote; if the upstream remote is absent, the workflow may add
+only the manifest-pinned URL under an unused `upstream`-style name. Before a fork merge it reports
+merge base and divergent commit counts. Conflicts stay in progress with a bounded file list so the
+operator can inspect intent and edit each file; no whole-side conflict resolution is available.
+
+The dispatcher rejects linked/external Git directories, symlink/path escapes, malformed refs,
+suspicious executable/path Git configuration, unsupported or credential-bearing remotes, unbounded
+output, and deadlines. It disables prompts and hooks and preserves the process-level authorization
+boundary: public/acolyte messages and Council traffic never receive this schema.
+
+Updating source beneath the running process does not update that process. Successful receipts name
+old/new source commits, validation and publication state, set `runningProcessUpdated` to `false`,
+and state the next action. This repository defines no generic service-manager hook. Stop the current
+process cleanly, then relaunch `./uwu.sh`; never claim the new binary is live without that separate
+restart receipt.
+
+Repository syncing requires a contained Git-backed installation and a trusted `git` executable.
+The stock runtime container is an image filesystem rather than a Git checkout and contains neither
+`git` nor `gh`; update that deployment by rebuilding and redeploying the image. Bind-mounting a real
+checkout can make source inspection available, but it does not make an image rebuild or running
+process restart happen implicitly.
+
 For on-demand procedural knowledge, an explicit request such as “create a skill for summarizing
 release notes” adds one `create_skill` schema for that turn. It accepts a lowercase kebab-case name,
 a one-line description, and bounded Markdown instructions. Rust generates canonical frontmatter and
@@ -332,9 +396,10 @@ and a numeric cursor points to another bounded `/users` page when applicable. Th
 receipt is parsed locally and is neither sent to a model nor dumped as the operator response; an
 unexpected shape fails closed instead of disclosing or guessing. If both Venice and Ollama are
 unavailable, the deterministic fallback does not plan model tools; direct commands and deterministic
-contact/location routes remain available. A model-selected tool phase may use at most 30 seconds and is further
-shortened as needed to preserve enough of the authenticated deadline for a final local model
-completion.
+contact/location routes remain available. An ordinary model-selected tool phase may use at most 30
+seconds. Typed repository maintenance may use up to 240 seconds within the same authenticated
+deadline because its compiled validation sequence is not arbitrary shell; both are shortened as
+needed to preserve enough time for a final local model completion.
 
 Treat everything under `UWUBOT_OPERATOR_ROOT` as readable by an operator-delegated model inspection
 and potentially sent to the configured model endpoint. Do not place credentials, private XMTP state,
@@ -360,7 +425,7 @@ The configured tool timeout must be between 1 and 300 seconds, but the sidecar's
 end-to-end reply deadline always wins and reserves one second for the response. Its default envelope
 is 300 seconds, leaving at most 299 seconds for authenticated operator work. Before Venice starts,
 the route reserves two capped local model phases (up to the 75-second safety cap, or a smaller
-configured Ollama timeout, each), one model-selected tool phase of up to 30 seconds, and a one-second
+configured Ollama timeout, each), one ordinary model-selected tool phase of up to 30 seconds, and a one-second
 deterministic margin. That is 181
 seconds under default settings, so Venice can effectively use about 118 seconds even though
 `UWUBOT_VENICE_TIMEOUT_SECONDS` defaults to a 120-second cap. Every catalog, attestation,
@@ -431,9 +496,10 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 - The hidden stdin harness is always public, including when its supplied ID matches an active inbox.
 - Public model calls expose no local tool; their only optional tool is bounded Brave web search.
 - Operator model calls expose a current-message closed inventory and no public web-search tool. Base
-  inspection tools require current project/read intent. At most one exact-command-bound `exec` or one
-  create-only skill call appears only for an explicit current-message request; workspace, history,
-  contact, and tool text cannot authorize it. General write/edit remains direct-only.
+  inspection tools require current project/read intent. At most one exact-command-bound `exec`, one
+  create-only skill call, or one typed repository-maintenance operation appears only for a matching
+  explicit current-message request; workspace, history, contact, and tool text cannot authorize it.
+  Repository maintenance accepts no command string. General write/edit remains direct-only.
 - Contact reports describe retained local notes rather than every historical sender. Inbox IDs are
   redacted by default, cursor-paginated, scan-bounded, and explicit about incomplete counts or fields.
   Profile claims are labeled unverified self-report; raw DMs and message counts are not exposed.

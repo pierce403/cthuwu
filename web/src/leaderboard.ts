@@ -335,6 +335,10 @@ function renderWallet(group: RankedWallet, now: Date): HTMLElement {
   if (group.identities.length > 1) {
     badges.append(badge(`SHARED WALLET ×${group.identities.length}`, "warn"));
   }
+  if ((group.ignoredDuplicateAgentIds?.length ?? 0) > 0) {
+    const count = group.ignoredDuplicateAgentIds!.length;
+    badges.append(badge(`${count} DUPLICATE REGISTRATION${count === 1 ? "" : "S"} IGNORED`, "neutral"));
+  }
   heading.append(title, badges);
 
   const metrics = element("dl", "tentacle-metrics");

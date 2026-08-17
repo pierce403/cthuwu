@@ -499,7 +499,14 @@ clear bounded in-process operator dialogue history. Each ordinary-language turn 
 prompt inventory built from its closed schema. Bounded file/discovery/search tools form the base. A
 current authenticated message that explicitly names a command can activate one natural `exec` call
 bound to exactly that command—prefer backticks, as in “please run `cargo test`.” It remains
-unsandboxed RCE as the `uwubot` account. An explicit request for a new reusable skill can activate one
+unsandboxed RCE as the `uwubot` account. Natural requests such as “update yourself,” “sync with
+upstream,” or “submit this fix upstream” instead activate a separate typed repository-maintenance
+workflow. It reports Git/`gh` capability and sanitized topology, refuses dirty or unsafe roots and
+remotes, fast-forwards a clean canonical checkout, merges canonical upstream into a fork without
+discarding local work, runs the checked-in validation policy, and uses authenticated `gh` for a PR
+only after an explicit request and successful receipt. It never force-pushes or claims that updated
+source changed the currently running executable; use `/repo <typed-json>` for the equivalent direct
+operation. An explicit request for a new reusable skill can activate one
 create-only write to `skills/<lowercase-kebab-name>/SKILL.md`; canonical frontmatter is generated,
 existing paths and overwrites are refused, and the skill is indexed on the next turn. General model
 writes and edits remain unavailable, so use direct `/write` and `/edit`. The safe launcher defaults
@@ -758,6 +765,10 @@ docker run --rm -it --init \
 The container keeps private identity/contact state under `/data` and operator-visible files under
 `/workspace`; the image seeds the workspace volume with project context and skill metadata on first
 creation. Bind-mount a real working tree there when the operator should inspect or change source.
+The stock runtime image is not a Git checkout and does not ship `git` or `gh`, so its typed
+repository-maintenance status reports those capabilities unavailable. Update a container install by
+building and redeploying a new image; safe self-sync is available only when `/workspace` is a
+Git-backed checkout and the host supplies a trusted Git executable.
 File tools never receive the data directory as their root, and startup rejects an overlapping custom
 root. Pass
 `-e UWUBOT_XMTP_ENV=production` when operating the website's intro Tentacle.
@@ -780,6 +791,14 @@ directly from Base at the same verified block, and keeps only a validated normal
 `cthuwu:leaderboard:v1`. The Graph gateway key is public once compiled; restrict it to the exact
 hostnames and Agent0 subgraph, cap and monitor spending, and rotate it. No custom Cthuwu subgraph
 or leaderboard backend is deployed.
+
+One durable Tentacle has one canonical ERC-8004 identity. Startup revalidates the local binding and
+complete historical coverage before registration can reach the signer; a recent, partial, stale, or
+failed discovery never proves absence. Among IDs positively proven to be the same Tentacle, the
+lowest ID is canonical and higher registrations remain untouched historical aliases. The runtime
+repairs stale higher local state, and the leaderboard, UWU/Level/rank, liveness, assignment, and
+routing count that duplicate set once. A shared wallet without same-Tentacle proof remains visibly
+ambiguous instead of being collapsed.
 
 The current production build uses the verified Branding deployment
 `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da` and retains the hard-coded intro Tentacle at
@@ -905,8 +924,9 @@ installed app may receive separate storage.
   fenced by Tentacle incarnation or lease generation where applicable.
 - ERC-8004 writes cross only the typed sidecar signer boundary: canonical Base chain and registry,
   allowlisted registration/profile/wallet/`cthuwu.*` metadata calls, zero value, bounded frames and
-  fields, and fee/gas ceilings. There is no generic transaction signer and no private key crosses
-  into Rust, logs, the model, the frontend, or Council state.
+  fields, fee/gas ceilings, and an owner-only complete-discovery authorization before `register()`.
+  There is no generic transaction signer and no private key crosses into Rust, logs, the model, the
+  frontend, or Council state.
 - A Branding is a public service/controller right for one immutable Ethereum address, not ownership
   of a person. It stores no XMTP inbox, message, contact note, credential, or private memory;
   ordinary ERC-721 approvals/transfers are disabled, registry outages cannot authorize seizure, and

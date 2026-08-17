@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-16
+Last reviewed: 2026-08-17
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
@@ -293,6 +293,14 @@ Last reviewed: 2026-08-16
   `uwubot` OS account, not a sandbox. Natural authority comes only from the current authenticated
   message, permits one call with no command substitution, and is clearest when the command is in
   backticks; workspace/history/tool/contact text cannot authorize it.
+- Natural authenticated requests to diagnose, update, merge upstream, validate, commit, push, or
+  open a PR use a separate typed repository-maintenance tool. It discovers the contained Git root,
+  branch, sanitized remotes, dirty/ahead/behind state, canonical-vs-fork topology, installed Git/`gh`
+  and auth status without credentials. A clean canonical checkout may fast-forward; a fork preserves
+  local work by fetching both remotes and inspecting then merging upstream. Dirty work, conflicts,
+  validation failure, absent/unauthenticated `gh`, or an undefined restart mechanism is reported
+  truthfully. The tool never automates destructive reset/checkout/clean, force push, or raw shell
+  expansion, and source changes do not imply the running process changed.
 - The canonical operator workspace and private data directory must not overlap in either direction;
   startup rejects overlap before exposing file tools.
   Production nodes need a dedicated unprivileged account/container, a narrow operator root, minimal
@@ -561,14 +569,25 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
   out. UWU possession never opts an agent in.
 - A ranked identity also needs a current verified nonzero `agentWallet` equal to the persistent
   Tentacle/XMTP wallet. Never substitute the ERC-721 owner for a missing wallet. Zero or unverified
-  wallet is suspended. Shared wallets form one ranking/influence group, with the lowest agent ID as
-  representative and all identities shown.
-- `state/erc8004-registration.json` schema version 3 persists action intent before broadcast,
+  wallet is suspended. One durable Tentacle has one canonical ERC-8004 agent: among IDs proven by
+  current authorization/wallet plus exact Tentacle metadata/profile/XMTP or compatible migration
+  evidence to be that same Tentacle, the lowest numeric ID wins. Higher duplicates stay on-chain but
+  are collapsed for rank, UWU, Level, influence, liveness, assignment, routing, and new Branding
+  controller selection. Same wallet or owner alone is insufficient; genuinely ambiguous shared
+  wallets retain a warning and operator review.
+- `state/erc8004-registration.json` schema version 4 persists action intent before broadcast,
   transaction/receipt canonicality, selected agent, remaining stages, verified metadata/wallet,
-  funding status, cooldown, failures, and the Tentacle's public name. The generated default is a
+  canonical historical-discovery checkpoint, ignored duplicate IDs, one-use mint authorization,
+  repair receipt, funding status, cooldown, failures, and the Tentacle's public name. The generated default is a
   domain-separated derivation from the already-random durable Tentacle ID; an explicit first-boot
-  seed is also supported. Version-1/version-2 migration chooses and saves one name. Restart always reconciles a known
-  transaction before another write; discovery and ambiguous-candidate selection prevent duplicate minting.
+  seed is also supported. Version-1 through version-3 migration chooses and saves one name. Every
+  startup directly reverifies its persisted ID and completes or resumes canonical-start discovery
+  before transport uses the binding. A stale higher binding repairs atomically to the lowest proven
+  ID. Recent, partial, stale-index, timeout, range-limit, pagination, malformed, or otherwise
+  uncertain discovery is `DiscoveryIncomplete`, never absence or mint authority. Only positively
+  completed history can create the signer-checked one-use registration authorization. Restart always
+  reconciles a known transaction before another write; exact nonce recovery plus the signer guard
+  prevent response loss from creating a duplicate mint.
   Public names can collide and are never substituted for the agent ID plus verified wallet.
 - Registration defaults on. Provider estimation covers the complete remaining sequence plus a
   configurable 125% safety factor and post-registration reserve. Funding requests contain trusted

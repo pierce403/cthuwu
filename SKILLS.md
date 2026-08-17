@@ -11,6 +11,16 @@ Skills are reusable procedures, not general project notes.
 - [ERC-8004 registration](skills/erc8004-registration/SKILL.md): inspect, refresh, recover, and
   truthfully explain the Tentacle's canonical Base agent registration.
 - [XMTP end-to-end verification](skills/xmtp-e2e/SKILL.md): validate a browser-to-local-runtime message exchange without leaking secrets.
+- [System maintenance](skills/system-maintenance/SKILL.md): diagnose this Tentacle's checkout,
+  version, tools, and safe repair/update path.
+- [Safe Git maintenance](skills/git-maintenance/SKILL.md): use the typed Git dispatcher without
+  destructive history or model-generated shell.
+- [Fork maintenance](skills/fork-maintenance/SKILL.md): merge canonical upstream into a long-lived
+  operator fork while preserving fork work.
+- [GitHub pull requests](skills/github-pr/SKILL.md): prepare, validate, push, and submit a real
+  upstream PR when authenticated `gh` is available.
+- [Repository validation](skills/repository-validation/SKILL.md): run compiled focused/required test
+  and build profiles with truthful resumable receipts.
 
 ## Skill maintenance
 

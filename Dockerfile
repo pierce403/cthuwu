@@ -10,6 +10,7 @@ RUN npm run build && npm prune --omit=dev
 
 FROM rust:1.97-bookworm AS rust-build
 WORKDIR /build/cthuwu
+COPY repository-maintenance.json /build/repository-maintenance.json
 COPY cthuwu/Cargo.toml cthuwu/Cargo.lock ./
 COPY cthuwu/crates ./crates
 COPY cthuwu/agent-files ./agent-files

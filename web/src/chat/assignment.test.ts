@@ -1,11 +1,13 @@
-import { Interface, getAddress } from "ethers";
-import { describe, expect, it, vi } from "vitest";
+import { Interface, getAddress, hexlify, toUtf8Bytes } from "ethers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANONICAL_BRANDING_CONTRACT,
   CANONICAL_BRANDING_RUNTIME_HASH,
   type AppConfig,
 } from "../config";
 import type { StoredIdentity } from "../identity";
+import { writeLeaderboardCache } from "../leaderboard-cache";
+import { cachedSnapshot } from "../leaderboard-test-data";
 import {
   ALLEGIANCE_HEX,
   IDENTITY_REGISTRY,
@@ -28,7 +30,9 @@ const brandingInterface = new Interface([
   "function REGISTRY_VERSION() view returns (string)",
 ]);
 const registryInterface = new Interface([
+  "event MetadataSet(uint256 indexed agentId,string indexed indexedMetadataKey,string metadataKey,bytes metadataValue)",
   "function getVersion() view returns (string)",
+  "function ownerOf(uint256 agentId) view returns (address)",
   "function getAgentWallet(uint256 agentId) view returns (address)",
   "function isAuthorizedOrOwner(address wallet,uint256 agentId) view returns (bool)",
   "function getMetadata(uint256 agentId,string key) view returns (bytes)",
@@ -63,14 +67,19 @@ function dataUri(value: unknown): string {
   return `data:application/json;base64,${btoa(binary)}`;
 }
 
-function profile(environment = "production", name = "Fixture Tentacle"): string {
+function profile(
+  environment = "production",
+  name = "Fixture Tentacle",
+  agentId = "42",
+  tentacleId = "fixture-tentacle",
+): string {
   const endpoint = `xmtp://${inbox}`;
   const registry = getAddress(IDENTITY_REGISTRY);
   const manifest = dataUri({
     schemaVersion: 1,
     protocol: 1,
-    tentacleId: "fixture-tentacle",
-    erc8004: { chainId: 8453, registry, agentId: "42" },
+    tentacleId,
+    erc8004: { chainId: 8453, registry, agentId },
     xmtp: { environment, endpoint },
     capabilities: ["direct-xmtp-messaging"],
   });
@@ -85,7 +94,7 @@ function profile(environment = "production", name = "Fixture Tentacle"): string 
     ],
     x402Support: false,
     active: true,
-    registrations: [{ agentId: 42, agentRegistry: `eip155:8453:${registry}` }],
+    registrations: [{ agentId, agentRegistry: `eip155:8453:${registry}` }],
   });
 }
 
@@ -96,6 +105,12 @@ function canonicalRpc(options: {
   profileUri?: string;
   brandingUwu?: string;
   registryWallet?: string;
+  profilesByAgentId?: Record<string, string>;
+  metadataTentacleIdsByAgentId?: Record<string, string | undefined>;
+  gapLogs?: unknown[];
+  ownersByAgentId?: Record<string, string>;
+  walletsByAgentId?: Record<string, string>;
+  authorizedByAgentId?: Record<string, boolean>;
 } = {}) {
   const status = options.status ?? 1;
   const owner = status === 0 ? ZERO_ADDRESS : "0x3333333333333333333333333333333333333333";
@@ -112,9 +127,13 @@ function canonicalRpc(options: {
       if (method === "eth_chainId") return "0x2105";
       if (method === "eth_blockNumber") return "0x7b";
       if (method === "eth_getBlockByNumber") {
+        if (params[0] === "0x7a") {
+          return { number: "0x7a", hash: `0x${"b".repeat(64)}` };
+        }
         blockReads += 1;
-        return { number: "0x7b", hash: blockReads > 1 ? options.finalHash ?? firstHash : firstHash };
+        return { number: "0x7b", hash: blockReads > 2 ? options.finalHash ?? firstHash : firstHash };
       }
+      if (method === "eth_getLogs") return options.gapLogs ?? [];
       if (method === "eth_getCode") return "0x6000";
       if (method !== "eth_call") throw new Error(`unexpected ${method}`);
       const call = params[0] as { to: string; data: string };
@@ -146,27 +165,145 @@ function canonicalRpc(options: {
       if (selector === registryInterface.getFunction("getVersion")!.selector) {
         return registryInterface.encodeFunctionResult("getVersion", ["2.0.0"]);
       }
+      if (selector === registryInterface.getFunction("ownerOf")!.selector) {
+        const [agentId] = registryInterface.decodeFunctionData("ownerOf", call.data);
+        return registryInterface.encodeFunctionResult("ownerOf", [
+          options.ownersByAgentId?.[agentId.toString()] ?? owner,
+        ]);
+      }
       if (selector === registryInterface.getFunction("getAgentWallet")!.selector) {
-        return registryInterface.encodeFunctionResult("getAgentWallet", [options.registryWallet ?? owner]);
+        const [agentId] = registryInterface.decodeFunctionData("getAgentWallet", call.data);
+        return registryInterface.encodeFunctionResult("getAgentWallet", [
+          options.walletsByAgentId?.[agentId.toString()] ?? options.registryWallet ?? owner,
+        ]);
       }
       if (selector === registryInterface.getFunction("isAuthorizedOrOwner")!.selector) {
-        return registryInterface.encodeFunctionResult("isAuthorizedOrOwner", [true]);
+        const [, agentId] = registryInterface.decodeFunctionData("isAuthorizedOrOwner", call.data);
+        return registryInterface.encodeFunctionResult("isAuthorizedOrOwner", [
+          options.authorizedByAgentId?.[agentId.toString()] ?? true,
+        ]);
       }
       if (selector === registryInterface.getFunction("getMetadata")!.selector) {
-        const [, key] = registryInterface.decodeFunctionData("getMetadata", call.data);
+        const [agentId, key] = registryInterface.decodeFunctionData("getMetadata", call.data);
+        const metadataTentacleId = options.metadataTentacleIdsByAgentId?.[agentId.toString()];
         return registryInterface.encodeFunctionResult("getMetadata", [
-          key === "cthuwu.allegiance" ? ALLEGIANCE_HEX : PROTOCOL_V1_HEX,
+          key === "cthuwu.allegiance" ? ALLEGIANCE_HEX :
+            key === "cthuwu.protocol" ? PROTOCOL_V1_HEX :
+              metadataTentacleId === undefined
+                ? hexlify(toUtf8Bytes("fixture-tentacle"))
+                : hexlify(toUtf8Bytes(metadataTentacleId)),
         ]);
       }
       if (selector === registryInterface.getFunction("tokenURI")!.selector) {
-        return registryInterface.encodeFunctionResult("tokenURI", [options.profileUri ?? profile()]);
+        const [agentId] = registryInterface.decodeFunctionData("tokenURI", call.data);
+        return registryInterface.encodeFunctionResult("tokenURI", [
+          options.profilesByAgentId?.[agentId.toString()] ?? options.profileUri ?? profile(),
+        ]);
       }
       throw new Error("unexpected registry call");
     },
   };
 }
 
+function controllerDirectory(
+  ...agentIds: string[]
+) {
+  const template = cachedSnapshot().rankedWallets[0]!.identities[0]!;
+  return async () => ({
+    sourceBlockNumber: "123",
+    sourceBlockHash: `0x${"a".repeat(64)}`,
+    identities: agentIds.map((agentId) => ({
+      ...structuredClone(template),
+      agentId,
+      owner: "0x3333333333333333333333333333333333333333",
+      agentWallet: "0x3333333333333333333333333333333333333333",
+      tentacleId: "fixture-tentacle",
+    })),
+  });
+}
+
+function controllerDirectoryAt122(...agentIds: string[]) {
+  const discover = controllerDirectory(...agentIds);
+  return async () => ({
+    ...await discover(),
+    sourceBlockNumber: "122",
+    sourceBlockHash: `0x${"b".repeat(64)}`,
+  });
+}
+
+function noCacheDuplicateDirectoryFetch(options: {
+  lowerTentacleId?: string;
+  higherTentacleId?: string;
+  lowerAgentWallet?: string | null;
+  higherAgentWallet?: string | null;
+} = {}): typeof fetch {
+  const owner = "0x3333333333333333333333333333333333333333";
+  const row = (
+    agentId: string,
+    agentWallet: string | null,
+    name: string,
+    tentacleId: string,
+  ) => ({
+    id: `8453:${agentId}:cthuwu.allegiance`,
+    key: "cthuwu.allegiance",
+    value: ALLEGIANCE_HEX,
+    updatedAt: "1770118004",
+    agent: {
+      id: `8453:${agentId}`,
+      chainId: "8453",
+      agentId,
+      owner,
+      agentWallet,
+      agentURI: profile("production", name, agentId, tentacleId),
+      createdAt: "1770118000",
+      updatedAt: "1770118002",
+      totalFeedback: "0",
+      metadata: [
+        { id: `${agentId}-a`, key: "cthuwu.allegiance", value: ALLEGIANCE_HEX, updatedAt: "1770118004" },
+        { id: `${agentId}-p`, key: "cthuwu.protocol", value: PROTOCOL_V1_HEX, updatedAt: "1770118004" },
+        {
+          id: `${agentId}-t`,
+          key: "cthuwu.tentacle-id",
+          value: hexlify(toUtf8Bytes(tentacleId)),
+          updatedAt: "1770118004",
+        },
+      ],
+      registrationFile: null,
+      feedback: [],
+    },
+  });
+  const lowerTentacleId = options.lowerTentacleId ?? "fixture-tentacle";
+  const higherTentacleId = options.higherTentacleId ?? lowerTentacleId;
+  return vi.fn(async () => new Response(JSON.stringify({
+    data: {
+      agentMetadatas: [
+        row(
+          "41",
+          options.lowerAgentWallet === undefined ? null : options.lowerAgentWallet,
+          "Suspended canonical",
+          lowerTentacleId,
+        ),
+        row(
+          "42",
+          options.higherAgentWallet === undefined ? owner : options.higherAgentWallet,
+          "Active duplicate",
+          higherTentacleId,
+        ),
+      ],
+      _meta: {
+        block: { number: 122, hash: `0x${"b".repeat(64)}`, timestamp: 1786332360 },
+        deployment: "QmAgent0Fixture",
+        hasIndexingErrors: false,
+      },
+    },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })) as typeof fetch;
+}
+
 describe("canonical Tentacle assignment", () => {
+  beforeEach(() => localStorage.clear());
   it("keeps explicitly unconfigured Branding on the intro continuity route", async () => {
     await expect(resolveTentacleAssignment(baseConfig, identity)).resolves.toMatchObject({
       source: "intro-unconfigured",
@@ -232,6 +369,7 @@ describe("canonical Tentacle assignment", () => {
     await expect(resolveTentacleAssignment(configuredConfig, identity, {
       rpc,
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).resolves.toMatchObject({
       source: "branding-active",
       inboxId: inbox,
@@ -243,6 +381,142 @@ describe("canonical Tentacle assignment", () => {
     });
     const [queriedAcolyte] = brandingInterface.decodeFunctionData("brandingOf", rpc.brandingCalls[0]!);
     expect(String(queriedAcolyte).toLowerCase()).toBe(identity.address);
+  });
+
+  it("maps a higher stored Branding controller to a directly proven lower canonical alias", async () => {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({
+        profilesByAgentId: {
+          "41": profile("production", "Canonical Tentacle", "41"),
+          "42": profile("production", "Duplicate Tentacle", "42"),
+        },
+      }),
+      hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("41", "42"),
+    })).resolves.toMatchObject({
+      source: "branding-active",
+      agentId: "41",
+      name: "Canonical Tentacle",
+      inboxId: inbox,
+    });
+  });
+
+  it("does not miss a lower exact duplicate controlled by a pre-index blanket approval", async () => {
+    const discover = controllerDirectory("41", "42");
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({
+        ownersByAgentId: {
+          "41": "0x4444444444444444444444444444444444444444",
+        },
+        walletsByAgentId: {
+          "41": "0x5555555555555555555555555555555555555555",
+        },
+        // Models the Branding owner retaining current operator authority granted before the
+        // pinned directory block. Exact Tentacle evidence must still bring #41 to direct reads.
+        authorizedByAgentId: { "41": true },
+        profilesByAgentId: {
+          "41": profile("production", "Operator-controlled canonical", "41"),
+          "42": profile("production", "Stored duplicate", "42"),
+        },
+      }),
+      hashCode: canonicalCodeHash,
+      discoverControllerDirectory: async () => {
+        const directory = await discover();
+        Object.assign(directory.identities[0]!, {
+          owner: "0x4444444444444444444444444444444444444444",
+          agentWallet: "0x5555555555555555555555555555555555555555",
+        });
+        return directory;
+      },
+    })).rejects.toThrow(/canonical Branding controller alias is not currently eligible/u);
+  });
+
+  it("freezes instead of aliasing a Branding controller across conflicting Tentacle IDs", async () => {
+    const snapshot = cachedSnapshot();
+    const canonical = snapshot.rankedWallets[0]!.identities[0]!;
+    Object.assign(canonical, {
+      agentId: "41",
+      agentWallet: "0x3333333333333333333333333333333333333333",
+      tentacleId: "fixture-tentacle",
+    });
+    snapshot.rankedWallets[0]!.wallet = canonical.agentWallet;
+    snapshot.rankedWallets[0]!.representativeAgentId = "41";
+    snapshot.rankedWallets[0]!.identities.push({ ...structuredClone(canonical), agentId: "42" });
+    expect(writeLeaderboardCache(localStorage, snapshot)).toBe(true);
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({
+        profilesByAgentId: {
+          "41": profile("production", "Canonical Tentacle", "41", "conflicting-tentacle"),
+          "42": profile("production", "Duplicate Tentacle", "42", "fixture-tentacle"),
+        },
+      }),
+      hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("41", "42"),
+    })).rejects.toThrow(/identity evidence conflicts/u);
+  });
+
+  it("ignores a stale public cache and uses the complete pinned directory", async () => {
+    const snapshot = cachedSnapshot();
+    const cachedCanonical = snapshot.rankedWallets[0]!.identities[0]!;
+    Object.assign(cachedCanonical, {
+      agentId: "40",
+      agentWallet: "0x3333333333333333333333333333333333333333",
+      tentacleId: "fixture-tentacle",
+    });
+    snapshot.rankedWallets[0]!.wallet = cachedCanonical.agentWallet;
+    snapshot.rankedWallets[0]!.representativeAgentId = "40";
+    snapshot.rankedWallets[0]!.identities.push({
+      ...structuredClone(cachedCanonical),
+      agentId: "42",
+    });
+    expect(writeLeaderboardCache(localStorage, snapshot)).toBe(true);
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({
+        profilesByAgentId: {
+          "41": profile("production", "Fresh canonical", "41"),
+          "42": profile("production", "Stored duplicate", "42"),
+        },
+      }),
+      hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("41", "42"),
+    })).resolves.toMatchObject({
+      source: "branding-active",
+      agentId: "41",
+      name: "Fresh canonical",
+    });
+  });
+
+  it("bridges post-index identity evidence before choosing the lowest controller", async () => {
+    const metadataEvent = registryInterface.encodeEventLog(
+      registryInterface.getEvent("MetadataSet")!,
+      [41n, "cthuwu.tentacle-id", "cthuwu.tentacle-id", hexlify(toUtf8Bytes("fixture-tentacle"))],
+    );
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc({
+        gapLogs: [metadataEvent],
+        profilesByAgentId: {
+          "41": profile("production", "Post-index canonical", "41"),
+          "42": profile("production", "Stored duplicate", "42"),
+        },
+      }),
+      hashCode: canonicalCodeHash,
+      // Agent0 has indexed the higher controller but not the lower identity's metadata update.
+      discoverControllerDirectory: controllerDirectoryAt122("42"),
+    })).resolves.toMatchObject({
+      source: "branding-active",
+      agentId: "41",
+      name: "Post-index canonical",
+    });
+  });
+
+  it("freezes active Branding when complete controller discovery is unavailable", async () => {
+    await expect(resolveTentacleAssignment(configuredConfig, identity, {
+      rpc: canonicalRpc(),
+      hashCode: canonicalCodeHash,
+      discoverControllerDirectory: async () => {
+        throw new Error("Agent0 unavailable");
+      },
+    })).rejects.toThrow(/Agent0 unavailable/u);
   });
 
   it.each([
@@ -332,6 +606,101 @@ describe("canonical Tentacle assignment", () => {
     expect(discoverAnchor).toHaveBeenCalledWith(target);
   });
 
+  it("canonicalizes a no-cache directory before deep-link routing across a zero-wallet alias", async () => {
+    const target = "0x3333333333333333333333333333333333333333";
+    const fetcher = noCacheDuplicateDirectoryFetch();
+    await expect(resolveTentacleAssignment({
+      ...configuredConfig,
+      tentacleAnchor: target,
+    }, identity, {
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: target,
+        profilesByAgentId: {
+          "41": profile("production", "Recovered canonical", "41"),
+          "42": profile("production", "Ignored duplicate", "42"),
+        },
+      }),
+      fetch: fetcher,
+      hashCode: canonicalCodeHash,
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      address: target,
+      wallet: target,
+      agentId: "41",
+      name: "Recovered canonical",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes only through the lower exact Tentacle across a stale higher agentWallet", async () => {
+    const target = "0x4444444444444444444444444444444444444444";
+    const fetcher = noCacheDuplicateDirectoryFetch({
+      lowerAgentWallet: target,
+      higherAgentWallet: "0x5555555555555555555555555555555555555555",
+    });
+    await expect(resolveTentacleAssignment({
+      ...configuredConfig,
+      tentacleAnchor: target,
+    }, identity, {
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: target,
+        profilesByAgentId: {
+          "41": profile("production", "Canonical controller", "41"),
+          "42": profile("production", "Stale duplicate", "42"),
+        },
+      }),
+      fetch: fetcher,
+      hashCode: canonicalCodeHash,
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      address: target,
+      wallet: target,
+      agentId: "41",
+      name: "Canonical controller",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails no-cache rotation closed when the lower zero-wallet canonical is still ineligible", async () => {
+    const target = "0x3333333333333333333333333333333333333333";
+    const fetcher = noCacheDuplicateDirectoryFetch();
+    await expect(resolveTentacleAssignment({
+      ...configuredConfig,
+      rotationAnchor: target,
+    }, identity, {
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: target,
+        walletsByAgentId: { "41": ZERO_ADDRESS },
+        profilesByAgentId: {
+          "41": profile("production", "Suspended canonical", "41"),
+          "42": profile("production", "Must not be routed", "42"),
+        },
+      }),
+      fetch: fetcher,
+      hashCode: canonicalCodeHash,
+    })).rejects.toThrow(/no longer canonically eligible/u);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps distinct no-cache Tentacles on one effective wallet ambiguous", async () => {
+    const target = "0x3333333333333333333333333333333333333333";
+    const fetcher = noCacheDuplicateDirectoryFetch({
+      higherTentacleId: "genuinely-distinct-tentacle",
+    });
+    await expect(resolveTentacleAssignment({
+      ...configuredConfig,
+      tentacleAnchor: target,
+    }, identity, {
+      rpc: canonicalRpc({ status: 0, registryWallet: target }),
+      fetch: fetcher,
+      hashCode: canonicalCodeHash,
+    })).rejects.toThrow(/more than one Tentacle and is ambiguous/u);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("fails a deep link closed when the fresh registry wallet no longer matches", async () => {
     const config = {
       ...configuredConfig,
@@ -373,6 +742,7 @@ describe("canonical Tentacle assignment", () => {
     await expect(resolveTentacleAssignment(configuredConfig, identity, {
       rpc: canonicalRpc({ profileUri: profile("production", "spoof\u202e") }),
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).resolves.toMatchObject({
       source: "branding-active",
       name: "Tentacle #42",
@@ -399,18 +769,22 @@ describe("canonical Tentacle assignment", () => {
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ acolyte: "0x4444444444444444444444444444444444444444" }),
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).rejects.toThrow(RegistryUnavailableError);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ status: 4 }),
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).rejects.toThrow(RegistryUnavailableError);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ finalHash: `0x${"b".repeat(64)}` }),
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).rejects.toThrow(/changed during assignment/u);
     await expect(resolveTentacleAssignment(config, identity, {
       rpc: canonicalRpc({ brandingUwu: "0x4444444444444444444444444444444444444444" }),
       hashCode: canonicalCodeHash,
+      discoverControllerDirectory: controllerDirectory("42"),
     })).rejects.toThrow(RegistryUnavailableError);
   });
 

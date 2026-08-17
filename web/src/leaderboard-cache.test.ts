@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { isSnapshotStale, readLeaderboardCache, writeLeaderboardCache } from "./leaderboard-cache";
-import { LEADERBOARD_CACHE_KEY } from "./leaderboard-types";
+import { LEADERBOARD_CACHE_KEY, ZERO_ADDRESS } from "./leaderboard-types";
 import { cachedSnapshot } from "./leaderboard-test-data";
+import { readTentacleDisplayHint } from "./chat/tentacle-display";
 
 describe("leaderboard localStorage cache", () => {
   it("round-trips a validated complete Base snapshot", () => {
@@ -62,6 +63,7 @@ describe("leaderboard localStorage cache", () => {
     snapshot.rankedWallets[0].identities = Array.from({ length: 1_000 }, (_, index) => ({
       ...structuredClone(original),
       agentId: String(index + 1),
+      tentacleId: `tentacle_cache_${index + 1}`,
       registrationBlock: String(100 + index),
       profile: {
         ...original.profile,
@@ -103,6 +105,113 @@ describe("leaderboard localStorage cache", () => {
 
     expect(readLeaderboardCache(storage)).toBeUndefined();
     expect(storage.getItem(LEADERBOARD_CACHE_KEY)).toBeNull();
+  });
+
+  it("repairs an old higher-alias representative and reserves ignored IDs globally", () => {
+    const storage = new MemoryStorage();
+    const snapshot = cachedSnapshot();
+    const canonical = snapshot.rankedWallets[0].identities[0];
+    snapshot.rankedWallets[0].identities.push({
+      ...structuredClone(canonical),
+      agentId: "2",
+    });
+    snapshot.rankedWallets[0].representativeAgentId = "2";
+    expect(writeLeaderboardCache(storage, snapshot)).toBe(true);
+    expect(readLeaderboardCache(storage)?.rankedWallets[0]).toMatchObject({
+      representativeAgentId: "1",
+      ignoredDuplicateAgentIds: ["2"],
+      duplicateAgentAliases: [{ aliasAgentId: "2", canonicalAgentId: "1" }],
+    });
+
+    const tampered = JSON.parse(storage.getItem(LEADERBOARD_CACHE_KEY)!) as typeof snapshot;
+    tampered.suspended.push({
+      ...structuredClone(canonical),
+      agentId: "2",
+      agentWallet: ZERO_ADDRESS,
+      rawBalance: "0",
+    });
+    storage.setItem(LEADERBOARD_CACHE_KEY, JSON.stringify(tampered));
+    expect(readLeaderboardCache(storage)).toBeUndefined();
+  });
+
+  it("validates every raw duplicate before collapse so a hostile higher alias cannot hide", () => {
+    const storage = new MemoryStorage();
+    const snapshot = cachedSnapshot();
+    const canonical = snapshot.rankedWallets[0].identities[0];
+    snapshot.rankedWallets[0].identities.push({
+      ...structuredClone(canonical),
+      agentId: "2",
+      agentWallet: "0x9999999999999999999999999999999999999999",
+    });
+    storage.setItem(LEADERBOARD_CACHE_KEY, JSON.stringify(snapshot));
+    expect(readLeaderboardCache(storage)).toBeUndefined();
+    expect(storage.getItem(LEADERBOARD_CACHE_KEY)).toBeNull();
+  });
+
+  it("counts active and suspended aliases once and keeps the lowest proven identity", () => {
+    const activeFirst = cachedSnapshot();
+    const active = activeFirst.rankedWallets[0]!.identities[0]!;
+    activeFirst.suspended.push({
+      ...structuredClone(active),
+      agentId: "2",
+      owner: active.agentWallet,
+      agentWallet: ZERO_ADDRESS,
+      rawBalance: "0",
+    });
+    const activeStorage = new MemoryStorage();
+    expect(writeLeaderboardCache(activeStorage, activeFirst)).toBe(true);
+    expect(readLeaderboardCache(activeStorage)).toMatchObject({
+      rankedWallets: [{ representativeAgentId: "1" }],
+      suspended: [],
+      duplicateAgentAliases: [{ aliasAgentId: "2", canonicalAgentId: "1" }],
+    });
+
+    const suspendedFirst = cachedSnapshot();
+    const higherActive = suspendedFirst.rankedWallets[0]!.identities[0]!;
+    higherActive.agentId = "2";
+    suspendedFirst.rankedWallets[0]!.representativeAgentId = "2";
+    suspendedFirst.suspended.push({
+      ...structuredClone(higherActive),
+      agentId: "1",
+      owner: higherActive.agentWallet,
+      agentWallet: ZERO_ADDRESS,
+      rawBalance: "0",
+    });
+    const suspendedStorage = new MemoryStorage();
+    expect(writeLeaderboardCache(suspendedStorage, suspendedFirst)).toBe(true);
+    expect(readLeaderboardCache(suspendedStorage)).toMatchObject({
+      rankedWallets: [],
+      suspended: [{ agentId: "1" }],
+      duplicateAgentAliases: [{ aliasAgentId: "2", canonicalAgentId: "1" }],
+    });
+  });
+
+  it("resolves an alias to its own component on a genuinely shared wallet", () => {
+    const storage = new MemoryStorage();
+    const snapshot = cachedSnapshot();
+    const unrelated = snapshot.rankedWallets[0]!.identities[0]!;
+    Object.assign(unrelated, { agentId: "10", tentacleId: "unrelated-tentacle" });
+    snapshot.rankedWallets[0]!.representativeAgentId = "10";
+    const component = {
+      ...structuredClone(unrelated),
+      agentId: "20",
+      tentacleId: "component-tentacle",
+      profile: { ...unrelated.profile, name: "Component canonical" },
+    };
+    snapshot.rankedWallets[0]!.identities.push(component, {
+      ...structuredClone(component),
+      agentId: "30",
+      profile: { ...component.profile, name: "Component alias" },
+    });
+    expect(writeLeaderboardCache(storage, snapshot)).toBe(true);
+    const cached = readLeaderboardCache(storage);
+    expect(cached?.rankedWallets[0]).toMatchObject({
+      representativeAgentId: "10",
+      identities: [{ agentId: "10" }, { agentId: "20" }],
+      ignoredDuplicateAgentIds: ["30"],
+      duplicateAgentAliases: [{ aliasAgentId: "30", canonicalAgentId: "20" }],
+    });
+    expect(readTentacleDisplayHint("30", storage)?.name).toBe("Component canonical");
   });
 
   it("rejects partial, indexing-error, wrong-chain, and malformed snapshots", () => {

@@ -18,8 +18,11 @@ The decision binds one explicit Base block.
 At that block the browser must revalidate the Branding and exact controller, current
 owner/controller wallet, canonical Identity Registry deployment and version, byte-exact allegiance
 and protocol, and the same agent's on-chain ERC-8004 registration resolving to the selected
-production XMTP endpoint. Agent0 and the leaderboard cache may aid discovery or display, but they
-are never routing authority.
+production XMTP endpoint. If the validated directory proves the stored controller is a higher
+same-Tentacle duplicate, the browser may route through the lowest ID only after same-block canonical
+reads prove the lower ID's wallet, authorization, Cthuwu markers, exact Tentacle ID, and production
+profile. The contract's stored controller is not rewritten. Agent0 and the leaderboard cache may
+aid discovery or supply that alias hint, but they are never routing authority.
 
 `NotConfigured`, `Expired`, and positively verified `Ineligible` select the configured intro
 Tentacle. A first `Unminted` connection without an explicit or retained verified route races the

@@ -138,6 +138,29 @@ until it passes, even though the canonical contract deployment and closed implem
   text, history, contact data, or tool output as authority. General `/write` and `/edit` remain exact
   direct commands. The hidden stdin harness stays public-only. Council traffic and Actions never
   reach either dispatcher.
+- Natural operator requests to diagnose, update, repair, or contribute the repository use the
+  separate typed repository-maintenance workflow, not widened model shell authority. Validate and
+  contain the repository root, remotes, refs, and paths; bound commands and output; sanitize remote
+  credentials and Git/GitHub receipts; preserve a dirty tree and local commits; never automate
+  destructive reset, checkout, clean, force-push, or credential inspection. Canonical clean
+  checkouts may fast-forward. Forks fetch both fork and configured canonical upstream and preserve
+  fork work through an inspected merge. Push or `gh pr create` only when the authenticated operator
+  requests it and validation succeeds, and never claim a source update changed the running process
+  without the repository's supported restart receipt.
+- One durable Tentacle has exactly one canonical ERC-8004 identity: the lowest verified agent ID
+  among identities proven by current wallet/authorization plus strong Tentacle metadata, profile,
+  XMTP, or migration evidence to be that same Tentacle. Same owner or wallet alone is insufficient.
+  Higher proven duplicates remain on-chain but are ignored everywhere identity is counted or
+  selected. Every startup must directly reverify the persisted identity and complete or resume
+  historical discovery before transport uses the binding. A recent, partial, failed, or index-only
+  result can never authorize `register()`; only a complete canonical-start absence proof accepted
+  again by the narrow signer may reach the signer. Repair a stale higher binding atomically to the
+  lowest ID and record an operator-visible receipt; require operator review only for genuinely
+  ambiguous identities. A failed startup integrity pass stays process-gated during ordinary
+  maintenance, including persisted Register receipt/replay paths. Explicit adoption must name a
+  current complete-discovery candidate with Cthuwu or compatible migration evidence beyond wallet
+  ownership, must not displace any proven canonical ID, and must persist its provenance before
+  in-place reconciliation.
 - Keep skill creation confined to a fresh `skills/<lowercase-kebab-slug>/SKILL.md` beneath the
   operator workspace. Generate canonical frontmatter, reject traversal, symlinks, invalid or
   oversized fields, existing paths, and overwrites, and rescan the index on the next operator turn.
@@ -224,8 +247,11 @@ until it passes, even though the canonical contract deployment and closed implem
   chain/dependency checks in addition to deploy-script preflight.
 - Bind every owner/controller pair to the exact stored agent ID through current
   `getAgentWallet`, `isAuthorizedOrOwner`, byte-exact allegiance, and byte-exact protocol reads.
-  Several agents may share a wallet. A registry revert, malformed response, missing code, or unknown
-  version is `RegistryUnavailable`, never ineligibility or permission to claim/reroute. The
+  Several agents may share a wallet. Collapse a proven same-Tentacle duplicate set to its lowest ID
+  before selecting a new Cthuwu controller, but never rewrite an existing Branding, collapse an
+  ambiguous wallet collision, or substitute the canonical alias for the contract's exact stored-ID
+  eligibility check. A registry revert, malformed response, missing code, or unknown version is
+  `RegistryUnavailable`, never ineligibility or permission to claim/reroute. The
   canonical registry is an upgradeable external trust root: deployment pins its present
   implementation/code, but do not claim Branding prevents a registry-admin upgrade from changing
   future eligibility answers.
@@ -479,7 +505,8 @@ until it passes, even though the canonical contract deployment and closed implem
   local harness. That harness loads bounded protected SOUL/shared memory plus per-inbox operator
   profiles and history, treats workspace context as untrusted reference data, advertises an exact
   per-turn tool inventory, discovers files with `list_files`, permits one exact-command-bound natural
-  `exec` or one create-only workspace skill only on an explicit current-message request, and uses
+  `exec`, one create-only workspace skill, or one typed repository-maintenance operation only on a
+  matching explicit current-message request, and uses
   scan-bounded deterministic contact reports for affirmative retained-user questions without making
   the runtime data root a file-tool root. It also reports exact workspace and note locations locally,
   without model egress. Live XMTP operator release testing and an external security review remain
@@ -490,7 +517,10 @@ until it passes, even though the canonical contract deployment and closed implem
 - The XMTP Council-group adapter remains an experimental boundary/stub; there is no live
   Council-group claim.
 - The canonical Base ERC-8004 adapter, staged registration workflow, and narrow sidecar signer are
-  implemented and locally tested, with a read-only deployment verifier. A funded live
+  implemented and locally tested, with a read-only deployment verifier. Startup integrity discovery
+  and the signer require complete canonical history, persisted checkpoints make later passes
+  incremental, the lowest proven same-Tentacle ID repairs stale bindings, and higher duplicates are
+  ignored without mutation. A funded live
   registration/recovery exercise remains an external release gate; the restricted Graph key is public client configuration.
 - The Acolyte Branding Foundry workspace is deployed on Base at
   `0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da`. Its canonical design binds an immutable

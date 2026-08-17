@@ -143,6 +143,27 @@ describe("Tentacle leaderboard UI", () => {
     controller.dispose();
   });
 
+  it("presents a proven duplicate set as its lower canonical identity", () => {
+    const snapshot = cachedSnapshot();
+    const canonical = snapshot.rankedWallets[0]!.identities[0]!;
+    snapshot.rankedWallets[0]!.identities.push({
+      ...structuredClone(canonical),
+      agentId: "2",
+      profile: { ...canonical.profile, name: "Higher duplicate" },
+    });
+    writeLeaderboardCache(localStorage, snapshot);
+    const elements = mountElements();
+    const controller = initializeLeaderboard(elements, {
+      config,
+      now: () => new Date("2026-08-11T12:01:00Z"),
+    });
+    expect(elements.ranked.textContent).toContain("Agent #1");
+    expect(elements.ranked.textContent).not.toContain("Agent #2");
+    expect(elements.ranked.textContent).not.toContain("SHARED WALLET");
+    expect(elements.ranked.textContent).toContain("1 DUPLICATE REGISTRATION IGNORED");
+    controller.dispose();
+  });
+
   it("atomically replaces the cache only after a complete background refresh", async () => {
     writeLeaderboardCache(localStorage, cachedSnapshot());
     const fixture = readFileSync(

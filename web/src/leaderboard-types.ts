@@ -75,7 +75,14 @@ export interface RankedWallet {
   rawBalance: string;
   representativeAgentId: string;
   identities: TentacleIdentity[];
+  ignoredDuplicateAgentIds?: string[];
+  duplicateAgentAliases?: DuplicateAgentAlias[];
   rank?: number;
+}
+
+export interface DuplicateAgentAlias {
+  aliasAgentId: string;
+  canonicalAgentId: string;
 }
 
 export interface LeaderboardSnapshot {
@@ -94,6 +101,7 @@ export interface LeaderboardSnapshot {
   paginationComplete: true;
   rankedWallets: RankedWallet[];
   suspended: TentacleIdentity[];
+  duplicateAgentAliases?: DuplicateAgentAlias[];
 }
 
 export type LeaderboardState =

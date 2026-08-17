@@ -20,6 +20,8 @@ import {
   stringToHex,
   type Address,
   type Hex,
+  type PublicClient,
+  type Transport,
 } from "viem";
 import { base } from "viem/chains";
 import {
@@ -1325,6 +1327,8 @@ type RegistrationSnapshot = {
   agentId: string;
   wallet: Address;
   inboxId: string;
+  tentacleId: string;
+  ignoredDuplicateAgentIds: string[];
 };
 
 export async function loadVerifiedRegistration(
@@ -1343,6 +1347,7 @@ export async function loadVerifiedRegistration(
   }
   const verified = value.last_verified;
   if (
+    value.version !== 4 ||
     value.chain_id !== 8453 ||
     typeof value.identity_registry !== "string" ||
     !isAddress(value.identity_registry, { strict: true }) ||
@@ -1350,6 +1355,17 @@ export async function loadVerifiedRegistration(
     value.phase !== "active" ||
     !isCanonicalAgentId(value.confirmed_agent_id) ||
     value.selected_agent_id !== value.confirmed_agent_id ||
+    typeof value.tentacle_id !== "string" ||
+    value.tentacle_id.length === 0 ||
+    Buffer.byteLength(value.tentacle_id, "utf8") > 128 ||
+    /[\u0000-\u001f\u007f]/u.test(value.tentacle_id) ||
+    !Array.isArray(value.ignored_duplicate_agent_ids) ||
+    value.ignored_duplicate_agent_ids.some((agentId) => !isCanonicalAgentId(agentId)) ||
+    new Set(value.ignored_duplicate_agent_ids).size !== value.ignored_duplicate_agent_ids.length ||
+    value.ignored_duplicate_agent_ids.includes(value.confirmed_agent_id) ||
+    value.ignored_duplicate_agent_ids.some(
+      (agentId) => BigInt(agentId) <= BigInt(value.confirmed_agent_id as string),
+    ) ||
     typeof value.tentacle_wallet !== "string" ||
     !isAddress(value.tentacle_wallet, { strict: true }) ||
     getAddress(value.tentacle_wallet) !== expectedWallet ||
@@ -1364,7 +1380,13 @@ export async function loadVerifiedRegistration(
   ) {
     throw new Error("persisted ERC-8004 identity is not active or does not match XMTP");
   }
-  return { agentId: value.confirmed_agent_id, wallet: expectedWallet, inboxId: expectedInboxId };
+  return {
+    agentId: value.confirmed_agent_id,
+    wallet: expectedWallet,
+    inboxId: expectedInboxId,
+    tentacleId: value.tentacle_id,
+    ignoredDuplicateAgentIds: value.ignored_duplicate_agent_ids,
+  };
 }
 
 function safeRpcEndpoint(value: string | undefined): string {
@@ -1420,7 +1442,10 @@ function decodeCanonicalDataJson(uri: string): unknown {
   }
 }
 
-function endpointFromAgentUri(agentUri: string, agentId: string): string {
+function profileFromAgentUri(
+  agentUri: string,
+  agentId: string,
+): { inboxId: string; tentacleId: string } {
   let value: unknown;
   try {
     value = decodeCanonicalDataJson(agentUri);
@@ -1533,7 +1558,7 @@ function endpointFromAgentUri(agentUri: string, agentId: string): string {
   ) {
     throw new Error("controller CTHUWU manifest does not bind its canonical identity and endpoint");
   }
-  return inboxId;
+  return { inboxId, tentacleId: manifest.tentacleId };
 }
 
 function exactMetadata(value: Hex, expected: string): boolean {
@@ -1544,9 +1569,9 @@ function exactMetadata(value: Hex, expected: string): boolean {
   }
 }
 
-type ChainClient = ReturnType<typeof createAssignmentClient>;
+type ChainClient = PublicClient<Transport, typeof base>;
 
-function createAssignmentClient(rpcEndpoint: string) {
+function createAssignmentClient(rpcEndpoint: string): ChainClient {
   return createPublicClient({
     chain: base,
     transport: http(rpcEndpoint, { timeout: 20_000, retryCount: 1, batch: true }),
@@ -1557,22 +1582,26 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
   readonly #client: ChainClient;
   readonly #brandingAddress: Address | undefined;
   readonly #local: RegistrationSnapshot;
+  readonly #hashCode: (code: Hex) => Hex;
 
   constructor(options: {
     rpcEndpoint?: string;
     brandingContract?: string;
     localRegistration: RegistrationSnapshot;
+    client?: ChainClient;
+    hashCode?: (code: Hex) => Hex;
   }) {
-    this.#client = createAssignmentClient(safeRpcEndpoint(options.rpcEndpoint));
+    this.#client = options.client ?? createAssignmentClient(safeRpcEndpoint(options.rpcEndpoint));
     this.#brandingAddress = configuredBrandingAddress(options.brandingContract);
     this.#local = options.localRegistration;
+    this.#hashCode = options.hashCode ?? keccak256;
   }
 
   async #verifyAgent(
     agentId: string,
     wallet: Address,
     blockNumber: bigint,
-  ): Promise<string> {
+  ): Promise<{ inboxId: string; tentacleId: string }> {
     const id = BigInt(agentId);
     const [version, agentWallet, authorized, allegiance, protocol, agentUri] =
       await Promise.all([
@@ -1627,7 +1656,19 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
     ) {
       throw new Error("controller failed canonical ERC-8004 wallet/allegiance/protocol checks");
     }
-    return endpointFromAgentUri(agentUri, agentId);
+    return profileFromAgentUri(agentUri, agentId);
+  }
+
+  async #verifyLocalAgent(blockNumber: bigint): Promise<string> {
+    const profile = await this.#verifyAgent(
+      this.#local.agentId,
+      this.#local.wallet,
+      blockNumber,
+    );
+    if (profile.tentacleId !== this.#local.tentacleId) {
+      throw new Error("canonical local controller profile belongs to another Tentacle");
+    }
+    return profile.inboxId;
   }
 
   async resolve(address: Address): Promise<AssignmentResolution> {
@@ -1649,7 +1690,7 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
           assignedElsewhere = true;
         } else {
           enrollment = "intro";
-          endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
+          endpoint = await this.#verifyLocalAgent(blockNumber);
         }
       } else {
         const code = await this.#client.getCode({
@@ -1659,7 +1700,7 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
         if (
           code === undefined ||
           code === "0x" ||
-          keccak256(code) !== BRANDING_RUNTIME_CODE_HASH
+          this.#hashCode(code) !== BRANDING_RUNTIME_CODE_HASH
         ) {
           return { kind: "registry_unavailable" };
         }
@@ -1720,13 +1761,39 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
           ) {
             return { kind: "registry_unavailable" };
           }
-          endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
+          const controllerProfile = await this.#verifyAgent(
+            assignedAgentId,
+            assignedWallet,
+            blockNumber,
+          );
+          if (
+            assignedAgentId !== this.#local.agentId &&
+            this.#local.ignoredDuplicateAgentIds.includes(assignedAgentId)
+          ) {
+            if (
+              assignedWallet !== this.#local.wallet ||
+              controllerProfile.tentacleId !== this.#local.tentacleId
+            ) {
+              return { kind: "registry_unavailable" };
+            }
+            endpoint = await this.#verifyLocalAgent(blockNumber);
+            assignedAgentId = this.#local.agentId;
+            assignedWallet = this.#local.wallet;
+          } else {
+            if (
+              assignedAgentId === this.#local.agentId &&
+              controllerProfile.tentacleId !== this.#local.tentacleId
+            ) {
+              return { kind: "registry_unavailable" };
+            }
+            endpoint = controllerProfile.inboxId;
+          }
         } else if (branding.status === 0) {
           // Any verified local Tentacle may answer a bounded liveness probe for an Unminted
           // acolyte. The grant, not this broadly true resolution, is the admission authority.
           enrollment =
             this.#local.wallet === INTRO_TENTACLE_ADDRESS ? "intro" : "liveness";
-          endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
+          endpoint = await this.#verifyLocalAgent(blockNumber);
         } else {
           if (![2, 3].includes(branding.status)) {
             return { kind: "registry_unavailable" };
@@ -1737,7 +1804,7 @@ export class CanonicalAssignmentResolver implements AssignmentResolver {
             enrollment = "intro";
             assignedAgentId = this.#local.agentId;
             assignedWallet = this.#local.wallet;
-            endpoint = await this.#verifyAgent(assignedAgentId, assignedWallet, blockNumber);
+            endpoint = await this.#verifyLocalAgent(blockNumber);
           }
         }
       }
