@@ -10,16 +10,15 @@ use sha2::{Digest, Sha256};
 pub const ELDRITCH_NAME_SCHEME: &str = "eldritch-v1";
 
 const PREFIXES: &[&str] = &[
-    "Cth", "Azath", "Nyarl", "Yog", "Shub", "Dagon", "Hastur", "Ithaqua", "Tsath",
-    "Vhul", "Xoth", "Zhar", "Rhan", "Ghatan", "Thog", "Yibb", "Nyth", "Kthan", "Oth",
-    "Ubb", "Zoth", "Mnar", "Quach", "Yugg",
+    "Cth", "Azath", "Nyarl", "Yog", "Shub", "Dagon", "Hastur", "Ithaqua", "Tsath", "Vhul", "Xoth",
+    "Zhar", "Rhan", "Ghatan", "Thog", "Yibb", "Nyth", "Kthan", "Oth", "Ubb", "Zoth", "Mnar",
+    "Quach", "Yugg",
 ];
 
 const SUFFIXES: &[&str] = &[
-    "ulhu", "oth", "athotep", "soth", "ogtha", "oggua", "ogga", "aroth", "ith", "uun",
-    "aqua", "eph", "orr", "ygg", "azhul", "omoth", "ath", "orath", "uth", "ezzar",
-    "othra", "agoth", "yoth", "uloth", "azath", "uul", "egha", "othoth", "ir", "uunath",
-    "ael", "yrrh",
+    "ulhu", "oth", "athotep", "soth", "ogtha", "oggua", "ogga", "aroth", "ith", "uun", "aqua",
+    "eph", "orr", "ygg", "azhul", "omoth", "ath", "orath", "uth", "ezzar", "othra", "agoth",
+    "yoth", "uloth", "azath", "uul", "egha", "othoth", "ir", "uunath", "ael", "yrrh",
 ];
 
 const EPITHETS: &[&str] = &[
@@ -112,7 +111,10 @@ mod tests {
         let first = generate_eldritch_name("tentacle-0123456789abcdef").unwrap();
         assert_eq!(ELDRITCH_NAME_SCHEME, "eldritch-v1");
         assert_eq!(first, "Quachath the Quiet Cataclysm");
-        assert_eq!(first, generate_eldritch_name("tentacle-0123456789abcdef").unwrap());
+        assert_eq!(
+            first,
+            generate_eldritch_name("tentacle-0123456789abcdef").unwrap()
+        );
         assert_eq!(
             generate_eldritch_name("tentacle-fedcba9876543210").unwrap(),
             "Zothogtha of Sunken Y'ha-nthlei"
