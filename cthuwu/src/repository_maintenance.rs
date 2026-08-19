@@ -3473,9 +3473,20 @@ where
         use std::os::unix::process::CommandExt;
         command.as_std_mut().process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("starting bounded maintenance program {}", program.display()))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) if err.raw_os_error() == Some(26) => {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            command.spawn().with_context(|| {
+                format!("starting bounded maintenance program {}", program.display())
+            })?
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("starting bounded maintenance program {}", program.display())
+            });
+        }
+    };
     let process_id = child.id();
     let stdout = child
         .stdout
