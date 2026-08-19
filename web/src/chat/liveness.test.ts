@@ -166,6 +166,20 @@ describe("first-connect Tentacle liveness directory", () => {
     expect(localStorage.getItem("cthuwu:leaderboard:v1")).toContain('"agentId":"77"');
   });
 
+  it("prioritizes the retained rotation wallet at index 0 when present", async () => {
+    expect(writeLeaderboardCache(localStorage, directory(7))).toBe(true);
+    localStorage.setItem(`cthuwu.rotation.v1:production:${address(99)}`, address(4));
+    const selected = await loadLivenessCandidates(
+      config,
+      address(99),
+      "f".repeat(64),
+      localStorage,
+      { now: () => NOW },
+    );
+    expect(selected.map(({ rank }) => rank)).toEqual([4, 1, 2, 3, 5]);
+    expect(selected[0]!.wallet).toBe(address(4));
+  });
+
   it("fails closed when a refresh is incomplete", async () => {
     const incomplete = { ...directory(1), sourceBlockHash: undefined };
     await expect(loadLivenessCandidates(config, address(99), "f".repeat(64), localStorage, {

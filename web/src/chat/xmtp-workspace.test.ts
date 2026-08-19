@@ -414,6 +414,56 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
+  it("probes explicit deep-linked tentacle with liveness query before connecting as anchor-verified", async () => {
+    const value = fixture();
+    const anchorConfig = { ...config, tentacleAnchor: address };
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, anchorConfig, identity, {
+      resolveAssignment: vi.fn(async () => anchored),
+      verifyLivenessCandidate: vi.fn(async () => rotated),
+      livenessWindowMs: 200,
+      nowMs: () => 1_800_000_000_000,
+      storage: localStorage,
+    });
+    const starting = workspace.start();
+    await waitFor(() => value.sentControls.length === 1);
+    const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
+      requestId: string;
+    };
+    value.streams.probe.push({
+      ...textMessage("alive", directId, 1_800_000_000_001_000_000n),
+      contentType: LIVENESS_RESPONSE_CONTENT_TYPE,
+      content: {
+        type: "cthuwu.liveness-response.v1",
+        requestId: query.requestId,
+        environment: "production",
+        phrase: "fhtagn!",
+        tentacleAgentId: "42",
+      },
+    });
+    await starting;
+    expect(workspace.snapshot().assignmentState).toBe("anchor-verified");
+    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
+    await workspace.close();
+  });
+
+  it("fails closed as liveness-unavailable when deep-linked tentacle is dead and does not answer ping pong", async () => {
+    const value = fixture();
+    const anchorConfig = { ...config, tentacleAnchor: address };
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, anchorConfig, identity, {
+      resolveAssignment: vi.fn(async () => anchored),
+      livenessWindowMs: 20,
+      nowMs: () => 1_800_000_000_000,
+      storage: localStorage,
+    });
+    await workspace.start();
+    expect(workspace.snapshot()).toMatchObject({
+      assignmentState: "liveness-unavailable",
+      assignmentNotice: expect.stringMatching(/The deep-linked Tentacle did not answer the liveness check/u),
+    });
+    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(false);
+    await workspace.close();
+  });
+
   it("does not persist a snapshot-only rotation without a successful liveness join", async () => {
     const value = fixture();
     const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {

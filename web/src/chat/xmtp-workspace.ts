@@ -489,6 +489,9 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.assignmentNotice = "Checking the canonical assignment…";
       this.emit();
     }
+    if (reason === "retry") {
+      this.livenessPreProbeFailure = undefined;
+    }
     try {
       if ((this.needsStreamRestart || !this.connected) && (reason === "resume" || reason === "retry")) {
         await this.restartStreams();
@@ -499,6 +502,25 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       );
       if (assignment.source === "liveness-required") {
         assignment = await this.selectLiveAssignment(reason);
+      } else if (assignment.source === "anchor-verified" && this.config.tentacleAnchor && !this.pendingLivenessRequestId) {
+        const candidate = candidateFromVerified(assignment);
+        try {
+          const verified = await this.runLivenessProbe([candidate]);
+          if (verified.source === "rotation-verified") {
+            assignment = {
+              ...verified,
+              source: "anchor-verified",
+              notice: `Deep-linked Tentacle canonically verified at Base block ${verified.blockNumber}`,
+            };
+          }
+        } catch (error) {
+          if (error instanceof LivenessUnavailableError) {
+            throw new LivenessUnavailableError(
+              "The deep-linked Tentacle did not answer the liveness check. It may be offline or unreachable.",
+            );
+          }
+          throw error;
+        }
       }
       this.registryFailureCount = 0;
       this.nextAutomaticRegistryAttemptAt = 0;
@@ -608,14 +630,16 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     return this.livenessProbeInFlight;
   }
 
-  private async runLivenessProbe(): Promise<TentacleAssignment> {
-    const candidates = await this.loadCandidates(
+  private async runLivenessProbe(
+    candidatesToProbe?: LivenessCandidate[],
+  ): Promise<TentacleAssignment> {
+    const candidates = candidatesToProbe ?? (await this.loadCandidates(
       this.config,
       this.identity.address,
       this.inboxId,
       this.storage,
       { logger: this.logger, now: this.nowMs },
-    );
+    ));
     if (candidates.length === 0) {
       throw new RegistryUnavailableError("No eligible ranked Tentacle is available for the liveness check");
     }
@@ -878,6 +902,14 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     const key = `cthuwu.rotation.v1:${this.config.environment}:${this.identity.address}`;
     this.storage.setItem(key, address);
     if (this.storage.getItem(key) !== address) throw new Error("The live Tentacle choice could not be persisted");
+  }
+
+  private clearRetainedRotation(): void {
+    this.retainedRotationAddress = undefined;
+    if (this.storage) {
+      const key = `cthuwu.rotation.v1:${this.config.environment}:${this.identity.address}`;
+      this.storage.removeItem(key);
+    }
   }
 
   private async handoffDirect(assignment: TentacleAssignment): Promise<void> {
@@ -1589,6 +1621,20 @@ function routeKey(assignment: TentacleAssignment | undefined): string | undefine
 
 function isVerifiedTentacle(assignment: TentacleAssignment): assignment is Extract<TentacleAssignment, { source: "branding-active" | "anchor-verified" | "rotation-verified" }> {
   return assignment.source === "branding-active" || assignment.source === "anchor-verified" || assignment.source === "rotation-verified";
+}
+
+function candidateFromVerified(
+  assignment: Extract<TentacleAssignment, { source: "rotation-verified" | "anchor-verified" }>,
+): LivenessCandidate {
+  return {
+    wallet: assignment.wallet,
+    agentId: assignment.agentId,
+    inboxId: assignment.inboxId,
+    name: assignment.name,
+    rank: 1,
+    blockNumber: assignment.blockNumber.toString(),
+    blockHash: assignment.blockHash,
+  };
 }
 
 async function verifyPeerInboxState(

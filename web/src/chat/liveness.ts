@@ -91,7 +91,20 @@ export async function loadLivenessCandidates(
   const usedWallets = new Set<string>();
   const usedInboxes = new Set<string>();
   const selected: LivenessCandidate[] = [];
-  for (const group of snapshot.rankedWallets) {
+  const retainedAddress = config.rotationAnchor ?? (storage
+    ? storage.getItem(`cthuwu.rotation.v1:${config.environment}:${acolyteAddress}`) ?? undefined
+    : undefined);
+  const rankedWallets = retainedAddress
+    ? [
+        ...snapshot.rankedWallets.filter(
+          (g) => g.wallet.toLowerCase() === retainedAddress.toLowerCase(),
+        ),
+        ...snapshot.rankedWallets.filter(
+          (g) => g.wallet.toLowerCase() !== retainedAddress.toLowerCase(),
+        ),
+      ]
+    : snapshot.rankedWallets;
+  for (const group of rankedWallets) {
     if (selected.length >= MAX_PROBES) break;
     if (group.rank === undefined || group.rank <= 0 || BigInt(group.rawBalance) <= 0n) continue;
     if (group.wallet === acolyteAddress || usedWallets.has(group.wallet)) continue;
