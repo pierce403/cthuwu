@@ -26,7 +26,11 @@ jobs:
           cache: npm
           cache-dependency-path: agent/package-lock.json
       - name: Install operator search dependency
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="15"
+            sudo apt-get install -y --no-install-recommends ripgrep
+          fi
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
