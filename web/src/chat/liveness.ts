@@ -101,7 +101,12 @@ export async function loadLivenessCandidates(
         ? [{ identity, inboxId: endpoint[1]! }]
         : [];
     });
-    if (eligible.length !== 1) continue;
+    if (eligible.length === 0) continue;
+    eligible.sort((a, b) => {
+      const left = BigInt(a.identity.agentId);
+      const right = BigInt(b.identity.agentId);
+      return left === right ? 0 : left < right ? -1 : 1;
+    });
     const { identity, inboxId } = eligible[0]!;
     if (inboxId === ownInboxId || usedInboxes.has(inboxId)) continue;
     usedWallets.add(group.wallet);

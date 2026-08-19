@@ -685,19 +685,27 @@ describe("canonical Tentacle assignment", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps distinct no-cache Tentacles on one effective wallet ambiguous", async () => {
+  it("resolves duplicate Tentacles on one effective wallet to the lowest agent ID", async () => {
     const target = "0x3333333333333333333333333333333333333333";
+    const higherTentacleId = "genuinely-distinct-tentacle";
     const fetcher = noCacheDuplicateDirectoryFetch({
-      higherTentacleId: "genuinely-distinct-tentacle",
+      higherTentacleId,
     });
     await expect(resolveTentacleAssignment({
       ...configuredConfig,
       tentacleAnchor: target,
     }, identity, {
-      rpc: canonicalRpc({ status: 0, registryWallet: target }),
+      rpc: canonicalRpc({
+        status: 0,
+        registryWallet: target,
+        profileUri: profile("production", "Suspended canonical", "41", "fixture-tentacle"),
+      }),
       fetch: fetcher,
       hashCode: canonicalCodeHash,
-    })).rejects.toThrow(/more than one Tentacle and is ambiguous/u);
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      agentId: "41",
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -749,19 +757,22 @@ describe("canonical Tentacle assignment", () => {
     });
   });
 
-  it("refuses an ambiguous t address instead of choosing a controller", async () => {
+  it("resolves multiple candidate agent IDs for a t address to the lowest agent ID", async () => {
     const config = {
       ...configuredConfig,
       tentacleAnchor: "0x3333333333333333333333333333333333333333",
     };
     await expect(resolveTentacleAssignment(config, identity, {
-      rpc: canonicalRpc({ status: 0 }),
+      rpc: canonicalRpc({ status: 0, registryWallet: config.tentacleAnchor }),
       hashCode: canonicalCodeHash,
-      discoverAnchor: async () => ["42", "43"].map((agentId) => ({
+      discoverAnchor: async () => ["43", "42"].map((agentId) => ({
         wallet: config.tentacleAnchor!, agentId, inboxId: inbox,
         blockNumber: "122", blockHash: `0x${"b".repeat(64)}`,
       })),
-    })).rejects.toThrow(/ambiguous/u);
+    })).resolves.toMatchObject({
+      source: "anchor-verified",
+      agentId: "42",
+    });
   });
 
   it("freezes on tuple spoofing, positive RegistryUnavailable, or a reorg", async () => {

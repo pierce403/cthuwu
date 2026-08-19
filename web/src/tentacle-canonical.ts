@@ -15,80 +15,52 @@ export interface CanonicalTentacleSet {
 }
 
 /**
- * Collapse only identities that carry affirmative evidence of the same durable Tentacle.
- * A shared wallet alone is deliberately insufficient: operators may own unrelated ERC-8004 NFTs.
+ * Collapse identities on the same wallet / controller: the canonical Tentacle is the
+ * first one registered (lowest agent ID in the 8004 registry), and all others are ignored.
  */
 export function canonicalizeWalletIdentities(
   source: readonly TentacleIdentity[],
 ): CanonicalTentacleSet {
   const identities = [...source].sort(compareAgentId);
-  const exact: TentacleIdentity[] = [];
-  const legacy: TentacleIdentity[] = [];
-  for (const identity of identities) {
-    if (identity.tentacleId && currentControlAddresses(identity).length > 0) {
-      exact.push(identity);
-    } else {
-      legacy.push(identity);
-    }
-  }
-  // An agentWallet may have been replaced on one historical duplicate while the
-  // common ERC-721 owner still proves current control of both registrations. Build
-  // connected components over every nonzero current control address instead of
-  // keying on the preferred agentWallet and accidentally splitting that duplicate.
-  const parents = exact.map((_, index) => index);
-  const firstByEvidence = new Map<string, number>();
-  for (const [index, identity] of exact.entries()) {
+  const parents = identities.map((_, index) => index);
+  const firstByControl = new Map<string, number>();
+
+  for (const [index, identity] of identities.entries()) {
     for (const control of currentControlAddresses(identity)) {
-      const key = `${identity.tentacleId!}\u0000${control}`;
-      const first = firstByEvidence.get(key);
-      if (first === undefined) firstByEvidence.set(key, index);
-      else union(parents, first, index);
+      const first = firstByControl.get(control);
+      if (first === undefined) {
+        firstByControl.set(control, index);
+      } else {
+        union(parents, first, index);
+      }
     }
   }
-  const exactComponents = new Map<number, TentacleIdentity[]>();
-  for (const [index, identity] of exact.entries()) {
+
+  const componentsMap = new Map<number, TentacleIdentity[]>();
+  for (const [index, identity] of identities.entries()) {
     const root = find(parents, index);
-    exactComponents.set(root, [
-      ...(exactComponents.get(root) ?? []),
+    componentsMap.set(root, [
+      ...(componentsMap.get(root) ?? []),
       identity,
     ]);
   }
-  const components = [...exactComponents.values()];
-  const legacyByEndpoint = new Map<string, TentacleIdentity[]>();
-  for (const identity of legacy) {
-    const matches = components.filter((component) =>
-      component.some((candidate) => provenSameTentacle(candidate, identity)));
-    if (matches.length === 1) {
-      matches[0]!.push(identity);
-      continue;
-    }
-    // A legacy bridge that matches two conflicting exact Tentacle IDs proves neither alias.
-    const wallet = canonicalControlWallet(identity);
-    const endpoint = identity.profile.xmtpEndpoint;
-    if (
-      matches.length > 1 ||
-      wallet === undefined ||
-      identity.protocolHex !== PROTOCOL_V1_HEX ||
-      endpoint === undefined ||
-      !XMTP_ENDPOINT.test(endpoint)
-    ) {
-      components.push([identity]);
-      continue;
-    }
-    const key = `${wallet}\u0000${endpoint}`;
-    legacyByEndpoint.set(key, [
-      ...(legacyByEndpoint.get(key) ?? []),
-      identity,
-    ]);
-  }
-  components.push(...legacyByEndpoint.values());
 
   const canonical: TentacleIdentity[] = [];
   const ignoredDuplicateAgentIds: string[] = [];
   const duplicateAgentAliases: DuplicateAgentAlias[] = [];
-  for (const component of components) {
+
+  for (const component of componentsMap.values()) {
     component.sort(compareAgentId);
-    const representative = component[0]!;
+    const lowest = component[0]!;
+    const activeMember = component.find((id) => id.profile.active && id.profile.xmtpEndpoint) ?? lowest;
+    const representative: TentacleIdentity = {
+      ...lowest,
+      tentacleId: lowest.tentacleId ?? component.find((id) => id.tentacleId)?.tentacleId,
+      profile: {
+        ...lowest.profile,
+        ...(lowest.profile.xmtpEndpoint ? {} : { xmtpEndpoint: activeMember.profile.xmtpEndpoint }),
+      },
+    };
     canonical.push(representative);
     ignoredDuplicateAgentIds.push(...component.slice(1).map(({ agentId }) => agentId));
     duplicateAgentAliases.push(...component.slice(1).map(({ agentId }) => ({
@@ -96,6 +68,7 @@ export function canonicalizeWalletIdentities(
       canonicalAgentId: representative.agentId,
     })));
   }
+
   return {
     identities: canonical.sort(compareAgentId),
     ignoredDuplicateAgentIds: ignoredDuplicateAgentIds.sort(compareDecimal),

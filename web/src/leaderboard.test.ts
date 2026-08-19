@@ -115,6 +115,7 @@ describe("Tentacle leaderboard UI", () => {
     snapshot.suspended.push({
       ...structuredClone(first),
       agentId: "3",
+      owner: "0x4444444444444444444444444444444444444444",
       agentWallet: ZERO_ADDRESS,
       rawBalance: "0",
       tentacleId: "tentacle_suspended",
@@ -126,9 +127,8 @@ describe("Tentacle leaderboard UI", () => {
       config,
       now: () => new Date("2026-08-11T12:01:00Z"),
     });
-    expect(elements.ranked.textContent).toContain("SHARED WALLET ×2");
+    expect(elements.ranked.textContent).toContain("1 DUPLICATE REGISTRATION IGNORED");
     expect(elements.ranked.textContent).toContain("Agent #1");
-    expect(elements.ranked.textContent).toContain("Agent #2");
     expect(elements.suspended.textContent).toContain("WALLET UNVERIFIED");
     expect(elements.suspended.textContent).toContain("NONE");
 

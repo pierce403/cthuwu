@@ -86,7 +86,7 @@ describe("first-connect Tentacle liveness directory", () => {
     expect(selected.filter(({ inboxId }) => inboxId === inbox(2))).toHaveLength(1);
   });
 
-  it("requires exactly one active protocol-v1 endpoint per funded wallet", async () => {
+  it("filters inactive and invalid-protocol wallets while selecting the lower ID for duplicates", async () => {
     const snapshot = directory();
     snapshot.rankedWallets[0]!.identities[0]!.profile.active = false;
     snapshot.rankedWallets[1]!.identities[0]!.protocolHex = "0x32";
@@ -108,7 +108,8 @@ describe("first-connect Tentacle liveness directory", () => {
     );
     expect(selected.map(({ rank }) => rank)).not.toContain(1);
     expect(selected.map(({ rank }) => rank)).not.toContain(2);
-    expect(selected.map(({ rank }) => rank)).not.toContain(3);
+    expect(selected.map(({ rank }) => rank)).toContain(3);
+    expect(selected.find(({ rank }) => rank === 3)?.agentId).toBe("3");
   });
 
   it("counts a proven duplicate registration once and routes only through the lower ID", async () => {

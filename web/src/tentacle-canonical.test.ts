@@ -59,15 +59,19 @@ describe("canonical Tentacle identity collapse", () => {
     expect(canonicalizeWalletIdentities([legacy, canonical]).ignoredDuplicateAgentIds).toEqual(["8"]);
   });
 
-  it("retains genuinely ambiguous same-wallet identities", () => {
+  it("collapses same-wallet identities to the lowest agent ID", () => {
     const first = fixture("7");
     const second = { ...fixture("8"), tentacleId: "another-tentacle" };
     const result = canonicalizeWalletIdentities([second, first]);
-    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["7", "8"]);
-    expect(result.ignoredDuplicateAgentIds).toEqual([]);
+    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["7"]);
+    expect(result.ignoredDuplicateAgentIds).toEqual(["8"]);
+    expect(result.duplicateAgentAliases).toEqual([{
+      aliasAgentId: "8",
+      canonicalAgentId: "7",
+    }]);
   });
 
-  it("never lets a legacy endpoint bridge conflicting exact Tentacle IDs", () => {
+  it("collapses multiple identities on the same wallet to the lowest agent ID", () => {
     const endpoint = `xmtp://${"d".repeat(64)}`;
     const first = {
       ...fixture("7"),
@@ -85,11 +89,11 @@ describe("canonical Tentacle identity collapse", () => {
       profile: { ...fixture("9").profile, xmtpEndpoint: endpoint },
     };
     const result = canonicalizeWalletIdentities([legacy, second, first]);
-    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["7", "8", "9"]);
-    expect(result.ignoredDuplicateAgentIds).toEqual([]);
+    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["7"]);
+    expect(result.ignoredDuplicateAgentIds).toEqual(["8", "9"]);
   });
 
-  it("never collapses copied evidence without a shared current control relationship", () => {
+  it("never collapses identities across distinct non-shared wallets", () => {
     const endpoint = `xmtp://${"e".repeat(64)}`;
     const canonical = {
       ...fixture("7"),
@@ -112,41 +116,7 @@ describe("canonical Tentacle identity collapse", () => {
     expect(result.ignoredDuplicateAgentIds).toEqual([]);
   });
 
-  it("keeps legacy endpoint matches separate without exact protocol-v1 endpoint proof", () => {
-    const endpoint = `xmtp://${"f".repeat(64)}`;
-    const validLegacy = {
-      ...fixture("7"),
-      tentacleId: undefined,
-      profile: { ...fixture("7").profile, xmtpEndpoint: endpoint },
-    };
-    const incompatibleProtocol = {
-      ...fixture("8"),
-      tentacleId: undefined,
-      protocolHex: "0x32",
-      profile: { ...fixture("8").profile, xmtpEndpoint: endpoint },
-    };
-    expect(canonicalizeWalletIdentities([
-      incompatibleProtocol,
-      validLegacy,
-    ]).ignoredDuplicateAgentIds).toEqual([]);
-
-    const malformedFirst = {
-      ...fixture("9"),
-      tentacleId: undefined,
-      profile: { ...fixture("9").profile, xmtpEndpoint: "xmtp://malformed" },
-    };
-    const malformedSecond = {
-      ...fixture("10"),
-      tentacleId: undefined,
-      profile: { ...fixture("10").profile, xmtpEndpoint: "xmtp://malformed" },
-    };
-    expect(canonicalizeWalletIdentities([
-      malformedSecond,
-      malformedFirst,
-    ]).ignoredDuplicateAgentIds).toEqual([]);
-  });
-
-  it("collapses an active and suspended alias only with the same exact control and Tentacle evidence", () => {
+  it("collapses an active and suspended alias only with the same control relationship", () => {
     const active = fixture("61766");
     const suspended = {
       ...fixture("63846"),
@@ -165,15 +135,15 @@ describe("canonical Tentacle identity collapse", () => {
     expect(canonicalizeWalletIdentities([suspended, active]).identities).toHaveLength(2);
   });
 
-  it("maps each duplicate to its own component rather than the wallet representative", () => {
-    const unrelated = { ...fixture("10"), tentacleId: "unrelated-tentacle" };
-    const canonical = { ...fixture("20"), tentacleId: "duplicate-component" };
-    const alias = { ...fixture("30"), tentacleId: "duplicate-component" };
-    const result = canonicalizeWalletIdentities([alias, canonical, unrelated]);
-    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["10", "20"]);
-    expect(result.duplicateAgentAliases).toEqual([{
-      aliasAgentId: "30",
-      canonicalAgentId: "20",
-    }]);
+  it("maps duplicate aliases on a wallet to the lowest agent ID representative", () => {
+    const canonical = fixture("10");
+    const duplicate1 = fixture("20");
+    const duplicate2 = fixture("30");
+    const result = canonicalizeWalletIdentities([duplicate2, canonical, duplicate1]);
+    expect(result.identities.map(({ agentId }) => agentId)).toEqual(["10"]);
+    expect(result.duplicateAgentAliases).toEqual([
+      { aliasAgentId: "20", canonicalAgentId: "10" },
+      { aliasAgentId: "30", canonicalAgentId: "10" },
+    ]);
   });
 });

@@ -89,10 +89,9 @@ describe("leaderboard localStorage cache", () => {
     const stored = storage.getItem(LEADERBOARD_CACHE_KEY);
     expect(stored).not.toBeNull();
     expect(new TextEncoder().encode(stored!).length).toBeLessThanOrEqual(2 * 1024 * 1024);
-    expect(readLeaderboardCache(storage)?.rankedWallets[0].identities).toHaveLength(1_000);
-    expect(readLeaderboardCache(storage)?.rankedWallets[0].identities[0].profile.sourceUri).toBe(
-      "cached",
-    );
+    expect(readLeaderboardCache(storage)?.rankedWallets[0].identities).toHaveLength(1);
+    expect(readLeaderboardCache(storage)?.rankedWallets[0].ignoredDuplicateAgentIds).toHaveLength(999);
+    expect(readLeaderboardCache(storage)?.rankedWallets[0].identities[0].profile.sourceUri).toBeDefined();
   });
 
   it("rejects a ranked zero-address wallet in a tampered cache", () => {
@@ -186,7 +185,7 @@ describe("leaderboard localStorage cache", () => {
     });
   });
 
-  it("resolves an alias to its own component on a genuinely shared wallet", () => {
+  it("collapses multiple identities on a shared wallet to the lowest agent ID in cache", () => {
     const storage = new MemoryStorage();
     const snapshot = cachedSnapshot();
     const unrelated = snapshot.rankedWallets[0]!.identities[0]!;
@@ -207,11 +206,14 @@ describe("leaderboard localStorage cache", () => {
     const cached = readLeaderboardCache(storage);
     expect(cached?.rankedWallets[0]).toMatchObject({
       representativeAgentId: "10",
-      identities: [{ agentId: "10" }, { agentId: "20" }],
-      ignoredDuplicateAgentIds: ["30"],
-      duplicateAgentAliases: [{ aliasAgentId: "30", canonicalAgentId: "20" }],
+      identities: [{ agentId: "10" }],
+      ignoredDuplicateAgentIds: ["20", "30"],
+      duplicateAgentAliases: [
+        { aliasAgentId: "20", canonicalAgentId: "10" },
+        { aliasAgentId: "30", canonicalAgentId: "10" },
+      ],
     });
-    expect(readTentacleDisplayHint("30", storage)?.name).toBe("Component canonical");
+    expect(readTentacleDisplayHint("30", storage)?.name).toBe("Cache Tentacle");
   });
 
   it("rejects partial, indexing-error, wrong-chain, and malformed snapshots", () => {

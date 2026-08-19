@@ -686,11 +686,14 @@ async function resolveAnchoredTentacle(
     const discover = options.discoverAnchor ?? (async () => discoverDirectoryCandidates(options));
     const candidates = (await discover(wallet)).filter((candidate) =>
       canonicalAddress(candidate.wallet, "t link candidate") === wallet);
-    if (candidates.length !== 1) {
-      throw new Error(candidates.length === 0
-        ? "no discoverable Cthuwu ERC-8004 identity belongs to the t address"
-        : "the t address controls more than one Tentacle and is ambiguous");
+    if (candidates.length === 0) {
+      throw new Error("no discoverable Cthuwu ERC-8004 identity belongs to the t address");
     }
+    candidates.sort((a, b) => {
+      const left = BigInt(a.agentId);
+      const right = BigInt(b.agentId);
+      return left === right ? 0 : left < right ? -1 : 1;
+    });
     const selected = candidates[0]!;
     const verified = await verifyLivenessCandidate(config, identity, selected, options);
     return {
