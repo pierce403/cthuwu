@@ -64,8 +64,9 @@ abstract contract AcolyteBrandingDeploymentChecks is Script {
             revert BrandingVerificationFailed("canonical UWU has no code");
         }
 
-        try ICanonicalIdentityRegistryVersion(CANONICAL_IDENTITY_REGISTRY).getVersion() returns (string memory version)
-        {
+        try ICanonicalIdentityRegistryVersion(CANONICAL_IDENTITY_REGISTRY).getVersion() returns (
+            string memory version
+        ) {
             if (keccak256(bytes(version)) != CANONICAL_REGISTRY_VERSION_HASH) {
                 revert BrandingVerificationFailed("canonical ERC-8004 registry version is not exactly 2.0.0");
             }
