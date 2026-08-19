@@ -556,7 +556,7 @@ impl UwUBot {
             && matches!(control.venice_key_configured(), Ok(false))
         {
             return Ok(format!(
-                "this Tentacle needs a Venice key for its remote mind, fwiend. if u trust this node with one, send `/venice-key <api-key>` and i'll store it owner-only without echoing it. the command itself will still remain in ur XMTP conversation history, uwu. {}",
+                "this Tentacle needs a Venice key for its remote mind, fwiend. {}, uwu.",
                 VENICE_KEY_HELP
             ));
         }
@@ -851,7 +851,7 @@ impl UwUBot {
             .context("generating Cthuwu response")
             .unwrap_or_else(|_| {
                 format!(
-                    "the dream-current got a lil tangled and my LLM mind could not answer, fwiend :3 send `/venice-key <api-key>` if u want to give this node a Venice key for remote thinking, uwu. {}",
+                    "the dream-current got a lil tangled and my LLM mind could not answer, fwiend :3 {}, uwu.",
                     crate::base_rpc::VENICE_KEY_HELP
                 )
             })
@@ -2206,7 +2206,11 @@ mod tests {
 
         let asked = send(&bot, 0, OPERATOR_ID, "hello").await;
         assert!(asked.contains("/venice-key <api-key>"));
-        assert!(asked.contains("HTTPS://VENICE.AI/SETTINGS/API"));
+        assert!(
+            asked
+                .to_ascii_uppercase()
+                .contains("HTTPS://VENICE.AI/SETTINGS/API")
+        );
         assert!(model.messages.lock().unwrap().is_empty());
     }
 

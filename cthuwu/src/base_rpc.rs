@@ -9,7 +9,7 @@ use std::{fs, io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
 pub const BASE_RPC_HELP: &str = "Infura is preferred because it offers a free plan: open https://app.infura.io/, sign in or create an account, create an API key with Base enabled, copy its API key, then send `/base-rpc-key <infura-api-key>`. u may also paste a full Base Mainnet HTTPS RPC endpoint. i'll validate chain 8453 before keeping it. the command remains in your XMTP history, so restrict the key to Base and this Tentacle when the provider allows it.";
-pub const VENICE_KEY_HELP: &str = "open https://venice.ai/settings/api, choose Generate New API Key, select Inference Only, add an expiry or spending limit if desired, copy it when shown, then send `/venice-key <api-key>`. the command remains in your XMTP history.";
+pub const VENICE_KEY_HELP: &str = "open https://venice.ai/settings/api, generate an Inference-Only API key (with spending/expiry limits if desired), then send `/venice-key <api-key>` here. i'll store it owner-only and never echo it. (the command remains in your XMTP history)";
 
 const MAX_ENDPOINT_BYTES: u64 = 4 * 1024;
 const INFURA_KEY_BYTES: usize = 32;

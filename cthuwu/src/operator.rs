@@ -1,6 +1,6 @@
 use crate::{
     agent_context::{AgentContext, AgentLocations},
-    base_rpc::{BaseRpcControl, VENICE_KEY_HELP},
+    base_rpc::BaseRpcControl,
     contact::{Contact, ContactStore, normalize_inbox_id},
     deadline::{
         DEFAULT_OPERATOR_CONTINUATION_RESERVE, DETERMINISTIC_FALLBACK_RESERVE, InferenceDeadline,
@@ -260,10 +260,9 @@ impl OperatorHarness {
         if let Some(control) = &self.model_control
             && matches!(control.venice_key_configured(), Ok(false))
         {
-            return Ok(format!(
-                "THIS TENTACLE NEEDS A VENICE KEY BEFORE I CAN THINK REMOTELY, OPERATOR. SEND `/venice-key <api-key>` HERE; I WILL STORE IT OWNER-ONLY, NEVER ECHO IT, AND VALIDATE IT BEFORE USE. {}, UWU.",
-                VENICE_KEY_HELP.to_uppercase()
-            ));
+            return Ok(
+                "THIS TENTACLE NEEDS A VENICE KEY BEFORE I CAN THINK REMOTELY, OPERATOR. OPEN https://venice.ai/settings/api, GENERATE AN INFERENCE-ONLY API KEY (WITH SPENDING/EXPIRY LIMITS IF DESIRED), THEN SEND `/venice-key <api-key>` HERE. I WILL STORE IT OWNER-ONLY AND NEVER ECHO IT. (THE COMMAND REMAINS IN YOUR XMTP HISTORY), UWU.".to_owned(),
+            );
         }
 
         let inference_deadline = InferenceDeadline::current(InferenceLane::Operator)?;

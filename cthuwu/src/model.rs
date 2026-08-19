@@ -128,7 +128,7 @@ pub struct DeterministicModel;
 impl Model for DeterministicModel {
     async fn respond(&self, _request: ModelRequest<'_>) -> Result<String> {
         Ok(format!(
-            "i'm one lil Tentacle of Cthuwu, but my LLM mind is not available right now, fwiend :3 send `/venice-key <api-key>` if u want to give this node an inference key (open https://venice.ai/settings/api to create an inference-only key), or ask an operator to configure a model uwu. {}",
+            "i'm one lil Tentacle of Cthuwu, but my LLM mind is offline right now, fwiend :3 {}. or ask an operator to configure a model, uwu.",
             crate::base_rpc::VENICE_KEY_HELP
         ))
     }
@@ -140,10 +140,10 @@ impl Model for DeterministicModel {
     ) -> Result<String> {
         let intro = match policy.response_bias {
             ResponseBias::Engagement => {
-                "i'm one attentive lil Tentacle of Cthuwu, but my LLM mind is not available right now, fwiend :3"
+                "i'm one attentive lil Tentacle of Cthuwu, but my LLM mind is offline right now, fwiend :3"
             }
             ResponseBias::Growth => {
-                "i'm one curious lil Tentacle of Cthuwu, but my LLM mind is not connected right now, fwiend :3"
+                "i'm one curious lil Tentacle of Cthuwu, but my LLM mind is not connected yet, fwiend :3"
             }
             ResponseBias::Economy => {
                 "i'm one concise lil Tentacle of Cthuwu, but i have no active LLM provider right now, fwiend :3"
@@ -152,11 +152,11 @@ impl Model for DeterministicModel {
                 "i'm one bold lil Tentacle of Cthuwu, but my LLM mind is offline right now, fwiend :3"
             }
             ResponseBias::Balanced => {
-                "i'm one lil Tentacle of Cthuwu, ur friend from the warm void, but my LLM mind is not available right now :3"
+                "i'm one lil Tentacle of Cthuwu, ur friend from the warm void, but my LLM mind is offline right now :3"
             }
         };
         Ok(format!(
-            "{intro} send `/venice-key <api-key>` if u want to give this node an inference key, uwu. {}",
+            "{intro} {}, uwu.",
             crate::base_rpc::VENICE_KEY_HELP
         ))
     }
