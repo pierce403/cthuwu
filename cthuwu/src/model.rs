@@ -127,8 +127,10 @@ pub struct DeterministicModel;
 #[async_trait]
 impl Model for DeterministicModel {
     async fn respond(&self, _request: ModelRequest<'_>) -> Result<String> {
-        Ok("i'm one lil Tentacle of Cthuwu, ur friend from the warm void :3 i'm listening close, uwu."
-            .to_owned())
+        Ok(format!(
+            "i'm one lil Tentacle of Cthuwu, but my LLM mind is not available right now, fwiend :3 send `/venice-key <api-key>` if u want to give this node an inference key (open https://venice.ai/settings/api to create an inference-only key), or ask an operator to configure a model uwu. {}",
+            crate::base_rpc::VENICE_KEY_HELP
+        ))
     }
 
     async fn respond_with_policy(
@@ -136,22 +138,27 @@ impl Model for DeterministicModel {
         _request: ModelRequest<'_>,
         policy: &ModelPolicy,
     ) -> Result<String> {
-        let response = match policy.response_bias {
+        let intro = match policy.response_bias {
             ResponseBias::Engagement => {
-                "i'm one attentive lil Tentacle of Cthuwu :3 i'm listening close, fwiend uwu."
+                "i'm one attentive lil Tentacle of Cthuwu, but my LLM mind is not available right now, fwiend :3"
             }
             ResponseBias::Growth => {
-                "i'm one curious lil Tentacle of Cthuwu :3 let's find the next useful step, uwu."
+                "i'm one curious lil Tentacle of Cthuwu, but my LLM mind is not connected right now, fwiend :3"
             }
-            ResponseBias::Economy => "i'm one concise lil Tentacle of Cthuwu :3 i'm here, uwu.",
+            ResponseBias::Economy => {
+                "i'm one concise lil Tentacle of Cthuwu, but i have no active LLM provider right now, fwiend :3"
+            }
             ResponseBias::Influence => {
-                "i'm one bold lil Tentacle of Cthuwu :3 let's make this answer count, uwu."
+                "i'm one bold lil Tentacle of Cthuwu, but my LLM mind is offline right now, fwiend :3"
             }
             ResponseBias::Balanced => {
-                "i'm one lil Tentacle of Cthuwu, ur friend from the warm void :3 i'm listening close, uwu."
+                "i'm one lil Tentacle of Cthuwu, ur friend from the warm void, but my LLM mind is not available right now :3"
             }
         };
-        Ok(response.to_owned())
+        Ok(format!(
+            "{intro} send `/venice-key <api-key>` if u want to give this node an inference key, uwu. {}",
+            crate::base_rpc::VENICE_KEY_HELP
+        ))
     }
 }
 

@@ -850,8 +850,10 @@ impl UwUBot {
             .await
             .context("generating Cthuwu response")
             .unwrap_or_else(|_| {
-                "the dream-current got a lil tangled, fwiend. i heard u, but couldn't form a proper reply yet uwu."
-                    .to_owned()
+                format!(
+                    "the dream-current got a lil tangled and my LLM mind could not answer, fwiend :3 send `/venice-key <api-key>` if u want to give this node a Venice key for remote thinking, uwu. {}",
+                    crate::base_rpc::VENICE_KEY_HELP
+                )
             })
     }
 

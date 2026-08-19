@@ -1068,7 +1068,7 @@ impl OperatorModel for InferenceRouter {
                 }
                 CandidateModel::Deterministic => Ok(RawAssistantMessage {
                     content: Some(
-                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE."
+                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE. SEND `/venice-key <api-key>` TO LOAD A VENICE KEY, OR USE `/exec` / DIRECT COMMANDS."
                             .to_owned(),
                     ),
                     tool_calls: Vec::new(),
