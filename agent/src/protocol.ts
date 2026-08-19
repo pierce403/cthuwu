@@ -47,7 +47,7 @@ type Pending = {
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_REPLY_BYTES = 16 * 1024;
 const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
-const DEFAULT_MAX_PENDING = 2;
+const DEFAULT_MAX_PENDING = 64;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

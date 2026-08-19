@@ -505,9 +505,8 @@ pub async fn run_xmtp_sidecar(
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let bot = Arc::new(bot);
-    // At most one request per authority lane is accepted at once. A public DM can progress beside
-    // one operator request, while a second same-lane message receives an immediate retry response
-    // instead of entering a reorderable or deadline-ambiguous queue.
+    // Requests in each authority lane are processed in sequential FIFO order. A public DM can progress
+    // beside an operator request, while additional same-lane messages queue cleanly up to bounded capacity.
     let public_lane = Arc::new(Semaphore::new(1));
     let operator_lane = Arc::new(Semaphore::new(1));
     let mut tasks = JoinSet::new();
@@ -669,22 +668,22 @@ pub async fn run_xmtp_sidecar(
             | PrincipalRole::StaleOperator
             | PrincipalRole::RevokedOperator => operator_lane.clone(),
         };
-        let Ok(permit) = lane.try_acquire_owned() else {
-            send_response(
-                &stdin,
-                SidecarResponse::Reply {
-                    id: request.id,
-                    text: "CTHUWU IS ALREADY PROCESSING A MESSAGE FOR THIS AUTHORITY LANE. RETRY WITH A NEW MESSAGE AFTER IT REPLIES."
-                        .to_owned(),
-                },
-            )
-            .await?;
+        const MAX_PENDING_TASKS: usize = 64;
+        if tasks.len() >= MAX_PENDING_TASKS {
+            let response = reject_inbound_response(request.id, true);
+            send_response(&stdin, response).await?;
             continue;
-        };
+        }
         let bot = bot.clone();
         let stdin = stdin.clone();
         tasks.spawn(async move {
-            let _permit = permit;
+            let _permit = match lane.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    error!("authority lane semaphore closed unexpectedly");
+                    return;
+                }
+            };
             let inference_lane = match role {
                 PrincipalRole::User => InferenceLane::Public,
                 PrincipalRole::Operator
@@ -1403,6 +1402,27 @@ printf '%s\n' '{"type":"operator_identity","address":"0x420000000000000000000000
         assert!(validate_request(&request).is_err());
         request.deadline_unix_ms = now + MAX_REQUEST_DEADLINE_MS + 10_000;
         assert!(validate_request(&request).is_err());
+    }
+
+    #[tokio::test]
+    async fn authority_lane_processes_concurrent_requests_sequentially() {
+        let lane = Arc::new(Semaphore::new(1));
+        let order = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let mut tasks = JoinSet::new();
+        for index in 0..3 {
+            let lane = lane.clone();
+            let order = order.clone();
+            tasks.spawn(async move {
+                let _permit = lane.acquire_owned().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                order.lock().await.push(index);
+            });
+        }
+
+        while tasks.join_next().await.is_some() {}
+        let completed = order.lock().await.clone();
+        assert_eq!(completed, vec![0, 1, 2]);
     }
 }
 #[test]
