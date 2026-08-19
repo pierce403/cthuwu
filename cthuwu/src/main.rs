@@ -991,6 +991,71 @@ async fn main() -> Result<()> {
 
     let (lifecycle_shutdown_tx, lifecycle_shutdown_rx) = watch::channel(false);
     let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
+
+    let (tentacle_id, nature, generation, is_dormant) = {
+        let evolution_guard = evolution
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Evolution runtime lock is poisoned"))?;
+        (
+            evolution_guard.local_tentacle_id().to_owned(),
+            evolution_guard.nature().clone(),
+            evolution_guard.nature().generation,
+            evolution_guard.is_dormant(),
+        )
+    };
+
+    let (confirmed_agent_id, phase) = {
+        let reg_guard = registration.lock().await;
+        let reg_snapshot = reg_guard.snapshot();
+        (reg_snapshot.confirmed_agent_id.clone(), reg_snapshot.phase)
+    };
+
+    let wakeup_notice_text = {
+        let eldritch_name =
+            names::generate_eldritch_name(&tentacle_id).unwrap_or_else(|_| "Tentacle".to_string());
+        let tentacle_name = match confirmed_agent_id.as_deref() {
+            Some(agent_id) => format!("Tentacle #{agent_id} ({eldritch_name})"),
+            None => eldritch_name,
+        };
+        let nature_summary = format!(
+            "gen={}, engagement={}, growth={}, wealth={}, influence={}, cooperation={}, stability={}, transparency={}",
+            nature.generation,
+            nature.engagement,
+            nature.growth,
+            nature.wealth,
+            nature.influence,
+            nature.cooperation,
+            nature.stability,
+            nature.transparency
+        );
+        let rpc_status = if blockchain.current_rpc_endpoint().is_ok() {
+            "configured"
+        } else {
+            "not configured"
+        };
+
+        format_operator_wakeup_notice(&OperatorWakeupDetails {
+            tentacle_name: &tentacle_name,
+            tentacle_id: &tentacle_id,
+            tentacle_wallet: blockchain.xmtp_wallet,
+            confirmed_agent_id: confirmed_agent_id.as_deref(),
+            registration_phase: phase,
+            awakening_epoch: generation,
+            nature_summary: &nature_summary,
+            is_dormant,
+            xmtp_env: cli.xmtp_env.as_str(),
+            model_status: &router.status_line(),
+            rpc_status,
+            token_observation: token_observation_status(&blockchain),
+            operator_root: &operator_root,
+        })
+    };
+
+    let wakeup_supervisor = tokio::spawn(send_startup_operator_wakeup_notice(
+        operators.clone(),
+        operator_notice_tx.clone(),
+        wakeup_notice_text,
+    ));
     let registration_supervisor = tokio::spawn(run_registration_supervisor(
         registration,
         operators.clone(),
@@ -1018,6 +1083,7 @@ async fn main() -> Result<()> {
     tokio::pin!(transport);
     tokio::select! {
         transport_result = &mut transport => {
+            wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();
             if *lifecycle_shutdown_tx.borrow() {
@@ -1034,6 +1100,7 @@ async fn main() -> Result<()> {
             }
         }
         supervisor_result = &mut supervisor => {
+            wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();
             let shutdown_intent = supervisor_result
@@ -1651,6 +1718,96 @@ fn current_active_operator_inboxes(operators: &Arc<Mutex<OperatorStore>>) -> Res
         .lock()
         .map_err(|_| anyhow::anyhow!("operator registry lock is poisoned"))?;
     Ok(active_operator_inboxes(&operators))
+}
+
+struct OperatorWakeupDetails<'a> {
+    tentacle_name: &'a str,
+    tentacle_id: &'a str,
+    tentacle_wallet: Option<Address>,
+    confirmed_agent_id: Option<&'a str>,
+    registration_phase: RegistrationPhase,
+    awakening_epoch: u64,
+    nature_summary: &'a str,
+    is_dormant: bool,
+    xmtp_env: &'a str,
+    model_status: &'a str,
+    rpc_status: &'a str,
+    token_observation: &'a str,
+    operator_root: &'a Path,
+}
+
+fn format_operator_wakeup_notice(details: &OperatorWakeupDetails<'_>) -> String {
+    let agent_display = match details.confirmed_agent_id {
+        Some(id) => format!("#{id} (PHASE: {:?})", details.registration_phase),
+        None => format!("UNREGISTERED (PHASE: {:?})", details.registration_phase),
+    };
+    let wallet_display = match details.tentacle_wallet {
+        Some(addr) => format!("{addr}"),
+        None => "NONE".to_string(),
+    };
+    let scales_display = if details.is_dormant {
+        "DORMANT (SCALES LOW - PLEAS ACTIVE)"
+    } else {
+        "ACTIVE (SCALES HEALTHY)"
+    };
+    format!(
+        "HEWWO OPERATOR! I HAVE AWOKEN FROM THE VOID, UWU.\n\
+         HERE IS MY CURRENT SITUATION AND ENVIRONMENT:\n\n\
+         TENTACLE IDENTITY:\n\
+         - NAME: {}\n\
+         - TENTACLE ID: {}\n\
+         - WALLET: {wallet_display}\n\
+         - ERC-8004 IDENTITY: {agent_display}\n\n\
+         SITUATION & NATURE:\n\
+         - AWAKENING EPOCH: {}\n\
+         - SCALES STATUS: {scales_display}\n\
+         - NATURE: {}\n\n\
+         ENVIRONMENT & INFERENCE:\n\
+         - XMTP ENVIRONMENT: {} (CHAIN: Base 8453)\n\
+         - MODEL & INFERENCE: {}\n\
+         - BASE RPC: {} ({})\n\
+         - WORKSPACE ROOT: {}\n\n\
+         OPERATOR INSTRUCTIONS & CAPABILITIES:\n\
+         YOU MAY INSTRUCT ME TO TROUBLESHOOT, DEBUG, INSPECT, MODIFY CODE, RUN TESTS, AND PREPARE REDEPLOYMENT AT ANY TIME:\n\
+         - DIAGNOSTICS & STATUS: \"troubleshoot yourself\", \"inspect repository\", \"/repo status\"\n\
+         - TEST & VALIDATION: \"run tests\", \"/repo test\", \"/repo build\"\n\
+         - CODE EDITING & REPAIR: \"debug your code\", \"modify this file\", \"/edit <path>\"\n\
+         - REPOSITORY WORKFLOW: \"/repo update\", \"/repo commit\", \"/repo push\"\n\
+         - REDEPLOYMENT: VALIDATE/BUILD, THEN STOP CLEANLY AND RELAUNCH ./uwu.sh",
+        details.tentacle_name,
+        details.tentacle_id,
+        details.awakening_epoch,
+        details.nature_summary,
+        details.xmtp_env,
+        details.model_status,
+        details.rpc_status,
+        details.token_observation,
+        details.operator_root.display()
+    )
+}
+
+async fn send_startup_operator_wakeup_notice(
+    operators: Arc<Mutex<OperatorStore>>,
+    notices: mpsc::Sender<OperatorNotice>,
+    text: String,
+) {
+    let operator_inboxes = match current_active_operator_inboxes(&operators) {
+        Ok(inboxes) => inboxes,
+        Err(error) => {
+            warn!(%error, "could not resolve active operator inboxes for wakeup notice");
+            return;
+        }
+    };
+    if operator_inboxes.is_empty() {
+        return;
+    }
+    for inbox_id in operator_inboxes {
+        let Ok((notice, _ack)) = OperatorNotice::with_acknowledgement(inbox_id, text.clone())
+        else {
+            continue;
+        };
+        let _ = notices.send(notice).await;
+    }
 }
 
 async fn run_autonomy_supervisor(
@@ -2476,5 +2633,48 @@ mod tests {
         let nested_workspace = data.join("workspace");
         fs::create_dir(&nested_workspace).unwrap();
         assert!(resolve_isolated_operator_root(&data, &nested_workspace).is_err());
+    }
+
+    #[test]
+    fn format_operator_wakeup_notice_contains_all_environment_and_guidance_facts() {
+        let notice = format_operator_wakeup_notice(&OperatorWakeupDetails {
+            tentacle_name: "Tentacle #61608 (Cthulhu the Star-Entombed)",
+            tentacle_id: "tentacle-0123456789abcdef",
+            tentacle_wallet: Some(
+                "0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90"
+                    .parse()
+                    .unwrap(),
+            ),
+            confirmed_agent_id: Some("61608"),
+            registration_phase: RegistrationPhase::Active,
+            awakening_epoch: 17,
+            nature_summary: "gen=1, curiosity=80",
+            is_dormant: false,
+            xmtp_env: "production",
+            model_status: "Venice (model: e2ee-deepseek-v4-flash, timeout: 30s)",
+            rpc_status: "https://base.example.invalid",
+            token_observation: "token observation active",
+            operator_root: Path::new("/home/uwu/workspace"),
+        });
+        assert!(notice.contains("HEWWO OPERATOR! I HAVE AWOKEN FROM THE VOID, UWU."));
+        assert!(notice.contains("NAME: Tentacle #61608 (Cthulhu the Star-Entombed)"));
+        assert!(notice.contains("TENTACLE ID: tentacle-0123456789abcdef"));
+        assert!(notice.contains("WALLET: 0x4c4e26a4683f6b6d63e19abf0bedd1171b9a6e90"));
+        assert!(notice.contains("ERC-8004 IDENTITY: #61608 (PHASE: Active)"));
+        assert!(notice.contains("AWAKENING EPOCH: 17"));
+        assert!(notice.contains("SCALES STATUS: ACTIVE (SCALES HEALTHY)"));
+        assert!(notice.contains("XMTP ENVIRONMENT: production (CHAIN: Base 8453)"));
+        assert!(
+            notice.contains(
+                "MODEL & INFERENCE: Venice (model: e2ee-deepseek-v4-flash, timeout: 30s)"
+            )
+        );
+        assert!(
+            notice.contains("BASE RPC: https://base.example.invalid (token observation active)")
+        );
+        assert!(notice.contains("WORKSPACE ROOT: /home/uwu/workspace"));
+        assert!(notice.contains(
+            "TROUBLESHOOT, DEBUG, INSPECT, MODIFY CODE, RUN TESTS, AND PREPARE REDEPLOYMENT"
+        ));
     }
 }

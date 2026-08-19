@@ -2800,6 +2800,7 @@ fn natural_repository_operation(text: &str) -> Option<&'static str> {
         "checkout",
         "yourself",
         "installation",
+        "codebase",
     ]
     .iter()
     .any(|term| normalized.contains(term));
@@ -2848,11 +2849,23 @@ fn natural_repository_operation(text: &str) -> Option<&'static str> {
     {
         return Some("merge");
     }
-    if (contains_word(request, "test") || contains_word(request, "tests")) && has_repository_subject
+    if (contains_word(request, "test") || contains_word(request, "tests"))
+        && (has_repository_subject
+            || request.starts_with("run test")
+            || request.starts_with("run the test")
+            || request.starts_with("run required test"))
+        && !has_named_content_subject
     {
         return Some("test");
     }
-    if contains_word(request, "build") && has_repository_subject {
+    if (contains_word(request, "build") || contains_word(request, "rebuild"))
+        && (has_repository_subject
+            || request.starts_with("run build")
+            || request.starts_with("run the build")
+            || request.starts_with("run required build")
+            || request.starts_with("run the required build"))
+        && !has_named_content_subject
+    {
         return Some("build");
     }
     if natural_commit_intent(request) {
@@ -2866,9 +2879,17 @@ fn natural_repository_operation(text: &str) -> Option<&'static str> {
     {
         return Some("push");
     }
-    let has_status_diagnostic = ["diagnose", "inspect", "status", "version"]
-        .iter()
-        .any(|term| contains_word(request, term))
+    let has_status_diagnostic = [
+        "diagnose",
+        "inspect",
+        "status",
+        "version",
+        "troubleshoot",
+        "audit",
+        "health",
+    ]
+    .iter()
+    .any(|term| contains_word(request, term))
         || [
             "what branch",
             "which branch",
@@ -2878,6 +2899,16 @@ fn natural_repository_operation(text: &str) -> Option<&'static str> {
             "which commit",
             "current commit",
             "commit status",
+            "troubleshoot yourself",
+            "troubleshoot the bot",
+            "troubleshoot this bot",
+            "debug yourself",
+            "debug your installation",
+            "debug your repository",
+            "debug the repository",
+            "debug the repo",
+            "debug the bot",
+            "debug this bot",
         ]
         .iter()
         .any(|term| request.contains(term))
@@ -2935,6 +2966,16 @@ fn deterministic_repository_maintenance_request(text: &str) -> Option<Value> {
                 "what commit are you on",
                 "what branch are you on",
                 "are you up to date",
+                "troubleshoot yourself",
+                "troubleshoot your installation",
+                "troubleshoot your repository",
+                "troubleshoot the repository",
+                "troubleshoot the repo",
+                "debug yourself",
+                "debug your installation",
+                "debug your repository",
+                "debug the repository",
+                "debug the repo",
             ]
             .contains(&request) =>
         {
@@ -2973,8 +3014,15 @@ fn deterministic_repository_maintenance_request(text: &str) -> Option<Value> {
         "test"
             if [
                 "run the repository tests",
+                "run repository tests",
                 "run required tests",
+                "run the tests",
+                "run tests",
+                "run your tests",
                 "test yourself",
+                "test the repository",
+                "test the repo",
+                "test the codebase",
             ]
             .contains(&request) =>
         {
@@ -2983,7 +3031,13 @@ fn deterministic_repository_maintenance_request(text: &str) -> Option<Value> {
         "build"
             if [
                 "build yourself",
+                "rebuild yourself",
                 "build the repository",
+                "rebuild the repository",
+                "rebuild the repo",
+                "build the repo",
+                "build the codebase",
+                "rebuild the codebase",
                 "run the required build",
             ]
             .contains(&request) =>
@@ -3402,6 +3456,31 @@ fn natural_self_source_repair_request(text: &str) -> bool {
         "do not repair",
         "never repair",
         "without repairing",
+        "don't modify",
+        "dont modify",
+        "do not modify",
+        "never modify",
+        "without modifying",
+        "don't patch",
+        "dont patch",
+        "do not patch",
+        "never patch",
+        "without patching",
+        "don't edit",
+        "dont edit",
+        "do not edit",
+        "never edit",
+        "without editing",
+        "don't debug",
+        "dont debug",
+        "do not debug",
+        "never debug",
+        "without debugging",
+        "don't troubleshoot",
+        "dont troubleshoot",
+        "do not troubleshoot",
+        "never troubleshoot",
+        "without troubleshooting",
         "explain ",
         "example",
         "documentation",
@@ -3421,12 +3500,21 @@ fn natural_self_source_repair_request(text: &str) -> bool {
         return false;
     }
     let request = strip_polite_request_prefix(&normalized);
-    let has_repair_action = contains_word(request, "fix") || contains_word(request, "repair");
+    let has_repair_action = contains_word(request, "fix")
+        || contains_word(request, "repair")
+        || contains_word(request, "debug")
+        || contains_word(request, "modify")
+        || contains_word(request, "patch")
+        || contains_word(request, "edit")
+        || contains_word(request, "change")
+        || contains_word(request, "troubleshoot");
     let has_own_source_subject = contains_word(request, "yourself")
         || contains_word(request, "source")
         || contains_word(request, "repository")
         || contains_word(request, "repo")
-        || contains_word(request, "codebase");
+        || contains_word(request, "codebase")
+        || contains_word(request, "code")
+        || contains_word(request, "implementation");
     has_repair_action && has_own_source_subject
 }
 
@@ -5798,5 +5886,78 @@ mod tests {
         assert!(response.contains("\\n"));
         assert!(!response.contains("`odd\n"));
         assert!(response.contains("LOCATION REPORT TRUNCATED"));
+    }
+
+    #[test]
+    fn natural_troubleshooting_and_debugging_routes_cleanly() {
+        for phrase in [
+            "troubleshoot yourself",
+            "troubleshoot your installation",
+            "troubleshoot the repository",
+            "debug yourself",
+            "debug the repository",
+        ] {
+            assert_eq!(
+                deterministic_repository_maintenance_request(phrase),
+                Some(json!({"operation":"status"})),
+                "failed for: {phrase}"
+            );
+        }
+
+        for phrase in [
+            "run tests",
+            "run repository tests",
+            "test yourself",
+            "test the codebase",
+        ] {
+            assert_eq!(
+                deterministic_repository_maintenance_request(phrase),
+                Some(json!({"operation":"test","profile":"required"})),
+                "failed for: {phrase}"
+            );
+        }
+
+        for phrase in [
+            "build yourself",
+            "rebuild yourself",
+            "rebuild the codebase",
+            "build the repo",
+        ] {
+            assert_eq!(
+                deterministic_repository_maintenance_request(phrase),
+                Some(json!({"operation":"build","profile":"required"})),
+                "failed for: {phrase}"
+            );
+        }
+    }
+
+    #[test]
+    fn natural_self_source_repair_authorizes_debugging_and_modifying_code() {
+        for phrase in [
+            "debug your code",
+            "debug this codebase",
+            "modify your code",
+            "modify this codebase",
+            "patch your source",
+            "troubleshoot and fix your implementation",
+            "edit your code",
+        ] {
+            assert!(
+                natural_self_source_repair_request(phrase),
+                "failed for: {phrase}"
+            );
+        }
+
+        for phrase in [
+            "don't debug your code",
+            "do not modify the codebase",
+            "never patch your source",
+            "explain how to debug the code",
+        ] {
+            assert!(
+                !natural_self_source_repair_request(phrase),
+                "should have failed for: {phrase}"
+            );
+        }
     }
 }

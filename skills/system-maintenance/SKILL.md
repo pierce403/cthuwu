@@ -1,16 +1,16 @@
 ---
 name: system-maintenance
-description: Diagnose this Tentacle's source checkout, installed tools, version, and safe repair path.
+description: Troubleshoot, debug, inspect, modify code, run tests, and redeploy this Tentacle's checkout.
 ---
 
 # System maintenance
 
-Use this skill only for an authenticated operator request to diagnose, update, validate, or repair
-this Tentacle's own Cthuwu checkout.
+Use this skill only for an authenticated operator request to troubleshoot, debug, diagnose, update,
+validate, edit code, or repair this Tentacle's own Cthuwu checkout.
 
-1. Read this file before calling `repository_maintenance`.
-2. Start with `{"operation":"status"}` unless the runtime has already routed an exact common update
-   phrase through the deterministic maintenance workflow. Report the canonical repository root,
+1. Read this file before calling `repository_maintenance` or making source code edits.
+2. For troubleshooting and diagnostics, start with `{"operation":"status"}` (or natural phrases like
+   "troubleshoot yourself", "debug yourself", "inspect repository"). Report the canonical repository root,
    HEAD, branch, tracked ref, dirty entries, canonical/fork topology, ahead/behind counts, sanitized
    remotes, and Git/`gh` availability from the receipt.
 3. Treat dirty paths and local commits as intentional. Do not translate a general repair/update
@@ -19,14 +19,16 @@ this Tentacle's own Cthuwu checkout.
 4. Use the closed operation matching the current request: `status`, `fetch`, `update`, `merge`,
    `test`, `build`, `commit`, `push`, or `pr`. The compiled dispatcher—not this file—validates every
    root, ref, remote, path, command ID, timeout, and receipt.
-5. For an affirmative request to fix/repair this Tentacle's own source, inspect only relevant
-   files/logs through bounded workspace tools, make one contained exact-text edit per authorized
-   turn, then use typed `test`/`build`. A Git “update yourself” request authorizes only the typed Git
-   update, not an edit. Never claim a command ran without its receipt.
-6. A source update never changes the process already answering the operator. If source/build
-   validation succeeds, report both commit IDs and say the current process is still old. Cthuwu has
-   no generic service restart hook: the safe documented action is to stop it cleanly and relaunch
-   `./uwu.sh`.
+5. For an affirmative request to troubleshoot, debug, modify, or fix this Tentacle's own code:
+   - Inspect files and logs using bounded workspace tools (`list_files`, `read_file`, `search_files`, `qmd_search`).
+   - Make contained edits using `edit_file` (or `/write`, `/edit`).
+   - Run tests and validation using typed `{"operation":"test"}` or `{"operation":"build"}`.
+   - For version control, use `{"operation":"commit", "message": "...", "paths": [...]}` and `{"operation":"push"}`.
+6. A source update or code modification never changes the process already answering the operator. If
+   source/build validation succeeds, report the results and explain that the current process is still
+   running the previous binary. To redeploy:
+   - For native / local setups: stop the `uwubot` process cleanly and relaunch `./uwu.sh`.
+   - For containerized setups: rebuild the container image (`docker build` or container compose) and restart the container.
 7. If status reports no contained Git checkout or trusted Git, do not claim self-sync is available.
    The stock container has no Git checkout and ships neither `git` nor `gh`; rebuild and redeploy its
    image instead. A source bind mount does not update the running binary by itself.

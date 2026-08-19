@@ -3752,11 +3752,19 @@ mod tests {
 
     fn validation_env_probe(root: &Path) -> PathBuf {
         let path = root.join("validation-env-probe");
-        fs::write(
-            &path,
-            "#!/bin/sh\nprintf 'GH_TOKEN=%s GITHUB_TOKEN=%s SSH_AUTH_SOCK=%s GH_CONFIG_DIR=%s' \"${GH_TOKEN-unset}\" \"${GITHUB_TOKEN-unset}\" \"${SSH_AUTH_SOCK-unset}\" \"${GH_CONFIG_DIR-unset}\"\n",
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write as _;
+        file.write_all(
+            b"#!/bin/sh\nprintf 'GH_TOKEN=%s GITHUB_TOKEN=%s SSH_AUTH_SOCK=%s GH_CONFIG_DIR=%s' \"${GH_TOKEN-unset}\" \"${GITHUB_TOKEN-unset}\" \"${SSH_AUTH_SOCK-unset}\" \"${GH_CONFIG_DIR-unset}\"\n",
         )
         .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

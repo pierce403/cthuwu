@@ -95,7 +95,7 @@ async function deriveKey(
 ): Promise<CryptoKey> {
   const material = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(passphrase),
+    toArrayBuffer(new TextEncoder().encode(passphrase)),
     "PBKDF2",
     false,
     ["deriveKey"],
@@ -120,6 +120,10 @@ function unbase64(value: string): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return Uint8Array.from(bytes).buffer;
+function toArrayBuffer(bytes: Uint8Array): BufferSource {
+  return (
+    typeof Buffer !== "undefined"
+      ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : bytes
+  ) as unknown as BufferSource;
 }
