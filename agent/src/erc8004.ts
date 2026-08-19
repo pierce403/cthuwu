@@ -28,6 +28,7 @@ import { base } from "viem/chains";
 import { publicActionsL2 } from "viem/op-stack";
 import type { LoadedIdentity } from "./identity.js";
 import { resolveOperatorIdentity } from "./operator-identity.js";
+import { generateBrandSigilDataUri } from "./brand-sigil.js";
 
 export const ERC8004_CHAIN_ID = 8453;
 export const ERC8004_IDENTITY_REGISTRY = getAddress(
@@ -124,6 +125,8 @@ const brandingAbi = parseAbi([
   "function customTraitCount(uint256 tokenId) view returns (uint256)",
   "function customTraitAt(uint256 tokenId, uint256 index) view returns (string traitType, string value)",
   "function setCustomTrait(uint256 tokenId, string traitType, string value)",
+  "function avatarURIOf(uint256 tokenId) view returns (string)",
+  "function setAvatarURI(uint256 tokenId, string avatarURI)",
 ]);
 
 const erc20Abi = parseAbi([
@@ -1265,7 +1268,7 @@ type BrandingSignerAllocation = {
   fingerprint: string;
 };
 
-export type BrandingTransactionPhase = "approve" | "mint" | "name_trait";
+export type BrandingTransactionPhase = "approve" | "mint" | "name_trait" | "brand_avatar";
 
 function brandingSignerFingerprint(
   actionId: string,
@@ -3258,10 +3261,17 @@ export function isAllowedBrandingTransaction(
       }, "0x00"],
     }).slice(0, 10);
   }
+  if (operation === "name_trait") {
+    return selector === encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "setCustomTrait",
+      args: [0n, ACOLYTE_NAME_TRAIT, "x"],
+    }).slice(0, 10);
+  }
   return selector === encodeFunctionData({
     abi: brandingAbi,
-    functionName: "setCustomTrait",
-    args: [0n, ACOLYTE_NAME_TRAIT, "x"],
+    functionName: "setAvatarURI",
+    args: [0n, "x"],
   }).slice(0, 10);
 }
 
@@ -3824,6 +3834,20 @@ function brandingPhases(
       abi: brandingAbi,
       functionName: "setCustomTrait",
       args: [snapshot.tokenId, ACOLYTE_NAME_TRAIT, operation.acolyteName],
+    }),
+  });
+  const brandAvatarUri = generateBrandSigilDataUri({
+    acolyte: operation.acolyte,
+    controllerAgentId: String(operation.controllerAgentId),
+    acolyteName: operation.acolyteName,
+  });
+  phases.push({
+    operation: "brand_avatar",
+    to: BRANDING_CONTRACT,
+    data: encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "setAvatarURI",
+      args: [snapshot.tokenId, brandAvatarUri],
     }),
   });
   return phases;

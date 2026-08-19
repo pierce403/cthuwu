@@ -772,7 +772,7 @@ impl RegistrationConfig {
             "public description",
             MAX_PROFILE_DESCRIPTION_BYTES,
         )?;
-        validate_https_url(&self.public_image, "public image")?;
+        validate_image_uri(&self.public_image, "public image")?;
         Ok(())
     }
 }
@@ -3045,11 +3045,21 @@ impl TentacleRegistration {
             "data:application/json;base64,{}",
             base64(&serde_json::to_vec(&manifest)?)
         );
+        let image = if self.config.public_image.starts_with("https://")
+            && self.config.public_image != "https://cthuwu.app/icons/cthuwu-512.png"
+        {
+            self.config.public_image.clone()
+        } else {
+            crate::avatar::generate_tentacle_avatar_data_uri(
+                &self.state.tentacle_id,
+                &self.state.public_name,
+            )
+        };
         let profile = json!({
             "type": REGISTRATION_SCHEMA,
             "name": self.state.public_name,
             "description": self.config.public_description,
-            "image": self.config.public_image,
+            "image": image,
             "services": [
                 {"name": "CTHUWU-XMTP", "endpoint": xmtp_endpoint, "version": "1"},
                 {"name": "CTHUWU", "endpoint": manifest_uri, "version": self.state.public_profile_revision.to_string()},
@@ -4175,7 +4185,7 @@ fn validate_profile(profile: &Value, tentacle_id: &str, agent_id: &str) -> Resul
         "registration description",
         MAX_PROFILE_DESCRIPTION_BYTES,
     )?;
-    validate_https_url(
+    validate_image_uri(
         object
             .get("image")
             .and_then(Value::as_str)
@@ -4557,12 +4567,14 @@ fn validate_public_text(value: &str, label: &str, maximum: usize) -> Result<()> 
     Ok(())
 }
 
-fn validate_https_url(value: &str, label: &str) -> Result<()> {
+fn validate_image_uri(value: &str, label: &str) -> Result<()> {
     ensure!(
-        value.starts_with("https://")
-            && value.len() <= 2_048
+        (value.starts_with("https://")
+            || value.starts_with("data:image/svg+xml;base64,")
+            || value.starts_with("data:image/svg+xml;utf8,"))
+            && value.len() <= 4_096
             && !value.chars().any(|character| character.is_control()),
-        "{label} must be a bounded HTTPS URL"
+        "{label} must be a bounded HTTPS URL or SVG data URI"
     );
     Ok(())
 }

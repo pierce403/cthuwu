@@ -1525,9 +1525,10 @@ phase.
   - Each random browser address also has a deterministic `acolyte-v1` compound surname/estate label. Branding
     acceptance names the exact reserved owner trait `Acolyte Name`, and `/acolytes/` uses that exact
     trait only to report a match/missing/mismatch against the address-derived expected card label.
-    The immutable deployed V1 already includes bounded owner traits in `tokenURI`. The Tentacle
+    The immutable deployed V1 already includes bounded owner traits and avatar URI in `tokenURI`. The Tentacle
     independently rederives the name and its narrow sidecar executor performs only the exact required
-    UWU approval, `mintBranding`, and `setCustomTrait(tokenId, "Acolyte Name", expectedName)` calls,
+    UWU approval, `mintBranding`, `setCustomTrait(tokenId, "Acolyte Name", expectedName)`, and
+    `setAvatarURI(tokenId, brandSigilUri)` calls (embedding a unique eldritch sigil burned into human flesh as a bounded SVG data URI),
     each with durable nonce recovery and canonical post-state verification. The top-level V1 token
     name remains `Cthuwu Acolyte Branding #<tokenId>`.
   - Branding actions share the production wallet's nonce journal with ERC-8004 registration writes.

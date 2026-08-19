@@ -1,5 +1,6 @@
 mod agent_context;
 mod autonomy;
+pub mod avatar;
 pub mod awakening;
 mod base_rpc;
 mod bot;

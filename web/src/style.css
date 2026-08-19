@@ -1617,6 +1617,16 @@ textarea::placeholder,
   font-size: 0.7rem;
 }
 
+.acolyte-brand-sigil-thumbnail {
+  width: 80px;
+  height: 80px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 102, 0, 0.35);
+  box-shadow: 0 4px 14px rgba(20, 2, 2, 0.7);
+  margin-bottom: 0.4rem;
+  display: block;
+}
+
 .acolyte-metadata a,
 .acolyte-provenance a,
 .acolyte-metrics a {

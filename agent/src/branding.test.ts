@@ -29,6 +29,7 @@ const SIGNATURE = `0x${"55".repeat(65)}` as Hex;
 const brandingAbi = parseAbi([
   "function mintBranding((address acolyte,address minter,uint256 controllerAgentId,address referrer,uint256 initialDeclaredPrice,uint256 nonce,uint256 deadline) consent, bytes signature) returns (uint256 tokenId)",
   "function setCustomTrait(uint256 tokenId, string traitType, string value)",
+  "function setAvatarURI(uint256 tokenId, string avatarURI)",
 ]);
 const erc20Abi = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -232,12 +233,19 @@ describe("narrow Acolyte Branding executor", () => {
       functionName: "setCustomTrait",
       args: [BigInt(ACOLYTE), ACOLYTE_NAME_TRAIT, deriveAcolyteName(ACOLYTE)],
     });
+    const avatar = encodeFunctionData({
+      abi: brandingAbi,
+      functionName: "setAvatarURI",
+      args: [BigInt(ACOLYTE), "data:image/svg+xml;utf8,<svg></svg>"],
+    });
     expect(isAllowedBrandingTransaction("approve", CANONICAL_UWU, approve)).toBe(true);
     expect(isAllowedBrandingTransaction("mint", BRANDING_CONTRACT, mint)).toBe(true);
     expect(isAllowedBrandingTransaction("name_trait", BRANDING_CONTRACT, trait)).toBe(true);
+    expect(isAllowedBrandingTransaction("brand_avatar", BRANDING_CONTRACT, avatar)).toBe(true);
     expect(isAllowedBrandingTransaction("approve", ACOLYTE, approve)).toBe(false);
     expect(isAllowedBrandingTransaction("mint", CANONICAL_UWU, mint)).toBe(false);
     expect(isAllowedBrandingTransaction("name_trait", BRANDING_CONTRACT, approve)).toBe(false);
+    expect(isAllowedBrandingTransaction("brand_avatar", BRANDING_CONTRACT, approve)).toBe(false);
   });
 
   it("allocates a Branding nonce before broadcast and permits only exact phase replay", async () => {

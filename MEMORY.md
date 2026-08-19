@@ -885,3 +885,10 @@ The original manual milestone was:
 - Typing state uses the non-push `cthuwu.app/typing:1.0` control with a bounded expiry and refresh;
   it is authenticated by the XMTP envelope, never rendered or counted as a message, and must not
   make inference or reply delivery depend on the best-effort indicator send succeeding.
+- Procedural themed Tentacle avatars (`cthuwu/src/avatar.rs`) generate compact SVG data URIs (< 2.5 KiB)
+  derived from Tentacle ID, name, and Nature/personality bias, seamlessly embedded and updated in
+  ERC-8004 `agentURI` metadata on Base.
+- Procedural eldritch brand sigils (`agent/src/brand-sigil.ts`) generate dark burned-flesh SVG graphics
+  under `MAX_AVATAR_URI_BYTES` (2,048 bytes) and attach them via `setAvatarURI` on newly issued
+  Acolyte Branding NFTs, safely rendered as visual thumbnails in the Acolyte Branding gallery.
+
