@@ -1693,6 +1693,17 @@ mod tests {
             self.configured.store(false, Ordering::SeqCst);
             Ok(())
         }
+
+        async fn generate_avatar(
+            &self,
+            _seed: &str,
+            name: &str,
+            _custom_prompt: Option<&str>,
+        ) -> Result<String> {
+            Ok(format!(
+                "CUSTOM TENTACLE AVATAR PNG GENERATED SUCCESSFULLY FOR '{name}'."
+            ))
+        }
     }
 
     #[async_trait::async_trait]

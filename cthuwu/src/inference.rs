@@ -785,6 +785,42 @@ impl ModelControl for InferenceRouter {
         state.last_failure = None;
         Ok(())
     }
+
+    async fn generate_avatar(
+        &self,
+        seed: &str,
+        name: &str,
+        custom_prompt: Option<&str>,
+    ) -> Result<String> {
+        let venice_key = {
+            let state = self
+                .state
+                .read()
+                .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
+            state.venice_api_key.clone()
+        };
+        let openai_key = self.settings.openai_api_key.clone();
+        let prompt = crate::image_gen::build_tentacle_avatar_prompt(seed, name, custom_prompt);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(
+                crate::image_gen::DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS,
+            ))
+            .build()?;
+        let png_bytes = if let Some(key) = &venice_key {
+            crate::image_gen::generate_avatar_with_venice(&client, key, &prompt, None).await?
+        } else if let Some(key) = &openai_key {
+            crate::image_gen::generate_avatar_with_openai(&client, key, &prompt, None).await?
+        } else {
+            bail!(
+                "NO IMAGE GENERATION KEY IS LOADED. PLEASE SEND `/venice-key <api-key>` FIRST, OPERATOR."
+            );
+        };
+        let _ = crate::avatar::save_custom_avatar(&self.store.state_dir, &png_bytes)?;
+        Ok(format!(
+            "CUSTOM TENTACLE AVATAR PNG GENERATED SUCCESSFULLY FOR '{name}' ({:.1} KB). SAVED TO STATE AND READY FOR ON-CHAIN REPUBLISHING.",
+            png_bytes.len() as f64 / 1024.0
+        ))
+    }
 }
 
 fn validate_venice_key(value: &str) -> Result<String> {

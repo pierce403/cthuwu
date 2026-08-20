@@ -707,6 +707,16 @@ impl RegistrationStore {
     }
 }
 
+pub fn load_registration_name(data_dir: &Path) -> Option<String> {
+    let store = RegistrationStore::new(data_dir).ok()?;
+    let bytes = fs::read(&store.path).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("public_name")
+        .and_then(Value::as_str)
+        .map(|s| s.to_owned())
+}
+
 fn initial_name(requested: Option<&str>, tentacle_id: &str) -> Result<String> {
     let public_name = match requested {
         Some(public_name) => public_name.to_owned(),
@@ -3091,7 +3101,11 @@ impl TentacleRegistration {
             "data:application/json;base64,{}",
             base64(&serde_json::to_vec(&manifest)?)
         );
-        let image = if self.config.public_image.starts_with("https://")
+        let image = if let Some(custom) =
+            crate::avatar::load_custom_avatar_data_uri(&self.store.directory)
+        {
+            custom
+        } else if self.config.public_image.starts_with("https://")
             && self.config.public_image != "https://cthuwu.app/icons/cthuwu-512.png"
         {
             self.config.public_image.clone()
@@ -4638,10 +4652,13 @@ fn validate_image_uri(value: &str, label: &str) -> Result<()> {
     ensure!(
         (value.starts_with("https://")
             || value.starts_with("data:image/svg+xml;base64,")
-            || value.starts_with("data:image/svg+xml;utf8,"))
-            && value.len() <= 4_096
+            || value.starts_with("data:image/svg+xml;utf8,")
+            || value.starts_with("data:image/png;base64,")
+            || value.starts_with("data:image/jpeg;base64,")
+            || value.starts_with("data:image/webp;base64,"))
+            && value.len() <= 6_144
             && !value.chars().any(|character| character.is_control()),
-        "{label} must be a bounded HTTPS URL or SVG data URI"
+        "{label} must be a bounded HTTPS URL, SVG, PNG, or WebP data URI"
     );
     Ok(())
 }

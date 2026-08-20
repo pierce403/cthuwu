@@ -130,6 +130,13 @@ pub trait ModelControl: Send + Sync {
     async fn validate_venice_key(&self) -> Result<()>;
 
     fn clear_venice_key(&self) -> Result<()>;
+
+    async fn generate_avatar(
+        &self,
+        seed: &str,
+        name: &str,
+        custom_prompt: Option<&str>,
+    ) -> Result<String>;
 }
 
 #[cfg(test)]
@@ -587,6 +594,26 @@ impl OperatorHarness {
                 Err(_) => "I COULD NOT VALIDATE OR SAFELY STORE THAT INFURA KEY OR ENDPOINT, SO I DISCARDED IT AND CHANGED NOTHING. SEND AN INFURA API KEY OR FULL BASE MAINNET HTTPS RPC ENDPOINT, OPERATOR.".to_owned(),
             });
         }
+        if matches!(name, "avatar-generate" | "generate-avatar") {
+            let control = self
+                .model_control
+                .as_ref()
+                .context("runtime model control is not configured")?;
+            let name = match &self.registry_control {
+                Some(reg) => reg
+                    .public_name()
+                    .await
+                    .unwrap_or_else(|| "Tentacle".to_string()),
+                None => "Tentacle".to_string(),
+            };
+            let seed = &name;
+            let custom_prompt = if arguments.trim().is_empty() {
+                None
+            } else {
+                Some(arguments.trim())
+            };
+            return control.generate_avatar(seed, &name, custom_prompt).await;
+        }
         if matches!(name, "provider" | "model" | "venice-key") {
             let control = self
                 .model_control
@@ -768,6 +795,7 @@ fn operator_help() -> String {
         "`/qmd <query>` — QUERY THE NODE'S PRECONFIGURED QMD INDEX.",
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
+        "`/avatar-generate [prompt]` — GENERATE A CUSTOM TENTACLE AVATAR PNG USING AN IMAGE MODEL AND STORE IT FOR ON-CHAIN EMBEDDING.",
         "`/venice-key [status|<api-key>]` — SHOW WHETHER A VENICE KEY IS LOADED OR STORE/REPLACE IT WITHOUT ECHOING IT.",
         "`/base-rpc-key [status|<infura-api-key-or-https-endpoint>]` — VALIDATE, STORE, AND HOT-LOAD BASE MAINNET RPC ACCESS WITHOUT ECHOING IT.",
         "`/users` — REPORT RETAINED LOCAL CONTACTS WITH REDACTED INBOX REFERENCES.",
@@ -3953,6 +3981,17 @@ mod tests {
 
         fn clear_venice_key(&self) -> Result<()> {
             Ok(())
+        }
+
+        async fn generate_avatar(
+            &self,
+            _seed: &str,
+            name: &str,
+            _custom_prompt: Option<&str>,
+        ) -> Result<String> {
+            Ok(format!(
+                "CUSTOM TENTACLE AVATAR PNG GENERATED SUCCESSFULLY FOR '{name}' (3.2 KB)."
+            ))
         }
     }
 

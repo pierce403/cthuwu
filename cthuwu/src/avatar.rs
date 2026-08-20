@@ -246,6 +246,45 @@ pub fn generate_tentacle_avatar_data_uri(seed: &str, name: &str) -> String {
     )
 }
 
+pub fn load_custom_avatar_data_uri(dir: &std::path::Path) -> Option<String> {
+    let state_dir = if dir.ends_with("state") {
+        dir.to_path_buf()
+    } else {
+        dir.join("state")
+    };
+    let data_uri_path = state_dir.join("avatar.data_uri");
+    if let Ok(uri) = std::fs::read_to_string(data_uri_path) {
+        let trimmed = uri.trim();
+        if !trimmed.is_empty()
+            && (trimmed.starts_with("data:image/") || trimmed.starts_with("https://"))
+        {
+            return Some(trimmed.to_owned());
+        }
+    }
+    let png_path = state_dir.join("avatar.png");
+    if let Ok(bytes) = std::fs::read(png_path)
+        && !bytes.is_empty()
+    {
+        return Some(format!("data:image/png;base64,{}", base64_encode(&bytes)));
+    }
+    None
+}
+
+pub fn save_custom_avatar(dir: &std::path::Path, png_bytes: &[u8]) -> anyhow::Result<String> {
+    let state_dir = if dir.ends_with("state") {
+        dir.to_path_buf()
+    } else {
+        dir.join("state")
+    };
+    std::fs::create_dir_all(&state_dir)?;
+    let png_path = state_dir.join("avatar.png");
+    std::fs::write(&png_path, png_bytes)?;
+    let data_uri = format!("data:image/png;base64,{}", base64_encode(png_bytes));
+    let data_uri_path = state_dir.join("avatar.data_uri");
+    std::fs::write(&data_uri_path, &data_uri)?;
+    Ok(data_uri)
+}
+
 fn base64_encode(input: &[u8]) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity(input.len().div_ceil(3) * 4);

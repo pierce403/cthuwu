@@ -15,6 +15,7 @@ pub mod evolution;
 pub mod evolution_runtime;
 pub mod health;
 pub mod hermes;
+pub mod image_gen;
 mod inference;
 mod matching;
 mod model;
@@ -428,6 +429,23 @@ enum CliCommand {
         #[command(subcommand)]
         command: ChatCommand,
     },
+    /// Generate or inspect this Tentacle's custom PNG avatar.
+    Avatar {
+        #[command(subcommand)]
+        command: AvatarCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AvatarCommand {
+    /// Generate a custom PNG avatar using the configured image model (Venice/OpenAI).
+    Generate {
+        /// Optional custom prompt override.
+        #[arg(long)]
+        prompt: Option<String>,
+    },
+    /// Show the current avatar URI status.
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2310,6 +2328,34 @@ async fn run_management_command(
                     manage_global_group(node, sidecar, &cli.data_dir, xmtp_environment, action,)
                         .await?
                 );
+            }
+        },
+        CliCommand::Avatar { command } => match command {
+            AvatarCommand::Generate { prompt } => {
+                let lineage = LineageStore::new(&cli.data_dir)?
+                    .load()?
+                    .context("the durable Tentacle lineage does not exist yet; start the Tentacle once before generating an avatar")?;
+                let tentacle_id = lineage.state().root_id.clone();
+                let name = erc8004::load_registration_name(&cli.data_dir).unwrap_or_else(|| {
+                    names::generate_eldritch_name(&tentacle_id)
+                        .unwrap_or_else(|_| "Tentacle".to_owned())
+                });
+                let router = InferenceRouter::new(build_inference_config(cli, None)?)?;
+                let reply = router
+                    .generate_avatar(&tentacle_id, &name, prompt.as_deref())
+                    .await?;
+                println!("{reply}");
+            }
+            AvatarCommand::Status => {
+                if let Some(uri) = avatar::load_custom_avatar_data_uri(&cli.data_dir) {
+                    println!(
+                        "Custom avatar configured: {} bytes (starts with {})",
+                        uri.len(),
+                        &uri[..uri.len().min(40)]
+                    );
+                } else {
+                    println!("No custom avatar configured. Using procedural SVG vector avatar.");
+                }
             }
         },
     }

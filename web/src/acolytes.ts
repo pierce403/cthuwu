@@ -158,11 +158,15 @@ function renderAcolyte(item: AcolyteCatalogItem): HTMLElement {
   );
 
   const metadata = createElement("div", "acolyte-metadata");
-  if (item.avatarUri.startsWith("data:image/svg+xml;")) {
+  if (
+    item.avatarUri.startsWith("data:image/svg+xml;") ||
+    item.avatarUri.startsWith("data:image/png;base64,") ||
+    item.avatarUri.startsWith("data:image/webp;base64,")
+  ) {
     const brandThumbnail = document.createElement("img");
     brandThumbnail.className = "acolyte-brand-sigil-thumbnail";
     brandThumbnail.src = item.avatarUri;
-    brandThumbnail.alt = "Eldritch Brand Sigil";
+    brandThumbnail.alt = "Eldritch Avatar Sigil";
     brandThumbnail.loading = "lazy";
     metadata.append(brandThumbnail);
   }
