@@ -582,8 +582,20 @@ impl RegistrationStore {
             .context("ERC-8004 snapshot has no version")?;
         let snapshot =
             match u32::try_from(version).context("ERC-8004 snapshot version is too large")? {
-                SNAPSHOT_VERSION => serde_json::from_value(value)
-                    .context("ERC-8004 snapshot has an invalid shape")?,
+                SNAPSHOT_VERSION => {
+                    let mut snapshot: RegistrationSnapshot = serde_json::from_value(value)
+                        .context("ERC-8004 snapshot has an invalid shape")?;
+                    if (snapshot.public_name.trim().is_empty()
+                        || snapshot.public_name == "Cthuwu Tentacle")
+                        && let Ok(eldritch_name) = generate_eldritch_name(tentacle_id)
+                    {
+                        snapshot.public_name = eldritch_name;
+                        snapshot.final_agent_uri = None;
+                        snapshot.profile_sha256 = None;
+                        let _ = self.save(&snapshot);
+                    }
+                    snapshot
+                }
                 PREVIOUS_SNAPSHOT_VERSION => {
                     let mut migrated_value = value;
                     let object = migrated_value
@@ -2424,10 +2436,23 @@ impl TentacleRegistration {
     }
 
     pub async fn republish_profile(&mut self) -> Result<String> {
+        self.republish_profile_with_name(None).await
+    }
+
+    pub async fn republish_profile_with_name(&mut self, new_name: Option<&str>) -> Result<String> {
         ensure!(
             self.state.confirmed_agent_id.is_some(),
             "no ERC-8004 identity is selected"
         );
+        if let Some(name) = new_name {
+            validate_public_text(name, "public name", MAX_PROFILE_NAME_BYTES)?;
+            self.state.public_name = name.to_owned();
+        } else if (self.state.public_name.trim().is_empty()
+            || self.state.public_name == "Cthuwu Tentacle")
+            && let Ok(eldritch_name) = generate_eldritch_name(&self.state.tentacle_id)
+        {
+            self.state.public_name = eldritch_name;
+        }
         self.state.public_profile_revision = self
             .state
             .public_profile_revision
@@ -2438,10 +2463,10 @@ impl TentacleRegistration {
         self.state.success_notified = false;
         self.persist(unix_seconds()?)?;
         let _ = self.maintain(false).await?;
-        Ok(
-            "PUBLIC PROFILE REPUBLICATION WAS QUEUED. CONTENT HASHING PREVENTS BOOT-TIME CHURN."
-                .to_owned(),
-        )
+        Ok(format!(
+            "PUBLIC PROFILE REPUBLICATION WAS QUEUED FOR '{}'. ON-CHAIN SET_AGENT_URI WILL BE SUBMITTED.",
+            self.state.public_name
+        ))
     }
 
     pub async fn retry(&mut self) -> Result<String> {
@@ -3479,7 +3504,16 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
             "/registry-allegiance" if argument.trim().eq_ignore_ascii_case("off") => {
                 registration.set_allegiance(false).await
             }
-            "/registry-republish" => registration.republish_profile().await,
+            "/registry-republish" => {
+                let requested = argument.trim();
+                if requested.is_empty() {
+                    registration.republish_profile().await
+                } else {
+                    registration
+                        .republish_profile_with_name(Some(requested))
+                        .await
+                }
+            }
             "/registry-pending" => registration.inspect_pending().await,
             "/registry-retry" => registration.retry().await,
             "/registry-recover" => registration
