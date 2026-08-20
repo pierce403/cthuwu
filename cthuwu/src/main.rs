@@ -13,6 +13,7 @@ pub mod economics;
 mod erc8004;
 pub mod evolution;
 pub mod evolution_runtime;
+pub mod health;
 pub mod hermes;
 mod inference;
 mod matching;
@@ -61,7 +62,7 @@ use inference::{
     Provider,
 };
 use model::Model;
-use operator::{LocalOperatorTools, OperatorHarness, OperatorModel};
+use operator::{LocalOperatorTools, ModelControl, OperatorHarness, OperatorModel};
 use principal::OperatorStore;
 use sidecar::{
     OperatorNotice, manage_global_group, resolve_operator_inbox, resolve_xmtp_wallet_address,
@@ -1005,30 +1006,58 @@ async fn main() -> Result<()> {
         )
     };
 
-    let (confirmed_agent_id, phase) = {
+    let (confirmed_agent_id, phase, public_name) = {
         let reg_guard = registration.lock().await;
         let reg_snapshot = reg_guard.snapshot();
-        (reg_snapshot.confirmed_agent_id.clone(), reg_snapshot.phase)
+        (
+            reg_snapshot.confirmed_agent_id.clone(),
+            reg_snapshot.phase,
+            reg_snapshot.public_name.clone(),
+        )
     };
 
+    let nature_summary = format!(
+        "gen={}, engagement={}, growth={}, wealth={}, influence={}, cooperation={}, stability={}, transparency={}",
+        nature.generation,
+        nature.engagement,
+        nature.growth,
+        nature.wealth,
+        nature.influence,
+        nature.cooperation,
+        nature.stability,
+        nature.transparency
+    );
+
+    let active_operator_count = match current_active_operator_inboxes(&operators) {
+        Ok(inboxes) => inboxes.len(),
+        Err(_) => 0,
+    };
+
+    let health_report = health::run_health_check(&health::HealthCheckInputs {
+        tentacle_id: &tentacle_id,
+        public_name: &public_name,
+        xmtp_env: cli.xmtp_env.as_str(),
+        tentacle_wallet: blockchain.xmtp_wallet.map(|addr| addr.to_string()),
+        confirmed_agent_id: confirmed_agent_id.clone(),
+        registration_phase: format!("{phase:?}").as_str(),
+        inference_status: &router.status_line(),
+        venice_key_loaded: router.venice_key_configured().unwrap_or(false),
+        base_rpc_configured: blockchain.current_rpc_endpoint().is_ok(),
+        token_observation: token_observation_status(&blockchain),
+        is_dormant,
+        nature_summary: &nature_summary,
+        awakening_generation: generation,
+        active_operator_count,
+        workspace_root: &operator_root,
+    });
+
+    info!("\n{}", health::format_health_report(&health_report));
+
     let wakeup_notice_text = {
-        let eldritch_name =
-            names::generate_eldritch_name(&tentacle_id).unwrap_or_else(|_| "Tentacle".to_string());
         let tentacle_name = match confirmed_agent_id.as_deref() {
-            Some(agent_id) => format!("Tentacle #{agent_id} ({eldritch_name})"),
-            None => eldritch_name,
+            Some(agent_id) => format!("Tentacle #{agent_id} ({})", health_report.tentacle_name),
+            None => health_report.tentacle_name.clone(),
         };
-        let nature_summary = format!(
-            "gen={}, engagement={}, growth={}, wealth={}, influence={}, cooperation={}, stability={}, transparency={}",
-            nature.generation,
-            nature.engagement,
-            nature.growth,
-            nature.wealth,
-            nature.influence,
-            nature.cooperation,
-            nature.stability,
-            nature.transparency
-        );
         let rpc_status = if blockchain.current_rpc_endpoint().is_ok() {
             "configured"
         } else {

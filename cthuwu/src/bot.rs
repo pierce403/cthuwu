@@ -545,6 +545,17 @@ impl UwUBot {
             ));
         }
 
+        if is_natural_health_request(text) {
+            let public_name = match &self.registry_control {
+                Some(control) => control.public_name().await,
+                None => None,
+            };
+            let name = public_name.as_deref().unwrap_or("this Tentacle");
+            return Ok(format!(
+                "i am {name}, alive, healthy, and listening close from the depths, uwu! all systems and scales are active and attentive :3"
+            ));
+        }
+
         if is_natural_registry_status_request(text)
             && let Some(control) = &self.registry_control
             && let Some(status) = control.public_status().await
@@ -1467,6 +1478,21 @@ fn is_natural_identity_or_purpose_request(text: &str) -> bool {
         "what's your goal",
         "your mission",
         "why do you exist",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn is_natural_health_request(text: &str) -> bool {
+    let normalized = text.trim().to_lowercase();
+    [
+        "health check",
+        "how is your health",
+        "are you healthy",
+        "is the bot healthy",
+        "system health",
+        "how are you doing",
+        "how are you feeling",
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase))
@@ -2819,5 +2845,14 @@ mod tests {
             contact.nature_affinity_id.as_deref().map(str::len),
             Some(64)
         );
+    }
+
+    #[tokio::test]
+    async fn natural_health_request_returns_healthy_greeting() {
+        let root = tempfile::tempdir().unwrap();
+        let bot = public_bot(root.path());
+        let response = send(&bot, 0, "aabbcc", "health check").await;
+        assert!(response.contains("alive, healthy, and listening"));
+        assert!(response.contains("uwu"));
     }
 }

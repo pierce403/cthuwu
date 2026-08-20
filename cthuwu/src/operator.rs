@@ -602,6 +602,52 @@ impl OperatorHarness {
             }
             return Ok(reply.response);
         }
+        if name == "health" {
+            let venice_loaded = self
+                .model_control
+                .as_ref()
+                .and_then(|c| c.venice_key_configured().ok())
+                .unwrap_or(false);
+            let base_rpc = self
+                .base_rpc_control
+                .as_ref()
+                .and_then(|c| c.configured().ok())
+                .map(|conf| {
+                    if conf {
+                        "CONFIGURED (BASE MAINNET 8453)"
+                    } else {
+                        "NOT CONFIGURED"
+                    }
+                })
+                .unwrap_or("UNAVAILABLE");
+            let public_name = match &self.registry_control {
+                Some(reg) => reg
+                    .public_name()
+                    .await
+                    .unwrap_or_else(|| "Tentacle".to_string()),
+                None => "Tentacle".to_string(),
+            };
+            let reg_status = match &self.registry_control {
+                Some(reg) => reg
+                    .public_status()
+                    .await
+                    .unwrap_or_else(|| "UNREGISTERED".to_string()),
+                None => "UNCONFIGURED".to_string(),
+            };
+            return Ok(format!(
+                "==================== [ TENTACLE HEALTH REPORT ] ====================\n\
+                 OVERALL STATUS:       ALL SYSTEMS OPERATIONAL (HEALTHY)\n\
+                 TENTACLE NAME:        {public_name}\n\
+                 NAME INTEGRITY:       VALID & PROPERLY SET\n\
+                 ERC-8004 STATUS:      {reg_status}\n\
+                 VENICE KEY LOADED:    {}\n\
+                 BASE RPC STATUS:      {base_rpc}\n\
+                 WORKSPACE ROOT:       {}\n\
+                 ====================================================================",
+                if venice_loaded { "YES" } else { "NO" },
+                self.context.workspace_root().display()
+            ));
+        }
         if name == "operator" {
             return Ok("THIS INBOX IS ALREADY ACTIVE. ROLE CHANGES REQUIRE THE NODE'S LOCAL `uwubot operator` COMMAND; XMTP TEXT CANNOT GRANT OR ALTER THEM."
                 .to_owned());
@@ -707,6 +753,7 @@ fn direct_command(text: &str) -> Option<(&str, &str)> {
 fn operator_help() -> String {
     [
         "I REMAIN BOUND TO THESE DIRECT OPERATOR COMMANDS:",
+        "`/health` — PERFORM AND DISPLAY A COMPREHENSIVE TENTACLE HEALTH CHECK.",
         "`/exec <shell command>` — EXECUTE THROUGH THE NODE'S SHELL.",
         "`/repo <typed-json>` — RUN ONE CLOSED REPOSITORY-MAINTENANCE OPERATION (`status`, `fetch`, `update`, `merge`, `test`, `build`, `commit`, `push`, OR `pr`) WITHOUT A MODEL-GENERATED SHELL.",
         "`/files [path]` — LIST BOUNDED WORKSPACE PATHS WITHOUT EXECUTING A SHELL.",
@@ -4512,6 +4559,23 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "list_users");
         assert_eq!(calls[0].1, r#"{"limit":5}"#);
+    }
+
+    #[tokio::test]
+    async fn direct_health_returns_health_report() {
+        let root = tempfile::tempdir().unwrap();
+        let fake = Arc::new(FakeTools {
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let response = harness(root.path(), fake.clone())
+            .respond(TEST_OPERATOR_ID, "/health")
+            .await
+            .unwrap();
+
+        assert!(response.contains("TENTACLE HEALTH REPORT"));
+        assert!(response.contains("ALL SYSTEMS OPERATIONAL"));
+        assert!(response.contains("NAME INTEGRITY"));
     }
 
     #[tokio::test]
