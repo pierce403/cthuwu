@@ -2419,15 +2419,25 @@ impl TentacleRegistration {
     }
 
     pub async fn set_allegiance(&mut self, declare: bool) -> Result<String> {
-        ensure!(
-            self.state.confirmed_agent_id.is_some(),
-            "no ERC-8004 identity is selected"
-        );
+        let agent_id = self
+            .state
+            .confirmed_agent_id
+            .clone()
+            .context("no ERC-8004 identity is selected")?;
         self.state.desired_allegiance = declare;
         self.state.success_notified = false;
         let now = unix_seconds()?;
         self.persist(now)?;
-        let _ = self.maintain(false).await?;
+        let deployment = self
+            .gateway
+            .invoke(
+                &self.read_action_id("deployment", now),
+                json!({"type": "inspect_registry"}),
+            )
+            .await?;
+        self.accept_deployment_observation(deployment)?;
+        self.startup_integrity_complete = true;
+        let _ = self.reconcile_agent(&agent_id, now).await?;
         Ok(if declare {
             "TENTACLE ALLEGIANCE IS DESIRED. THE EXACT ON-CHAIN MARKER WILL BE VERIFIED BEFORE ACTIVE STATUS.".to_owned()
         } else {
@@ -2440,10 +2450,11 @@ impl TentacleRegistration {
     }
 
     pub async fn republish_profile_with_name(&mut self, new_name: Option<&str>) -> Result<String> {
-        ensure!(
-            self.state.confirmed_agent_id.is_some(),
-            "no ERC-8004 identity is selected"
-        );
+        let agent_id = self
+            .state
+            .confirmed_agent_id
+            .clone()
+            .context("no ERC-8004 identity is selected")?;
         if let Some(name) = new_name {
             validate_public_text(name, "public name", MAX_PROFILE_NAME_BYTES)?;
             self.state.public_name = name.to_owned();
@@ -2461,8 +2472,18 @@ impl TentacleRegistration {
         self.state.final_agent_uri = None;
         self.state.profile_sha256 = None;
         self.state.success_notified = false;
-        self.persist(unix_seconds()?)?;
-        let _ = self.maintain(false).await?;
+        let now = unix_seconds()?;
+        self.persist(now)?;
+        let deployment = self
+            .gateway
+            .invoke(
+                &self.read_action_id("deployment", now),
+                json!({"type": "inspect_registry"}),
+            )
+            .await?;
+        self.accept_deployment_observation(deployment)?;
+        self.startup_integrity_complete = true;
+        let _ = self.reconcile_agent(&agent_id, now).await?;
         Ok(format!(
             "PUBLIC PROFILE REPUBLICATION WAS QUEUED FOR '{}'. ON-CHAIN SET_AGENT_URI WILL BE SUBMITTED.",
             self.state.public_name
