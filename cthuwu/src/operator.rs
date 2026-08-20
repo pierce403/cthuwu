@@ -274,7 +274,7 @@ impl OperatorHarness {
             .join(",");
 
         let runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh expose sanitized state only; endpoints, API keys, and private keys remain secret\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh,erc8004_republish expose sanitized state only; endpoints, API keys, and private keys remain secret\nCONDITIONAL_MODEL_CAPABILITIES=exec is activated for one call only when the current message names an exact shell command; create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -491,7 +491,7 @@ impl OperatorHarness {
                     Err(error) => ToolReceipt::error(name, error.to_string()),
                 }
             }
-            "erc8004_status" | "erc8004_refresh" => {
+            "erc8004_status" | "erc8004_refresh" | "erc8004_republish" => {
                 if arguments.trim() != "{}" {
                     return ToolReceipt::error(name, format!("{name} accepts no arguments"));
                 }
@@ -500,6 +500,8 @@ impl OperatorHarness {
                 };
                 let status = if name == "erc8004_refresh" {
                     control.refresh_status().await
+                } else if name == "erc8004_republish" {
+                    control.republish().await
                 } else {
                     control.model_status().await
                 };
@@ -514,6 +516,8 @@ impl OperatorHarness {
                                 "live Base and ERC-8004 refresh failed; returned sanitized persisted state"
                             } else if name == "erc8004_refresh" {
                                 "refreshed live Base funding and ERC-8004 registration state"
+                            } else if name == "erc8004_republish" {
+                                "queued ERC-8004 public profile republication on Base mainnet"
                             } else {
                                 "reported persisted ERC-8004 registration state"
                             }
@@ -3443,7 +3447,7 @@ fn model_tool_call_is_authorized(text: &str, tool: &str, arguments: &str) -> boo
     }
     if matches!(
         tool,
-        "base_rpc_status" | "erc8004_status" | "erc8004_refresh"
+        "base_rpc_status" | "erc8004_status" | "erc8004_refresh" | "erc8004_republish"
     ) {
         return arguments.trim() == "{}"
             && !model_tool_request_is_negated(&text.to_ascii_lowercase());
@@ -3798,6 +3802,11 @@ fn operator_tool_schemas(text: &str) -> Vec<Value> {
         tool_schema(
             "erc8004_refresh",
             "Perform a bounded live Base reconciliation of this Tentacle's funding and ERC-8004 state. Use when funds may have arrived or current on-chain status matters. The existing automatic registration state machine may resume; secrets remain outside model context.",
+            json!({"type":"object","additionalProperties":false,"properties":{}}),
+        ),
+        tool_schema(
+            "erc8004_republish",
+            "Queue republication of this Tentacle's public ERC-8004 profile document, public name, and procedural avatar URI on Base mainnet. Content hashing prevents redundant on-chain transactions if the URI has not changed.",
             json!({"type":"object","additionalProperties":false,"properties":{}}),
         ),
     ];
@@ -4833,7 +4842,7 @@ mod tests {
 
         assert!(response.contains("I AM ONE DURABLE TENTACLE"));
         assert!(!response.contains("I AM CTHUWU"));
-        assert_eq!(model.tool_counts.lock().unwrap().as_slice(), &[12, 0]);
+        assert_eq!(model.tool_counts.lock().unwrap().as_slice(), &[13, 0]);
         assert!(fake.calls.lock().unwrap().is_empty());
         assert!(!workspace.path().join("repeated").exists());
     }
@@ -5565,7 +5574,8 @@ mod tests {
                 "read_website",
                 "base_rpc_status",
                 "erc8004_status",
-                "erc8004_refresh"
+                "erc8004_refresh",
+                "erc8004_republish"
             ]
         );
         assert_eq!(
@@ -5583,6 +5593,7 @@ mod tests {
                 "base_rpc_status",
                 "erc8004_status",
                 "erc8004_refresh",
+                "erc8004_republish",
                 "exec"
             ]
         );
@@ -5601,6 +5612,7 @@ mod tests {
                 "base_rpc_status",
                 "erc8004_status",
                 "erc8004_refresh",
+                "erc8004_republish",
                 "create_skill"
             ]
         );

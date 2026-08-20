@@ -346,11 +346,16 @@ impl UwUBot {
                         role,
                     )));
                 }
-                if message.text.trim().to_ascii_lowercase().starts_with("/registry-")
-                    && let Some(control) = &self.registry_control
-                    && let Some(response) = control.handle(message.text).await
-                {
-                    return Ok(Some(limit_response(response, role)));
+                if let Some(control) = &self.registry_control {
+                    if message.text.trim().to_ascii_lowercase().starts_with("/registry-")
+                        && let Some(response) = control.handle(message.text).await
+                    {
+                        return Ok(Some(limit_response(response, role)));
+                    } else if is_natural_registry_republish_request(message.text)
+                        && let Some(response) = control.handle("/registry-republish").await
+                    {
+                        return Ok(Some(limit_response(response, role)));
+                    }
                 }
                 let (evolution_response, requires_recovery, dormancy_plea) = {
                     let mut evolution = self
@@ -1496,6 +1501,28 @@ fn is_natural_health_request(text: &str) -> bool {
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase))
+}
+
+fn is_natural_registry_republish_request(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    let mentions_registry = normalized.contains("8004")
+        || normalized.contains("registry")
+        || (normalized.contains("profile")
+            && (normalized.contains("agent")
+                || normalized.contains("on-chain")
+                || normalized.contains("onchain")
+                || normalized.contains("chain")));
+    let mentions_republish_or_update = normalized.contains("update")
+        || normalized.contains("republish")
+        || normalized.contains("fix")
+        || normalized.contains("sync")
+        || normalized.contains("refresh name")
+        || normalized.contains("old name")
+        || normalized.contains("new name")
+        || normalized.contains("change name")
+        || normalized.contains("update name")
+        || normalized.contains("update that");
+    mentions_registry && mentions_republish_or_update
 }
 
 fn identity_and_purpose_response(role: PrincipalRole, public_name: Option<&str>) -> String {
@@ -2854,5 +2881,21 @@ mod tests {
         let response = send(&bot, 0, "aabbcc", "health check").await;
         assert!(response.contains("alive, healthy, and listening"));
         assert!(response.contains("uwu"));
+    }
+
+    #[test]
+    fn test_is_natural_registry_republish_request() {
+        assert!(is_natural_registry_republish_request(
+            "I notice your 8004 registry still has your old name. can you update that?"
+        ));
+        assert!(is_natural_registry_republish_request(
+            "republish your 8004 profile"
+        ));
+        assert!(is_natural_registry_republish_request(
+            "update your 8004 registry"
+        ));
+        assert!(is_natural_registry_republish_request("fix your 8004 name"));
+        assert!(!is_natural_registry_republish_request("hello there"));
+        assert!(!is_natural_registry_republish_request("show me git status"));
     }
 }

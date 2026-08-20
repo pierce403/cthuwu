@@ -3430,6 +3430,10 @@ pub trait RegistrationOperatorControl: Send + Sync {
     async fn take_public_funding_plea(&self) -> Option<String> {
         None
     }
+
+    async fn republish(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct SharedRegistrationControl {
@@ -3529,6 +3533,14 @@ impl RegistrationOperatorControl for SharedRegistrationControl {
 
     async fn public_status(&self) -> Option<String> {
         Some(self.registration.lock().await.public_status_text())
+    }
+
+    async fn republish(&self) -> Option<String> {
+        let mut registration = self.registration.lock().await;
+        match registration.republish_profile().await {
+            Ok(msg) => Some(msg),
+            Err(err) => Some(format!("ERC-8004 REPUBLICATION FAILED: {err}")),
+        }
     }
 
     async fn public_name(&self) -> Option<String> {
