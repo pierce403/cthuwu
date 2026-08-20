@@ -94,8 +94,8 @@ const RPC_RETRY_ATTEMPTS = 3;
 const RPC_RETRY_BASE_DELAY_MS = 1_100;
 const L1_FEE_THROTTLE_MS = 1_100;
 // Real canonical-Base estimation for the bounded registration-v1 data URI can exceed
-// 800k gas; 2m remains a strict per-call ceiling and covers the verified profile size.
-const DEFAULT_MAX_GAS_PER_TRANSACTION = 2_000_000n;
+// 4m gas with procedural SVG avatar data URIs; 6m remains a strict per-call ceiling.
+const DEFAULT_MAX_GAS_PER_TRANSACTION = 6_000_000n;
 const DEFAULT_MAX_FEE_PER_GAS_WEI = 10_000_000_000n;
 const DEFAULT_SAFETY_BPS = 12_500n;
 const DEFAULT_RESERVE_WEI = 50_000_000_000_000n;

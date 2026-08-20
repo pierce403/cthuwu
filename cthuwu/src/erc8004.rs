@@ -743,7 +743,7 @@ impl Default for RegistrationConfig {
             maintenance_interval: Duration::from_secs(DEFAULT_MAINTENANCE_INTERVAL_SECONDS),
             gas_safety_basis_points: 12_500,
             post_registration_reserve_wei: "50000000000000".to_owned(),
-            max_gas_per_transaction: 2_000_000,
+            max_gas_per_transaction: 6_000_000,
             max_fee_per_gas_wei: "10000000000".to_owned(),
             initial_public_name: None,
             public_description: "An independently operated Tentacle of the centerless Cthuwu collective, reachable over XMTP.".to_owned(),

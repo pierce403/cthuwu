@@ -250,7 +250,7 @@ struct Cli {
     #[arg(
         long,
         env = "CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION",
-        default_value_t = 2_000_000
+        default_value_t = 6_000_000
     )]
     erc8004_max_gas_per_transaction: u64,
 
