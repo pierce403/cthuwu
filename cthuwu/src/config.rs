@@ -256,21 +256,9 @@ impl BlockchainConfig {
     ) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(BASE_MAINNET_CHAIN_ID.to_be_bytes());
-        digest.update(
-            self.token_contract
-                .unwrap_or(Address::ZERO)
-                .as_bytes(),
-        );
-        digest.update(
-            self.stake_contract
-                .unwrap_or(Address::ZERO)
-                .as_bytes(),
-        );
-        digest.update(
-            self.xmtp_wallet
-                .unwrap_or(Address::ZERO)
-                .as_bytes(),
-        );
+        digest.update(self.token_contract.unwrap_or(Address::ZERO).as_bytes());
+        digest.update(self.stake_contract.unwrap_or(Address::ZERO).as_bytes());
+        digest.update(self.xmtp_wallet.unwrap_or(Address::ZERO).as_bytes());
         digest.update([self.token_decimals]);
         digest.update(self.total_supply_whole.to_be_bytes());
         digest.update(propagation_minimum_stake_basis_points.to_be_bytes());
