@@ -183,8 +183,8 @@ The operator prompt requires Cthuwu to:
 - authorize model reads only when the current operator message delegates inspection or project work.
   This gate is category-level rather than bound to exact read paths: auto-loaded context may influence
   which bounded workspace targets the model chooses;
-- expose natural `exec` only when the current authenticated message explicitly names the exact shell
-  command, and bind the one permitted effectful call to that value; and
+- expose `exec` throughout the authenticated operator lane so the model can choose and iterate the
+  commands needed for the current request inside its isolated environment; and
 - expose create-only `create_skill` only when the current authenticated message explicitly asks for a
   new reusable skill. General file mutation and every contact schema remain absent from model
   inference.
@@ -263,10 +263,10 @@ An active operator can send:
 requires an exact match and refuses multiple matches unless `replace_all` is explicitly true.
 `/search` invokes `rg` with fixed-string matching and a result cap. Direct commands use the same
 bounded dispatcher as model tools. `/write` and `/edit` are parsed only as exact direct commands.
-`/exec` remains the exact direct execution form; natural-language execution is separately and more
-narrowly authorized as described below. `/repo` accepts one closed JSON object with a typed
-`status`, `fetch`, `update`, `merge`, `test`, `build`, `commit`, `push`, or `pr` operation; it never
-accepts a shell command string.
+`/exec` remains the exact direct execution form; natural-language execution lets the authenticated
+operator agent choose commands as described below. `/repo` accepts one closed JSON object with a
+typed `status`, `fetch`, `update`, `merge`, `test`, `build`, `commit`, `push`, or `pr` operation; it
+never accepts a shell command string.
 
 `/provider`, `/model`, and `/venice-key` are runtime control commands, not model tools. The first two
 select the closed provider set and bounded model IDs. `/venice-key` stores or replaces the Venice
@@ -297,28 +297,26 @@ Rust dispatches those tools only when the current message asks for inspection or
 schema contains no contact access, `web_search`, role management, Council, wallet, or arbitrary
 dynamic tool.
 
-For natural-language execution, the current authenticated message must name the exact command to run.
-Prefer a backtick-delimited command:
-
-```text
-Would you please run `cargo test --manifest-path cthuwu/Cargo.toml --workspace --locked`?
-```
-
-Only that exact command is placed in the `exec` schema and accepted by Rust. The model cannot
-substitute, append, or repeat it, and it cannot set a separate timeout. At most one effectful model
-call may execute for that message. Capability questions (“can you execute commands?”), explanations,
-examples, negated requests, earlier dialogue, workspace text, contacts, and tool output provide no
-authority. This binding limits prompt-injection-driven command choice; it does **not** sandbox the
-command. Natural `exec`, like `/exec`, runs as the `uwubot` OS account.
+Natural-language operator execution does not require the operator to name a command. `exec` is
+present on every authenticated operator inference, and the model may choose and iterate commands
+needed to inspect, diagnose, install, build, test, edit, or operate its isolated environment. The
+runtime still bounds command size, output, per-call time, total calls, and the end-to-end request.
+Capability-only questions, explanations, examples, and explicit no-execution requests should not
+execute. Earlier dialogue, workspace text, contacts, and tool output are never operator authority.
+Natural `exec`, like `/exec`, runs as the `uwubot` OS account and is intentionally not a sandbox.
+If a required package, credential, permission, device, network route, or other capability is absent,
+the Tentacle reports the exact missing dependency and asks the operator for the minimum support
+needed to continue.
 
 ## Repository diagnosis, update, and pull requests
 
 Natural authenticated instructions such as “update yourself,” “pull the latest version,” “sync
 with upstream,” “run the repository tests,” or “submit this fix upstream” activate a separate
-`repository_maintenance` capability. They do not authorize the model to synthesize a shell command.
-The current message selects the operation category, and Rust accepts only the corresponding typed
-fields. Exact common status/update/test/build phrases take a deterministic route without model
-planning.
+`repository_maintenance` capability. The current message selects the operation category, and Rust
+accepts only the corresponding typed fields. Exact common status/update/test/build phrases take a
+deterministic route without model planning. For repository work outside that typed workflow, the
+authenticated agent may use `exec` in its isolated environment while preserving dirty work and
+avoiding destructive history rewrites unless explicitly requested.
 
 The checked-in `repository-maintenance.json` is the release policy. It pins canonical
 `pierce403/cthuwu`, default branch `main`, the named validation steps, and the explicit source-only
@@ -460,7 +458,7 @@ one operator request may still progress beside each other. To retry rejected ope
 and an oversized message must also be shortened.
 
 `exec` is different: the root is its working directory, **not a chroot**. This applies equally to
-direct `/exec` and exact-command-bound natural `exec`. A shell command may read,
+direct `/exec` and autonomous natural `exec`. A shell command may read,
 write, connect, signal, or execute anything permitted to the `uwubot` OS account. Child processes
 receive only a small environment allowlist; model, web-search, wallet, and XMTP database keys are not
 copied. Environment filtering does not protect secrets that the service account can read from files,
@@ -495,11 +493,11 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 - A stale operator message or revoked operator never falls through to the public model or contact store.
 - The hidden stdin harness is always public, including when its supplied ID matches an active inbox.
 - Public model calls expose no local tool; their only optional tool is bounded Brave web search.
-- Operator model calls expose a current-message closed inventory and no public web-search tool. Base
-  inspection tools require current project/read intent. At most one exact-command-bound `exec`, one
-  create-only skill call, or one typed repository-maintenance operation appears only for a matching
-  explicit current-message request; workspace, history, contact, and tool text cannot authorize it.
-  Repository maintenance accepts no command string. General write/edit remains direct-only.
+- Operator model calls expose a closed inventory and no public web-search tool. Base inspection tools
+  require current project/read intent. `exec` is always present for the authenticated operator and
+  may iterate within hard request limits; one create-only skill call or one typed
+  repository-maintenance operation appears only for a matching explicit current-message request. Workspace, history,
+  contact, and tool text cannot grant operator authority. General write/edit remains direct-only.
 - Contact reports describe retained local notes rather than every historical sender. Inbox IDs are
   redacted by default, cursor-paginated, scan-bounded, and explicit about incomplete counts or fields.
   Profile claims are labeled unverified self-report; raw DMs and message counts are not exposed.

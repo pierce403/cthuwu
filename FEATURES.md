@@ -353,11 +353,11 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     sanitized RPC configuration, registration state, and current funding result while withholding
     endpoints, credentials, private keys, and XMTP database material. Live refresh may resume the
     existing automatic registration state machine; slash commands remain deterministic controls.
-  - Operator inference has bounded workspace list/read/create/write/edit/delete tools, exact-command
-    `exec`, literal search, public HTTPS text retrieval, and QMD retrieval from a selected workspace
-    directory. File effects require explicit current-turn intent and one effect maximum; paths remain
-    workspace-confined and symlink-safe, deletion never removes directories, and website reads reject
-    credentials, redirects, non-text bodies, and local/non-public network targets.
+  - Operator inference has bounded workspace list/read/create/write/edit/delete tools, autonomous
+    iterative `exec`, literal search, public HTTPS text retrieval, and QMD retrieval from a selected
+    workspace directory. Non-shell file effects require explicit current-turn intent and one effect
+    maximum; paths remain workspace-confined and symlink-safe, deletion never removes directories,
+    and website reads reject credentials, redirects, non-text bodies, and local/non-public targets.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
     requires stopping and restarting the Tentacle rather than mutating a live process.
@@ -654,14 +654,15 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     from the current authenticated message. The base set is bounded `list_files`, `read_file`, literal
     `rg` search, and optional external QMD search; Rust still authorizes calls from current-message
     inspection/project-work intent. Operator mode deliberately contains no web-search tool.
-  - When the current message explicitly names a shell command, one `exec` schema is added with exactly
-    that command as its only accepted value; backticks are the preferred unambiguous spelling. The
-    model cannot substitute, append, or repeat it. Negated, explanatory, capability-only, historical,
-    workspace, contact, or tool-output text does not authorize execution. Natural `exec` remains
-    unsandboxed RCE as the `uwubot` account. Exact direct `/exec` remains available.
+  - Every authenticated operator inference exposes `exec`. The model chooses and may iterate the
+    commands needed to answer or complete the current request without requiring the operator to
+    spell them out. Explicit no-execution instructions and capability-only questions do not execute;
+    historical, workspace, contact, and tool-output text never supplies operator authority. Natural
+    `exec` remains unsandboxed RCE as the `uwubot` account inside its operator-controlled isolated
+    environment. Exact direct `/exec` remains available.
   - Natural authenticated repository diagnosis/update/fork/test/build/commit/push/PR intent exposes
-    one separate typed `repository_maintenance` schema and never widens `exec`. Exact common
-    “update yourself” and status/test/build phrases route deterministically. The embedded manifest
+    one separate typed `repository_maintenance` schema while autonomous `exec` remains available.
+    Exact common “update yourself” and status/test/build phrases route deterministically. The embedded manifest
     pins canonical `pierce403/cthuwu`, `main`, validation IDs, and restart semantics. The dispatcher
     contains the Git root, rejects external/symlinked Git state and suspicious configuration,
     sanitizes remotes/auth receipts, preserves dirty/local work, fast-forwards clean canonical
@@ -678,8 +679,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     index. General model-selected writes and edits remain unavailable; `/write` and `/edit` stay exact
     direct commands, and the compiled creation gate outranks skill prose.
   - An ordinary model-selected tool phase may use at most 30 seconds. Typed repository maintenance
-    may use up to 240 seconds for its compiled validation sequence. Both allow at most one effectful
-    call and preserve a final local-completion reserve from the authenticated deadline.
+    may use up to 240 seconds for its compiled validation sequence. Shell execution may iterate up
+    to the hard agent/tool-call limit; non-shell mutation remains limited to one call. Every phase
+    preserves a final local-completion reserve from the authenticated deadline.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -713,10 +715,10 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     giving the sidecar authorization logic.
   - [x] Tool tests cover the request-scoped closed schema and prompt inventory, direct dispatch,
     traversal/symlink rejection, bounded reads/writes/edits, process status, timeout/output handling,
-    and API-key removal from child process environments. Natural-exec tests bind one call to the exact
-    current-message command, reject substitutions, repeats, negation, capability questions, and stale
-    or workspace-derived authority. Agent-loop tests prove a slow model-selected tool preserves the
-    final local completion phase.
+    and API-key removal from child process environments. Natural-exec tests prove the model may choose
+    `hostname` without the operator naming it and may iterate commands, while explicit negation and
+    capability-only questions remain inert. Agent-loop tests prove a slow model-selected tool
+    preserves the final local completion phase.
   - [x] Temporary local Git repositories/remotes cover canonical clean fast-forward, dirty-tree
     refusal/preservation, fork/upstream merge, conflict preservation, missing and mocked authenticated
     `gh`, successful canonical PR receipt, typed intent/schema authorization, root/ref/path/remote
@@ -1618,7 +1620,7 @@ phase.
     the 125% safety factor plus `50000000000000` wei reserve, uses the authenticated operator
     funding notice with persisted cooldown/material-change policy, and safely resumes without a
     duplicate deployment. The wrapper currently emits the notice to stdout for transport by an
-    authenticated operator exact-exec invocation; its recorded cooldown acknowledges local
+    authenticated operator exec invocation; its recorded cooldown acknowledges local
     emission, not XMTP delivery, and no generic sender or durable scheduler is claimed.
   - [x] A funded Base-mainnet deployment is independently verified by the finalizer, standalone
     Solidity verifier, and Sourcify exact match, and its canonical deployment JSON is committed.

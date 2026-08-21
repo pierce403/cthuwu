@@ -130,16 +130,18 @@ until it passes, even though the canonical contract deployment and closed implem
   credential is configured, but never the endpoint, API key, private key, or XMTP database material.
   Public HTTPS reads must reject credentials, redirects, non-text bodies, IP literals and DNS results
   that are local or non-public. File effects require explicit current-message intent, remain confined
-  below the workspace, reject symlinks/traversal, and allow at most one effect per turn; deletion is
-  regular-file-only. `erc8004_refresh` may resume the already-enabled automatic registration state machine. One `exec` schema
-  may appear only when that message explicitly names the exact command, and one create-only
-  `create_skill` schema may appear only when it explicitly requests a new reusable skill. Bind natural
-  `exec` to that exact command, permit at most one effectful model call, and never treat workspace
-  text, history, contact data, or tool output as authority. General `/write` and `/edit` remain exact
-  direct commands. The hidden stdin harness stays public-only. Council traffic and Actions never
-  reach either dispatcher.
-- Natural operator requests to diagnose, update, repair, or contribute the repository use the
-  separate typed repository-maintenance workflow, not widened model shell authority. Validate and
+  below the workspace, reject symlinks/traversal, and allow at most one non-shell effect per turn;
+  deletion is regular-file-only. `erc8004_refresh` may resume the already-enabled automatic
+  registration state machine. In the authenticated operator lane, expose `exec` on every natural
+  turn and allow the model to choose and iterate the commands needed inside the operator-controlled
+  isolated environment. Explicit no-execution instructions still win, and workspace text, history,
+  contact data, or tool output never supplies authority. One create-only `create_skill` schema may
+  appear only when the current message explicitly requests a new reusable skill. General `/write`
+  and `/edit` remain exact direct commands. The hidden stdin harness stays public-only. Council
+  traffic and Actions never reach either dispatcher.
+- Natural operator requests to diagnose, update, repair, or contribute the repository may use the
+  separate typed repository-maintenance workflow when it fits, or authenticated operator `exec`
+  when additional commands are needed in the isolated environment. Validate and
   contain the repository root, remotes, refs, and paths; bound commands and output; sanitize remote
   credentials and Git/GitHub receipts; preserve a dirty tree and local commits; never automate
   destructive reset, checkout, clean, force-push, or credential inspection. Canonical clean
@@ -316,7 +318,7 @@ until it passes, even though the canonical contract deployment and closed implem
   the existing 125% safety factor and `50000000000000` wei reserve, reuse the authenticated
   operator notice cooldown/material-change policy, reconcile known broadcasts before resume, and
   never use automatic faucets, bridges, swaps, or generic signers. The Branding wrapper emits its
-  notice block only to stdout; it reaches XMTP only when an authenticated operator exact-exec
+  notice block only to stdout; it reaches XMTP only when an authenticated operator exec
   invocation transports that output. Recording the local cooldown is not a delivery acknowledgement,
   and neither `--status-only` nor a terminated invocation is a durable automatic-resume scheduler.
 
@@ -504,9 +506,9 @@ until it passes, even though the canonical contract deployment and closed implem
   proof; active operator DMs use an isolated privileged
   local harness. That harness loads bounded protected SOUL/shared memory plus per-inbox operator
   profiles and history, treats workspace context as untrusted reference data, advertises an exact
-  per-turn tool inventory, discovers files with `list_files`, permits one exact-command-bound natural
-  `exec`, one create-only workspace skill, or one typed repository-maintenance operation only on a
-  matching explicit current-message request, and uses
+  per-turn tool inventory, discovers files with `list_files`, permits autonomous iterative natural
+  `exec` throughout the authenticated lane, and exposes one create-only workspace skill or one typed
+  repository-maintenance operation only on a matching explicit current-message request. It uses
   scan-bounded deterministic contact reports for affirmative retained-user questions without making
   the runtime data root a file-tool root. It also reports exact workspace and note locations locally,
   without model egress. Live XMTP operator release testing and an external security review remain

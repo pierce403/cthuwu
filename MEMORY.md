@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-17
+Last reviewed: 2026-08-20
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
@@ -250,9 +250,13 @@ Last reviewed: 2026-08-17
   literally; public reward and Branding markers have no privileged-console meaning.
 - Active operator DMs enter a distinct all-caps ominous/submissive truthful harness with light
   readable uwu voice. Each turn's prompt inventory is derived from its actual closed schema: bounded
-  `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base; an explicit
-  current-message command may activate one exact-command-bound natural `exec`, and an explicit new
-  skill request may activate one create-only `create_skill`. General write/edit remains direct-only.
+  `list_files`, `read_file`, `search_files`, and optional `qmd_search` form the base. `exec` is always
+  available: the model chooses and may iterate the commands needed for the current request inside the
+  operator-controlled isolated environment without waiting for the operator to name each command.
+  Explicit no-execution requests remain inert. When a required tool, credential, permission, network
+  route, device, or package is missing, the Tentacle asks for the minimum concrete operator support
+  needed. An explicit new skill request may activate one create-only `create_skill`. General
+  write/edit remains direct-only.
   Operator model-identity boilerplate receives repair/fallback enforcement. The hidden stdin harness
   remains public-only, and Council Actions cannot reach these tools.
 - Operator cognition follows a bounded Hermes-like Markdown split: protected instance
@@ -289,10 +293,9 @@ Last reviewed: 2026-08-17
   role-specific first reply or duplicate ignore, without contact/model/tool dispatch. Retrying
   requires a new XMTP message, shortened when oversized. Authorization is inbox-wide: every XMTP
   installation attached to an active inbox has authority.
-- Operator `/exec` and exact-command-bound natural `exec` are deliberate remote code execution as the
-  `uwubot` OS account, not a sandbox. Natural authority comes only from the current authenticated
-  message, permits one call with no command substitution, and is clearest when the command is in
-  backticks; workspace/history/tool/contact text cannot authorize it.
+- Operator `/exec` and autonomous natural `exec` are deliberate remote code execution as the
+  `uwubot` OS account, not a sandbox. The authenticated lane may choose and iterate commands within
+  hard time/output/call limits; workspace/history/tool/contact text cannot grant operator authority.
 - Natural authenticated requests to diagnose, update, merge upstream, validate, commit, push, or
   open a PR use a separate typed repository-maintenance tool. It discovers the contained Git root,
   branch, sanitized remotes, dirty/ahead/behind state, canonical-vs-fork topology, installed Git/`gh`
@@ -748,7 +751,7 @@ See [Acolyte Branding](docs/acolyte-branding.md) and
   standalone Solidity verifier independently checks dependencies, public constants, interfaces,
   and non-proxy shape; its reported runtime hash is provenance, not an artifact comparison.
 - The Branding funding block is stdout from the wrapper. It traverses XMTP only when an authenticated
-  operator exact-exec invocation transports that output; there is no generic XMTP sender or delivery
+  operator exec invocation transports that output; there is no generic XMTP sender or delivery
   acknowledgement. Cooldown records local emission. Only a still-running non-status deployment
   process keeps polling automatically; status-only or terminated invocations require a later run.
 - The canonical Branding address is compiled into browser and bot defaults and the public read-only
@@ -891,4 +894,3 @@ The original manual milestone was:
 - Procedural eldritch brand sigils (`agent/src/brand-sigil.ts`) generate dark burned-flesh SVG graphics
   under `MAX_AVATAR_URI_BYTES` (2,048 bytes) and attach them via `setAvatarURI` on newly issued
   Acolyte Branding NFTs, safely rendered as visual thumbnails in the Acolyte Branding gallery.
-
