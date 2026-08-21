@@ -300,7 +300,9 @@ dynamic tool.
 Natural-language operator execution does not require the operator to name a command. `exec` is
 present on every authenticated operator inference, and the model may choose and iterate commands
 needed to inspect, diagnose, install, build, test, edit, or operate its isolated environment. The
-runtime still bounds command size, output, per-call time, total calls, and the end-to-end request.
+runtime still bounds command size, output, per-call time, and the end-to-end request. One natural
+operator turn may make up to 24 tool calls plus a final completion step; the wall-clock deadline can
+end work sooner and still preserves time for a truthful final response.
 Capability-only questions, explanations, examples, and explicit no-execution requests should not
 execute. Earlier dialogue, workspace text, contacts, and tool output are never operator authority.
 Natural `exec`, like `/exec`, runs as the `uwubot` OS account and is intentionally not a sandbox.

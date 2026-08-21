@@ -84,6 +84,9 @@ Last reviewed: 2026-08-20
   effective maximum about 118 seconds despite its
   configurable 120-second cap. Model-selected tools preserve a final local completion; budget skips
   do not trigger provider cooldown, and failure cooldown is isolated by lane.
+- Authenticated operator inference permits 24 model-selected tool calls plus a final completion
+  step. The request deadline, per-tool timeout, bounded receipts, and final-completion reserve still
+  stop runaway work; the larger call budget allows legitimate multi-command diagnosis to finish.
 - Public Brave search is exposed at runtime only when the current message explicitly asks for
   current or web-verifiable information; ordinary chatter, stable facts, and repair completions get
   no search schema.

@@ -680,8 +680,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     direct commands, and the compiled creation gate outranks skill prose.
   - An ordinary model-selected tool phase may use at most 30 seconds. Typed repository maintenance
     may use up to 240 seconds for its compiled validation sequence. Shell execution may iterate up
-    to the hard agent/tool-call limit; non-shell mutation remains limited to one call. Every phase
-    preserves a final local-completion reserve from the authenticated deadline.
+    to 24 tool calls and one final completion step; non-shell mutation remains limited to one call.
+    Every phase preserves a final local-completion reserve from the authenticated deadline.
   - Contact tools parse `ContactStore` rather than widening the operator filesystem root. They
     describe only retained local notes, distinguish observations from unverified user assertions,
     redact inbox IDs by default, expose a continuation cursor, bound note size and directory scanning,
@@ -716,8 +716,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - [x] Tool tests cover the request-scoped closed schema and prompt inventory, direct dispatch,
     traversal/symlink rejection, bounded reads/writes/edits, process status, timeout/output handling,
     and API-key removal from child process environments. Natural-exec tests prove the model may choose
-    `hostname` without the operator naming it and may iterate commands, while explicit negation and
-    capability-only questions remain inert. Agent-loop tests prove a slow model-selected tool
+    `hostname` without the operator naming it and may complete twelve iterative commands before its
+    final answer, while explicit negation and capability-only questions remain inert. Agent-loop
+    tests prove a slow model-selected tool
     preserves the final local completion phase.
   - [x] Temporary local Git repositories/remotes cover canonical clean fast-forward, dirty-tree
     refusal/preservation, fork/upstream merge, conflict preservation, missing and mocked authenticated

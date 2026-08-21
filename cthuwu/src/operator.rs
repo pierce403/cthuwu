@@ -33,8 +33,10 @@ use tokio::{
 };
 use tracing::{info, warn};
 
-const MAX_OPERATOR_AGENT_STEPS: usize = 8;
-const MAX_OPERATOR_TOOL_CALLS: usize = 8;
+// Leave enough room for a legitimate multi-command diagnosis while the operator deadline,
+// per-tool timeout, bounded receipts, and final-completion reserve remain the primary limits.
+const MAX_OPERATOR_TOOL_CALLS: usize = 24;
+const MAX_OPERATOR_AGENT_STEPS: usize = MAX_OPERATOR_TOOL_CALLS + 1;
 const MAX_OPERATOR_HISTORY_MESSAGES: usize = 12;
 const MAX_OPERATOR_HISTORY_BYTES: usize = 32 * 1024;
 const MAX_OPERATOR_MESSAGE_BYTES: usize = 16 * 1024;
@@ -2822,6 +2824,8 @@ fn natural_repository_operation(text: &str) -> Option<&'static str> {
         "show repo status",
         "show git status",
         "what version are you running",
+        "what can you tell me about the latest version of your code",
+        "tell me about the latest version of your code",
         "what commit are you on",
         "what branch are you on",
         "are you up to date",
@@ -3047,6 +3051,8 @@ fn deterministic_repository_maintenance_request(text: &str) -> Option<Value> {
                 "show repo status",
                 "show git status",
                 "what version are you running",
+                "what can you tell me about the latest version of your code",
+                "tell me about the latest version of your code",
                 "what commit are you on",
                 "what branch are you on",
                 "are you up to date",
@@ -4117,6 +4123,7 @@ mod tests {
 
     struct RepeatedExecModel {
         calls: AtomicUsize,
+        exec_calls_before_final: usize,
     }
 
     #[async_trait]
@@ -4209,12 +4216,12 @@ mod tests {
             _messages: &[Value],
             _tools: &[Value],
         ) -> Result<RawAssistantMessage> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) < 2 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < self.exec_calls_before_final {
                 Ok(tool_call_message("exec", r#"{"command":"cargo test"}"#))
             } else {
                 Ok(RawAssistantMessage {
                     content: Some(
-                        "hewwo, operator. both command receipts were inspected, uwu.".into(),
+                        "hewwo, operator. all command receipts were inspected, uwu.".into(),
                     ),
                     tool_calls: Vec::new(),
                 })
@@ -4421,13 +4428,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn natural_operator_request_can_iterate_shell_commands() {
+    async fn natural_operator_request_can_iterate_beyond_old_tool_limit() {
         let root = tempfile::tempdir().unwrap();
         let fake = Arc::new(FakeTools {
             calls: Mutex::new(Vec::new()),
         });
         let model = Arc::new(RepeatedExecModel {
             calls: AtomicUsize::new(0),
+            exec_calls_before_final: 12,
         });
         let harness = OperatorHarness::new(
             model.clone(),
@@ -4440,9 +4448,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response.contains("BOTH COMMAND RECEIPTS"));
-        assert_eq!(fake.calls.lock().unwrap().len(), 2);
-        assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+        assert!(response.contains("ALL COMMAND RECEIPTS"));
+        assert_eq!(fake.calls.lock().unwrap().len(), 12);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 13);
     }
 
     #[tokio::test]
@@ -5949,6 +5957,7 @@ mod tests {
             "troubleshoot the repository",
             "debug yourself",
             "debug the repository",
+            "what can you tell me about the latest version of your code?",
         ] {
             assert_eq!(
                 deterministic_repository_maintenance_request(phrase),
