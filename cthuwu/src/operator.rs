@@ -4402,7 +4402,10 @@ mod tests {
         );
 
         harness
-            .respond(TEST_OPERATOR_ID, "hey, what's the hostname of the system you're on?")
+            .respond(
+                TEST_OPERATOR_ID,
+                "hey, what's the hostname of the system you're on?",
+            )
             .await
             .unwrap();
 
