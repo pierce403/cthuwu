@@ -2713,7 +2713,7 @@ fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>> {
         "hex value is malformed or oversized"
     );
     let mut output = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         let high = hex_nibble(pair[0]).context("non-hexadecimal digit")?;
         let low = hex_nibble(pair[1]).context("non-hexadecimal digit")?;
         output.push((high << 4) | low);
@@ -2781,12 +2781,11 @@ fn reject_symlink(path: &Path) -> Result<()> {
 fn keccak256(input: &[u8]) -> [u8; 32] {
     const RATE: usize = 136;
     let mut state = [0_u64; 25];
-    let mut chunks = input.chunks_exact(RATE);
-    for block in &mut chunks {
+    let (chunks, remainder) = input.as_chunks::<RATE>();
+    for block in chunks {
         absorb_keccak_block(&mut state, block);
         keccak_f1600(&mut state);
     }
-    let remainder = chunks.remainder();
     let mut last = [0_u8; RATE];
     last[..remainder.len()].copy_from_slice(remainder);
     last[remainder.len()] ^= 0x01;

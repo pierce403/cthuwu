@@ -40,7 +40,7 @@ impl FromStr for TokenProposalId {
         }
 
         let mut bytes = [0_u8; 32];
-        for (pair, byte) in encoded.as_bytes().chunks_exact(2).zip(&mut bytes) {
+        for (pair, byte) in encoded.as_bytes().as_chunks::<2>().0.iter().zip(&mut bytes) {
             let high =
                 decode_hex_nibble(pair[0]).ok_or(TokenGovernanceError::InvalidProposalId(
                     "proposal id contains a non-hexadecimal digit",

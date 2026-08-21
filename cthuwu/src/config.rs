@@ -258,17 +258,17 @@ impl BlockchainConfig {
         digest.update(BASE_MAINNET_CHAIN_ID.to_be_bytes());
         digest.update(
             self.token_contract
-                .map_or(Address::ZERO, |address| address)
+                .unwrap_or(Address::ZERO)
                 .as_bytes(),
         );
         digest.update(
             self.stake_contract
-                .map_or(Address::ZERO, |address| address)
+                .unwrap_or(Address::ZERO)
                 .as_bytes(),
         );
         digest.update(
             self.xmtp_wallet
-                .map_or(Address::ZERO, |address| address)
+                .unwrap_or(Address::ZERO)
                 .as_bytes(),
         );
         digest.update([self.token_decimals]);

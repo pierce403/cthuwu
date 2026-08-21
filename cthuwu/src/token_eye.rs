@@ -1319,7 +1319,7 @@ fn decode_hex_exact(encoded: &[u8], output: &mut [u8]) -> Result<(), &'static st
     if encoded.len() != output.len() * 2 {
         return Err("hexadecimal value has the wrong length");
     }
-    for (pair, byte) in encoded.chunks_exact(2).zip(output.iter_mut()) {
+    for (pair, byte) in encoded.as_chunks::<2>().0.iter().zip(output.iter_mut()) {
         let high = decode_hex_nibble(pair[0]).ok_or("value contains a non-hexadecimal digit")?;
         let low = decode_hex_nibble(pair[1]).ok_or("value contains a non-hexadecimal digit")?;
         *byte = (high << 4) | low;

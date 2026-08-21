@@ -1652,7 +1652,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 fn decode_hex_32(value: &str) -> Result<[u8; 32], HermesError> {
     validate_hex_digest(value, "signature")?;
     let mut output = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = decode_nibble(pair[0])
             .ok_or_else(|| HermesError::Invalid("signature contains invalid hex".to_owned()))?;
         let low = decode_nibble(pair[1])

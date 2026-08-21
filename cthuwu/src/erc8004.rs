@@ -3764,7 +3764,7 @@ fn decode_helper_bytes(value: &Value, maximum: usize) -> Result<Vec<u8>> {
     let encoded = required_hex(value, "hex", maximum.saturating_mul(2).saturating_add(2))?;
     let bytes = encoded.as_bytes();
     let mut decoded = Vec::with_capacity((bytes.len() - 2) / 2);
-    for pair in bytes[2..].chunks_exact(2) {
+    for pair in bytes[2..].as_chunks::<2>().0 {
         let high = (pair[0] as char)
             .to_digit(16)
             .context("helper metadata contains invalid hex")?;
