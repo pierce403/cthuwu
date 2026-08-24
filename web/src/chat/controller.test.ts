@@ -164,6 +164,56 @@ describe("three-channel chat controller", () => {
     expect(workspace.close).toHaveBeenCalledOnce();
   });
 
+  it("reports the actual reason messaging is unavailable", async () => {
+    const start = initialSnapshot();
+    start.channels.direct.retentionVerified = false;
+    start.channels.direct.status = "loading";
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    const notice = document.querySelector("#retention-notice");
+    expect(notice?.textContent).toContain("Checking this channel's trusted route");
+    expect(notice?.textContent).not.toContain("Composer locked");
+
+    start.channels.direct.status = "policy-blocked";
+    start.channels.direct.error = "No ranked Tentacle answered the liveness check";
+    workspace.emit();
+    expect(notice?.textContent).toBe(
+      "Messaging is unavailable: No ranked Tentacle answered the liveness check",
+    );
+
+    delete start.channels.direct.error;
+    start.channels.direct.status = "awaiting-assignment";
+    workspace.emit();
+    expect(notice?.textContent).toContain("assigned Tentacle provisions this channel");
+
+    start.connected = false;
+    start.channels.direct.status = "error";
+    workspace.emit();
+    expect(notice?.textContent).toBe("Messaging is unavailable while XMTP reconnects.");
+    await controller.close();
+  });
+
+  it("does not leave a retention warning behind when XMTP connection fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => {
+        throw new Error("XMTP unavailable");
+      }),
+    });
+
+    await controller.connect();
+
+    expect(document.querySelector("#retention-notice")?.textContent).toBe(
+      "Messaging is unavailable because XMTP could not connect.",
+    );
+    expect(document.querySelector("#retention-notice")?.textContent).not.toContain("14-day");
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
+
   it("starts a fresh workspace when the user retries a completed liveness race", async () => {
     const failedSnapshot = {
       ...initialSnapshot(),

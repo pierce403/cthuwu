@@ -187,7 +187,9 @@ Last reviewed: 2026-08-20
 - Direct, Acolytes, and Global require XMTP disappearing settings `fromNs = 1n` and
   `inNs = 1_209_600_000_000_000n`. The relevant channel composer remains disabled until policy
   verification succeeds, and deleted-message events remove expired messages from the rendered UI.
-  This is supporting-client retention, not erasure of independent copies.
+  Composer status must identify connection, assignment, routing, or retention as the actual blocker;
+  a generic unverified-retention warning must not mask another channel error. This is supporting-client
+  retention, not erasure of independent copies.
 - Three-channel browser persistence is confined to `cthuwu.chat.*`, separate from
   `cthuwu:leaderboard:v1`, and never places inbox IDs, group IDs, revisions, or conversations on-chain.
 - The web presentation is a responsive "pocket séance" layout. Its generated Cthuwu cutout lives at

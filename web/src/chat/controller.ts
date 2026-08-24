@@ -18,6 +18,7 @@ import {
 import { createXmtpWorkspace } from "./xmtp-workspace";
 import {
   CHAT_CHANNELS,
+  type ChannelSnapshot,
   type ChatChannel,
   type ChatWorkspace,
   type WorkspaceSnapshot,
@@ -300,9 +301,7 @@ export function initializeChatController(
       reconcileBranding(latestOffer, latestConsent, latestReceipt, latestDeclinedOfferId, latestRequest);
     }
     elements.retention.hidden = false;
-    elements.retention.textContent = channel.retentionVerified
-      ? "Messages disappear from supporting clients after 14 days."
-      : "Composer locked until the 14-day disappearing-message policy is verified.";
+    elements.retention.textContent = composerAvailabilityCopy(snapshot, channel);
     const assignmentRetryable = snapshot.assignmentState === "registry-unavailable" ||
       snapshot.assignmentState === "direct-verification-unavailable" ||
       snapshot.assignmentState === "liveness-unavailable";
@@ -463,6 +462,7 @@ export function initializeChatController(
   function setError(message: string): void {
     elements.root.dataset.state = "retryable-error";
     elements.status.textContent = message;
+    elements.retention.textContent = "Messaging is unavailable because XMTP could not connect.";
     elements.retry.hidden = false;
     elements.input.disabled = true;
     elements.send.disabled = true;
@@ -708,6 +708,28 @@ export function initializeChatController(
     }
     elements.brandingDialog.hidden = true;
   }
+}
+
+function composerAvailabilityCopy(
+  snapshot: WorkspaceSnapshot,
+  channel: ChannelSnapshot,
+): string {
+  if (channel.error) return `Messaging is unavailable: ${channel.error}`;
+  if (!snapshot.connected) return "Messaging is unavailable while XMTP reconnects.";
+  if (channel.retentionVerified) {
+    return "Messages disappear from supporting clients after 14 days.";
+  }
+  if (channel.status === "loading") {
+    return "Checking this channel's trusted route and 14-day message policy…";
+  }
+  if (channel.status === "awaiting-assignment") {
+    return "Messaging will be available after the assigned Tentacle provisions this channel.";
+  }
+  if (channel.status === "policy-blocked") {
+    return "Messaging is unavailable until this channel's trusted route and policy are verified.";
+  }
+  if (channel.status === "error") return "Messaging is unavailable for this channel.";
+  return "Checking the 14-day message policy before enabling messaging…";
 }
 
 function chatElements(): ChatElements {

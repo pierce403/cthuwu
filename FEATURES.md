@@ -262,8 +262,10 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     and assignment—not a human-readable name.
   - Every Direct, Acolytes, and Global conversation requires disappearing settings `fromNs = 1n`
     and `inNs = 1_209_600_000_000_000n`. Direct participants may repair Direct; group admins repair
-    groups. The composer remains disabled until the exact policy verifies and the UI says messages
-    disappear from supporting clients after 14 days.
+    groups. The composer remains disabled until the exact policy verifies. Its status distinguishes
+    connection, assignment, routing, and retention failures; it names the underlying channel error
+    instead of presenting every blocked state as a retention-policy failure. Once verified, the UI
+    says messages disappear from supporting clients after 14 days.
   - Browser persistence uses only `cthuwu.chat.*`; leaderboard cache keys remain untouched and no
     inbox ID, group ID, assignment revision, or conversation data is put on-chain.
   - Browser configuration uses `VITE_CTHUWU_BASE_RPC_ENDPOINT`, whose production default is the
