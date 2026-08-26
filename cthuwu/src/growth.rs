@@ -171,7 +171,10 @@ impl GrowthContext {
             .referral_bounty_phase
             .map(referral_phase_label)
             .unwrap_or_else(|| "none".to_owned());
-        let url = self.shareable_referral_url.as_deref().unwrap_or("not-yet-available");
+        let url = self
+            .shareable_referral_url
+            .as_deref()
+            .unwrap_or("not-yet-available");
         format!(
             "growth.is_acolyte={}\ngrowth.immutable_referrer={}\ngrowth.referral_bounty_phase={}\ngrowth.shareable_referral_url={}",
             self.is_acolyte, referrer, phase, url
@@ -298,9 +301,7 @@ impl GrowthStore {
         restrict_file(temporary.as_file(), "temporary Acolyte growth snapshot")?;
         temporary.write_all(&encoded)?;
         temporary.as_file().sync_all()?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| error.error)?;
+        temporary.persist(&self.path).map_err(|error| error.error)?;
         sync_directory(&self.directory)
     }
 }
@@ -382,7 +383,10 @@ impl GrowthRuntime {
             }
             return Ok(false);
         }
-        ensure!(self.state.records.len() < MAX_RECORDS, "growth record limit reached");
+        ensure!(
+            self.state.records.len() < MAX_RECORDS,
+            "growth record limit reached"
+        );
         self.state.records.push(ReferralRecord {
             inbox_id: normalized_inbox,
             acolyte: acolyte_string,
@@ -419,7 +423,10 @@ impl GrowthRuntime {
         now: u64,
     ) -> Result<Option<String>> {
         let Some(raw_referrer) = parse_referral_control(text) else {
-            if text.to_ascii_lowercase().contains("[[cthuwu:referral-attribution:") {
+            if text
+                .to_ascii_lowercase()
+                .contains("[[cthuwu:referral-attribution:")
+            {
                 return Ok(Some("that referral control was malformed, so i pinned nothing and queued no reward, fwiend.".to_owned()));
             }
             return Ok(None);
@@ -476,7 +483,10 @@ impl GrowthRuntime {
             record.attributed_at_unix = Some(now);
             record.updated_at_unix = now;
         } else {
-            ensure!(self.state.records.len() < MAX_RECORDS, "growth record limit reached");
+            ensure!(
+                self.state.records.len() < MAX_RECORDS,
+                "growth record limit reached"
+            );
             self.state.records.push(ReferralRecord {
                 inbox_id: inbox_id.to_ascii_lowercase(),
                 acolyte: acolyte_string,
@@ -592,12 +602,9 @@ impl GrowthRuntime {
             return Ok(false);
         }
         let acolyte_string = acolyte.to_string();
-        if self
-            .state
-            .records
-            .iter()
-            .any(|record| record.acolyte == acolyte_string && record.onboarding_completed_at_unix.is_some())
-        {
+        if self.state.records.iter().any(|record| {
+            record.acolyte == acolyte_string && record.onboarding_completed_at_unix.is_some()
+        }) {
             return Ok(false);
         }
         let index = if let Some(index) = self
@@ -608,7 +615,10 @@ impl GrowthRuntime {
         {
             index
         } else {
-            ensure!(self.state.records.len() < MAX_RECORDS, "growth record limit reached");
+            ensure!(
+                self.state.records.len() < MAX_RECORDS,
+                "growth record limit reached"
+            );
             self.state.records.push(ReferralRecord {
                 inbox_id: inbox_id.to_ascii_lowercase(),
                 acolyte: acolyte_string.clone(),
@@ -678,15 +688,17 @@ impl GrowthRuntime {
     }
 
     pub(crate) fn branding_state(&self, acolyte: Address) -> Option<DurableBrandingState> {
-        self.record(acolyte).and_then(|record| record.branding_state)
+        self.record(acolyte)
+            .and_then(|record| record.branding_state)
     }
 
     pub(crate) fn identity_conflicts(&self, inbox_id: &str, acolyte: Address) -> bool {
         let normalized_inbox = inbox_id.to_ascii_lowercase();
         let acolyte = acolyte.to_string();
-        self.state.records.iter().any(|record| {
-            record.inbox_id == normalized_inbox && record.acolyte != acolyte
-        })
+        self.state
+            .records
+            .iter()
+            .any(|record| record.inbox_id == normalized_inbox && record.acolyte != acolyte)
     }
 
     pub(crate) fn note_branding_state(
@@ -699,11 +711,7 @@ impl GrowthRuntime {
         validate_inbox(inbox_id)?;
         if self.record(acolyte).is_none() {
             let contact_created_at = self.state.updated_at_unix.max(observed_at);
-            self.mark_contact(
-                inbox_id,
-                &acolyte.to_string(),
-                contact_created_at,
-            )?;
+            self.mark_contact(inbox_id, &acolyte.to_string(), contact_created_at)?;
         }
         let record = self
             .state
@@ -758,10 +766,7 @@ impl GrowthRuntime {
     }
 
     pub(crate) fn referral_url(&self, referrer: Address) -> String {
-        format!(
-            "{}/#t={}&r={}",
-            self.public_origin, self.minter, referrer
-        )
+        format!("{}/#t={}&r={}", self.public_origin, self.minter, referrer)
     }
 
     pub(crate) fn stats(&self, branded: usize, now: u64) -> GrowthStats {
@@ -796,9 +801,11 @@ impl GrowthRuntime {
                 .records
                 .iter()
                 .filter(|record| {
-                    record.onboarding_completed_at_unix.is_some_and(|completed| {
-                        now.saturating_sub(completed) <= RECENT_ONBOARDING_SECONDS
-                    })
+                    record
+                        .onboarding_completed_at_unix
+                        .is_some_and(|completed| {
+                            now.saturating_sub(completed) <= RECENT_ONBOARDING_SECONDS
+                        })
                 })
                 .count(),
             referrals_sent: self.state.referrals_sent,
@@ -894,12 +901,14 @@ impl GrowthRuntime {
                 commitment: delivery.commitment.clone(),
             }));
         }
-        if let Some((index, delivery)) = self
-            .state
-            .records
-            .iter()
-            .enumerate()
-            .find_map(|(index, record)| record.pending_delivery.as_ref().map(|value| (index, value)))
+        if let Some((index, delivery)) =
+            self.state
+                .records
+                .iter()
+                .enumerate()
+                .find_map(|(index, record)| {
+                    record.pending_delivery.as_ref().map(|value| (index, value))
+                })
         {
             return Ok(Some(GrowthDelivery {
                 audience: match delivery.target {
@@ -921,10 +930,8 @@ impl GrowthRuntime {
             ) && record.next_attempt_unix <= now
         }) {
             if self.state.records[index].phase == ReferralRewardPhase::OnboardingComplete {
-                let acolyte = parse_nonzero_address(
-                    &self.state.records[index].acolyte,
-                    "persisted acolyte",
-                )?;
+                let acolyte =
+                    parse_nonzero_address(&self.state.records[index].acolyte, "persisted acolyte")?;
                 let record = &mut self.state.records[index];
                 record.reward_action_id = Some(format!("referral-bounty:{}", address_key(acolyte)));
                 record.phase = ReferralRewardPhase::RewardPending;
@@ -936,9 +943,10 @@ impl GrowthRuntime {
             return self.reconcile_reward(index, now).await;
         }
         if !self.state.verified_operators.is_empty()
-            && self.state.last_operator_prompt_unix.is_some_and(|last| {
-                now.saturating_sub(last) >= OPERATOR_PROMPT_COOLDOWN_SECONDS
-            })
+            && self
+                .state
+                .last_operator_prompt_unix
+                .is_some_and(|last| now.saturating_sub(last) >= OPERATOR_PROMPT_COOLDOWN_SECONDS)
         {
             let operator = parse_nonzero_address(
                 &self.state.verified_operators[0].address,
@@ -980,11 +988,7 @@ impl GrowthRuntime {
         Ok(None)
     }
 
-    async fn reconcile_reward(
-        &mut self,
-        index: usize,
-        now: u64,
-    ) -> Result<Option<GrowthDelivery>> {
+    async fn reconcile_reward(&mut self, index: usize, now: u64) -> Result<Option<GrowthDelivery>> {
         let record = self.state.records[index].clone();
         let referrer = record
             .referrer
@@ -1026,7 +1030,12 @@ impl GrowthRuntime {
         };
         let result: ReferralBountyResult = serde_json::from_value(result)
             .context("referral bounty helper returned an invalid result")?;
-        validate_result(&result, &record, self.minter, &self.reward_amount_base_units)?;
+        validate_result(
+            &result,
+            &record,
+            self.minter,
+            &self.reward_amount_base_units,
+        )?;
         match result.disposition {
             ReferralBountyDisposition::FundingRequired => {
                 let fingerprint = commitment(
@@ -1218,13 +1227,22 @@ impl GrowthRuntime {
 }
 
 fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -> Result<()> {
-    ensure!(snapshot.version == SNAPSHOT_VERSION, "unsupported growth snapshot version");
-    ensure!(snapshot.records.len() <= MAX_RECORDS, "growth record limit exceeded");
+    ensure!(
+        snapshot.version == SNAPSHOT_VERSION,
+        "unsupported growth snapshot version"
+    );
+    ensure!(
+        snapshot.records.len() <= MAX_RECORDS,
+        "growth record limit exceeded"
+    );
     ensure!(
         snapshot.verified_operators.len() <= MAX_OPERATORS,
         "growth operator limit exceeded"
     );
-    ensure!(snapshot.operator_prompt_variant < 3, "invalid operator prompt variant");
+    ensure!(
+        snapshot.operator_prompt_variant < 3,
+        "invalid operator prompt variant"
+    );
     if let Some(delivery) = &snapshot.pending_operator_prompt {
         ensure!(
             delivery.target == GrowthDeliveryTarget::Operators
@@ -1241,7 +1259,10 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
     for operator in &snapshot.verified_operators {
         validate_inbox(&operator.inbox_id)?;
         let address = parse_nonzero_address(&operator.address, "persisted operator")?;
-        ensure!(address != minter, "operator referrer is the Tentacle treasury");
+        ensure!(
+            address != minter,
+            "operator referrer is the Tentacle treasury"
+        );
         ensure!(
             operator_addresses.insert(operator.address.clone()),
             "duplicate operator payout address"
@@ -1258,7 +1279,10 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
             "one XMTP inbox cannot create multiple acolyte reward records"
         );
         let acolyte = parse_nonzero_address(&record.acolyte, "persisted acolyte")?;
-        ensure!(acolytes.insert(record.acolyte.clone()), "duplicate acolyte reward record");
+        ensure!(
+            acolytes.insert(record.acolyte.clone()),
+            "duplicate acolyte reward record"
+        );
         validate_decimal(&record.reward_amount_base_units, "persisted reward", true)?;
         if let Some(referrer) = &record.referrer {
             let referrer = parse_nonzero_address(referrer, "persisted referrer")?;
@@ -1266,7 +1290,10 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
                 acolyte != minter && referrer != acolyte && referrer != minter,
                 "ineligible persisted referral participants"
             );
-            ensure!(record.attributed_at_unix.is_some(), "referral has no attribution time");
+            ensure!(
+                record.attributed_at_unix.is_some(),
+                "referral has no attribution time"
+            );
         }
         ensure!(
             record.referrer.is_some() == record.referrer_inbox_id.is_some(),
@@ -1284,7 +1311,10 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
                 action_id == &format!("referral-bounty:{}", address_key(acolyte)),
                 "reward action is not bound to the acolyte"
             );
-            ensure!(action_ids.insert(action_id.clone()), "duplicate reward action ID");
+            ensure!(
+                action_ids.insert(action_id.clone()),
+                "duplicate reward action ID"
+            );
         }
         if let Some(hash) = &record.transaction_hash {
             validate_hash(hash, "transaction hash")?;
@@ -1332,13 +1362,15 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
                 );
             }
         }
-        ensure!(record.updated_at_unix >= record.created_at_unix, "growth timestamps inverted");
+        ensure!(
+            record.updated_at_unix >= record.created_at_unix,
+            "growth timestamps inverted"
+        );
         if let Some(error) = &record.last_error {
             ensure!(error.len() <= 512, "growth error is oversized");
         }
         ensure!(
-            record.last_funding_fingerprint.is_some()
-                == record.last_funding_notice_unix.is_some(),
+            record.last_funding_fingerprint.is_some() == record.last_funding_notice_unix.is_some(),
             "persisted referral funding acknowledgement is incomplete"
         );
         if let Some(fingerprint) = &record.last_funding_fingerprint {
@@ -1409,8 +1441,7 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
             );
         }
         ensure!(
-            record.branding_state.is_some()
-                == record.branding_state_updated_at_unix.is_some(),
+            record.branding_state.is_some() == record.branding_state_updated_at_unix.is_some(),
             "persisted terminal Branding state is incomplete"
         );
     }
@@ -1428,9 +1459,9 @@ fn parse_referral_control(text: &str) -> Option<String> {
     if referrer.contains(';') {
         return None;
     }
-    Address::from_str(referrer).ok().and_then(|address| {
-        (address != Address::ZERO).then(|| address.to_string())
-    })
+    Address::from_str(referrer)
+        .ok()
+        .and_then(|address| (address != Address::ZERO).then(|| address.to_string()))
 }
 
 fn validate_result(
@@ -1439,8 +1470,14 @@ fn validate_result(
     minter: Address,
     reward: &str,
 ) -> Result<()> {
-    ensure!(result.kind == "referral_bounty", "unexpected bounty result kind");
-    ensure!(result.chain_id == BASE_MAINNET_CHAIN_ID, "bounty result is not Base mainnet");
+    ensure!(
+        result.kind == "referral_bounty",
+        "unexpected bounty result kind"
+    );
+    ensure!(
+        result.chain_id == BASE_MAINNET_CHAIN_ID,
+        "bounty result is not Base mainnet"
+    );
     ensure!(
         parse_nonzero_address(&result.token, "bounty result token")?
             == parse_nonzero_address(DEFAULT_UWU_TOKEN_CONTRACT, "canonical UWU")?,
@@ -1463,7 +1500,10 @@ fn validate_result(
             )?,
         "bounty result referrer mismatch"
     );
-    ensure!(result.amount_base_units == reward, "bounty result amount mismatch");
+    ensure!(
+        result.amount_base_units == reward,
+        "bounty result amount mismatch"
+    );
     for (value, label) in [
         (&result.eth_balance_wei, "ETH balance"),
         (&result.eth_target_wei, "ETH target"),
@@ -1501,15 +1541,57 @@ fn validate_result(
             "funding-required bounty result is inconsistent"
         ),
         ReferralBountyDisposition::Submitted => {
-            validate_hash(result.transaction_hash.as_deref().context("submitted bounty has no hash")?, "submitted hash")?;
-            validate_decimal(result.transaction_nonce.as_deref().context("submitted bounty has no nonce")?, "submitted nonce", false)?;
-            ensure!(result.receipt_block_number.is_none() && result.receipt_block_hash.is_none(), "submitted bounty already has a receipt");
+            validate_hash(
+                result
+                    .transaction_hash
+                    .as_deref()
+                    .context("submitted bounty has no hash")?,
+                "submitted hash",
+            )?;
+            validate_decimal(
+                result
+                    .transaction_nonce
+                    .as_deref()
+                    .context("submitted bounty has no nonce")?,
+                "submitted nonce",
+                false,
+            )?;
+            ensure!(
+                result.receipt_block_number.is_none() && result.receipt_block_hash.is_none(),
+                "submitted bounty already has a receipt"
+            );
         }
         ReferralBountyDisposition::Confirmed => {
-            validate_hash(result.transaction_hash.as_deref().context("confirmed bounty has no hash")?, "confirmed hash")?;
-            validate_decimal(result.transaction_nonce.as_deref().context("confirmed bounty has no nonce")?, "confirmed nonce", false)?;
-            validate_decimal(result.receipt_block_number.as_deref().context("confirmed bounty has no block")?, "confirmed block", false)?;
-            validate_hash(result.receipt_block_hash.as_deref().context("confirmed bounty has no block hash")?, "confirmed block hash")?;
+            validate_hash(
+                result
+                    .transaction_hash
+                    .as_deref()
+                    .context("confirmed bounty has no hash")?,
+                "confirmed hash",
+            )?;
+            validate_decimal(
+                result
+                    .transaction_nonce
+                    .as_deref()
+                    .context("confirmed bounty has no nonce")?,
+                "confirmed nonce",
+                false,
+            )?;
+            validate_decimal(
+                result
+                    .receipt_block_number
+                    .as_deref()
+                    .context("confirmed bounty has no block")?,
+                "confirmed block",
+                false,
+            )?;
+            validate_hash(
+                result
+                    .receipt_block_hash
+                    .as_deref()
+                    .context("confirmed bounty has no block hash")?,
+                "confirmed block hash",
+            )?;
         }
     }
     Ok(())
@@ -1552,8 +1634,7 @@ fn validate_decimal(value: &str, label: &str, positive: bool) -> Result<()> {
             && value.chars().all(|character| character.is_ascii_digit())
             && (value == "0" || !value.starts_with('0'))
             && (value.len() < MAX_UINT256_DECIMAL.len()
-                || (value.len() == MAX_UINT256_DECIMAL.len()
-                    && value <= MAX_UINT256_DECIMAL)),
+                || (value.len() == MAX_UINT256_DECIMAL.len() && value <= MAX_UINT256_DECIMAL)),
         "{label} is not a canonical uint256 decimal"
     );
     ensure!(!positive || value != "0", "{label} must be positive");
@@ -1564,7 +1645,9 @@ fn validate_hash(value: &str, label: &str) -> Result<()> {
     ensure!(
         value.len() == 66
             && value.starts_with("0x")
-            && value[2..].chars().all(|character| character.is_ascii_hexdigit()),
+            && value[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
         "{label} is not 32 bytes"
     );
     Ok(())
@@ -1817,10 +1900,7 @@ mod tests {
         })
     }
 
-    fn referred_runtime(
-        root: &Path,
-        gateway: Arc<dyn Erc8004Gateway>,
-    ) -> GrowthRuntime {
+    fn referred_runtime(root: &Path, gateway: Arc<dyn Erc8004Gateway>) -> GrowthRuntime {
         let mut runtime = GrowthRuntime::open(
             root,
             address(1),
@@ -1833,10 +1913,7 @@ mod tests {
         runtime
             .mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2)
             .unwrap();
-        let marker = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(2)
-        );
+        let marker = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(2));
         runtime
             .handle_control(INBOX_B, Some(&address(3).to_string()), &marker, 3)
             .unwrap();
@@ -1859,10 +1936,7 @@ mod tests {
         runtime
             .mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2)
             .unwrap();
-        let first = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(2)
-        );
+        let first = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(2));
         let accepted = runtime
             .handle_control(INBOX_B, Some(&address(3).to_string()), &first, 3)
             .unwrap()
@@ -1875,10 +1949,7 @@ mod tests {
                 .unwrap(),
             referral_ack("accepted", Some(address(2)))
         );
-        let later = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(4)
-        );
+        let later = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(4));
         assert!(
             runtime
                 .handle_control(INBOX_B, Some(&address(3).to_string()), &later, 4)
@@ -1919,12 +1990,17 @@ mod tests {
             1,
         )
         .unwrap();
-        assert!(runtime.mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2).unwrap());
-        assert!(!runtime.mark_onboarding_complete(INBOX_A, &address(2).to_string(), 3).unwrap());
-        let late = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(3)
+        assert!(
+            runtime
+                .mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2)
+                .unwrap()
         );
+        assert!(
+            !runtime
+                .mark_onboarding_complete(INBOX_A, &address(2).to_string(), 3)
+                .unwrap()
+        );
+        let late = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(3));
         assert!(
             runtime
                 .handle_control(INBOX_A, Some(&address(2).to_string()), &late, 4)
@@ -1940,10 +2016,7 @@ mod tests {
     #[test]
     fn one_recovered_xmtp_identity_cannot_create_multiple_bounties() {
         let root = tempfile::tempdir().unwrap();
-        let mut runtime = referred_runtime(
-            root.path(),
-            Arc::new(RecordingGateway::default()),
-        );
+        let mut runtime = referred_runtime(root.path(), Arc::new(RecordingGateway::default()));
         assert!(
             runtime
                 .mark_onboarding_complete(INBOX_B, &address(3).to_string(), 4)
@@ -1955,10 +2028,7 @@ mod tests {
                 .mark_contact(INBOX_B, &address(4).to_string(), 5)
                 .unwrap()
         );
-        let marker = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(2)
-        );
+        let marker = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(2));
         assert!(
             runtime
                 .handle_control(INBOX_B, Some(&address(4).to_string()), &marker, 5)
@@ -1987,11 +2057,23 @@ mod tests {
             1,
         )
         .unwrap();
-        runtime.mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2).unwrap();
+        runtime
+            .mark_onboarding_complete(INBOX_A, &address(2).to_string(), 2)
+            .unwrap();
         let marker = format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(2));
-        runtime.handle_control(INBOX_B, Some(&address(3).to_string()), &marker, 3).unwrap();
-        assert!(runtime.mark_onboarding_complete(INBOX_B, &address(3).to_string(), 4).unwrap());
-        assert!(!runtime.mark_onboarding_complete(INBOX_B, &address(3).to_string(), 5).unwrap());
+        runtime
+            .handle_control(INBOX_B, Some(&address(3).to_string()), &marker, 3)
+            .unwrap();
+        assert!(
+            runtime
+                .mark_onboarding_complete(INBOX_B, &address(3).to_string(), 4)
+                .unwrap()
+        );
+        assert!(
+            !runtime
+                .mark_onboarding_complete(INBOX_B, &address(3).to_string(), 5)
+                .unwrap()
+        );
         let record = runtime.record(address(3)).unwrap();
         assert_eq!(record.phase, ReferralRewardPhase::RewardPending);
         let expected = format!("referral-bounty:{}", address_key(address(3)));
@@ -2036,22 +2118,8 @@ mod tests {
     async fn submitted_and_confirmed_rewards_recover_across_restarts_without_replay() {
         let root = tempfile::tempdir().unwrap();
         let gateway = Arc::new(ScriptedGateway::new(vec![
-            bounty_result(
-                "submitted",
-                address(1),
-                address(3),
-                address(2),
-                "0",
-                "0",
-            ),
-            bounty_result(
-                "confirmed",
-                address(1),
-                address(3),
-                address(2),
-                "0",
-                "0",
-            ),
+            bounty_result("submitted", address(1), address(3), address(2), "0", "0"),
+            bounty_result("confirmed", address(1), address(3), address(2), "0", "0"),
         ]));
         let mut runtime = referred_runtime(root.path(), gateway.clone());
         runtime
@@ -2104,7 +2172,10 @@ mod tests {
             .unwrap();
         assert!(confirmed.maintain_one(0, 101).await.unwrap().is_none());
         assert_eq!(gateway.calls.lock().unwrap().len(), 2);
-        assert_eq!(confirmed.record(address(3)).unwrap().phase, ReferralRewardPhase::Confirmed);
+        assert_eq!(
+            confirmed.record(address(3)).unwrap().phase,
+            ReferralRewardPhase::Confirmed
+        );
     }
 
     #[tokio::test]
@@ -2127,14 +2198,7 @@ mod tests {
                     eth_shortfall,
                     uwu_shortfall,
                 ),
-                bounty_result(
-                    "submitted",
-                    address(1),
-                    address(3),
-                    address(2),
-                    "0",
-                    "0",
-                ),
+                bounty_result("submitted", address(1), address(3), address(2), "0", "0"),
             ]));
             let mut runtime = referred_runtime(root.path(), gateway.clone());
             runtime
@@ -2142,7 +2206,10 @@ mod tests {
                 .unwrap();
             let notice = runtime.maintain_one(0, 4).await.unwrap().unwrap();
             assert!(notice.text.contains(expected));
-            assert_eq!(runtime.record(address(3)).unwrap().phase, ReferralRewardPhase::RewardPending);
+            assert_eq!(
+                runtime.record(address(3)).unwrap().phase,
+                ReferralRewardPhase::RewardPending
+            );
             runtime
                 .acknowledge_delivery(&notice.commitment, true, 4)
                 .unwrap();
@@ -2153,7 +2220,10 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            assert_eq!(runtime.record(address(3)).unwrap().phase, ReferralRewardPhase::Submitted);
+            assert_eq!(
+                runtime.record(address(3)).unwrap().phase,
+                ReferralRewardPhase::Submitted
+            );
             assert_eq!(gateway.calls.lock().unwrap().len(), 2);
         }
     }
@@ -2179,10 +2249,8 @@ mod tests {
         ] {
             assert!(runtime.handle_control(INBOX_A, Some(&address(2).to_string()), &marker, 2).unwrap().is_some());
         }
-        let treasury_as_acolyte = format!(
-            "[[cthuwu:referral-attribution:v1;referrer={}]]",
-            address(2)
-        );
+        let treasury_as_acolyte =
+            format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(2));
         assert!(
             runtime
                 .handle_control(
@@ -2253,14 +2321,20 @@ mod tests {
             1,
         )
         .unwrap();
-        runtime.register_operator(INBOX_A, &address(2).to_string(), 2).unwrap();
-        runtime.register_operator(INBOX_C, &address(2).to_string(), 3).unwrap();
+        runtime
+            .register_operator(INBOX_A, &address(2).to_string(), 2)
+            .unwrap();
+        runtime
+            .register_operator(INBOX_C, &address(2).to_string(), 3)
+            .unwrap();
         assert_eq!(runtime.state.verified_operators.len(), 1);
         assert_eq!(runtime.state.verified_operators[0].inbox_id, INBOX_C);
         assert!(!runtime.has_due(3));
         let due = 1 + OPERATOR_PROMPT_COOLDOWN_SECONDS;
         let first = runtime.maintain_one(0, due).await.unwrap().unwrap();
-        runtime.acknowledge_delivery(&first.commitment, true, due).unwrap();
+        runtime
+            .acknowledge_delivery(&first.commitment, true, due)
+            .unwrap();
         assert!(!runtime.has_due(due + 1));
         let second_due = due + OPERATOR_PROMPT_COOLDOWN_SECONDS;
         let second = runtime.maintain_one(0, second_due).await.unwrap().unwrap();

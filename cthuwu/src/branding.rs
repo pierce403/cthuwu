@@ -10,9 +10,7 @@ use crate::{
         BASE_MAINNET_CHAIN_ID, Erc8004Gateway, IDENTITY_REGISTRY, RegistrationPhase,
         TentacleRegistration,
     },
-    growth::{
-        DurableBrandingState, GrowthContext, GrowthDeliveryAudience, GrowthRuntime,
-    },
+    growth::{DurableBrandingState, GrowthContext, GrowthDeliveryAudience, GrowthRuntime},
     storage::{ensure_private_directory, restrict_file, sync_directory},
     token_eye::{Address, U256},
 };
@@ -987,8 +985,7 @@ impl BrandingRuntime {
                             >= BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
                     ),
                 },
-                BrandingPhase::Expired
-                | BrandingPhase::Superseded => (
+                BrandingPhase::Expired | BrandingPhase::Superseded => (
                     "follow_up_due",
                     now.saturating_sub(action.updated_at_unix)
                         >= BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
@@ -2059,17 +2056,11 @@ pub trait AcolyteBrandingControl: Send + Sync {
         Ok(())
     }
 
-    async fn operator_growth_status(
-        &self,
-        _authenticated_sender_address: &str,
-    ) -> Result<String> {
+    async fn operator_growth_status(&self, _authenticated_sender_address: &str) -> Result<String> {
         Ok("GROWTH STATUS IS UNAVAILABLE IN THIS RUNTIME.".to_owned())
     }
 
-    async fn operator_growth_facts(
-        &self,
-        _authenticated_sender_address: &str,
-    ) -> Result<String> {
+    async fn operator_growth_facts(&self, _authenticated_sender_address: &str) -> Result<String> {
         Ok("growth.runtime=unavailable".to_owned())
     }
 }
@@ -2092,11 +2083,11 @@ impl AcolyteBrandingControl for SharedBrandingControl {
             }
             growth.immutable_referrer(acolyte).unwrap_or(acolyte)
         };
-        let (_, should_offer) = self.runtime.lock().await.state_for(
-            inbox_id,
-            acolyte,
-            unix_seconds()?,
-        );
+        let (_, should_offer) =
+            self.runtime
+                .lock()
+                .await
+                .state_for(inbox_id, acolyte, unix_seconds()?);
         if !should_offer {
             return Ok(false);
         }
@@ -2109,12 +2100,12 @@ impl AcolyteBrandingControl for SharedBrandingControl {
         authenticated_sender_address: Option<&str>,
         text: &str,
     ) -> Result<Option<String>> {
-        if let Some(response) = self
-            .growth
-            .lock()
-            .await
-            .handle_control(inbox_id, authenticated_sender_address, text, unix_seconds()?)?
-        {
+        if let Some(response) = self.growth.lock().await.handle_control(
+            inbox_id,
+            authenticated_sender_address,
+            text,
+            unix_seconds()?,
+        )? {
             self.wake.notify_one();
             return Ok(Some(response));
         }
@@ -2134,7 +2125,12 @@ impl AcolyteBrandingControl for SharedBrandingControl {
                 return Ok(Some("i could not bind that Branding control to an authenticated Ethereum address, so it authorized nothing, fwiend.".to_owned()));
             }
         };
-        if self.growth.lock().await.identity_conflicts(inbox_id, sender) {
+        if self
+            .growth
+            .lock()
+            .await
+            .identity_conflicts(inbox_id, sender)
+        {
             return Ok(Some("this recovered XMTP identity is already pinned to another authenticated acolyte wallet, so changing associated wallets cannot authorize Branding or referral actions, fwiend.".to_owned()));
         }
         let now = unix_seconds()?;
@@ -2241,7 +2237,11 @@ impl AcolyteBrandingControl for SharedBrandingControl {
             Some(DurableBrandingState::Branded) => ("branded", false),
             Some(DurableBrandingState::Inactive) => ("branding_expired", false),
             Some(DurableBrandingState::Ineligible) => ("branding_ineligible", false),
-            None => self.runtime.lock().await.state_for(inbox_id, acolyte, unix_seconds()?),
+            None => self
+                .runtime
+                .lock()
+                .await
+                .state_for(inbox_id, acolyte, unix_seconds()?),
         };
         Ok((context, branding_state.to_owned(), should_offer))
     }
@@ -2272,11 +2272,9 @@ impl AcolyteBrandingControl for SharedBrandingControl {
         Ok(())
     }
 
-    async fn operator_growth_status(
-        &self,
-        authenticated_sender_address: &str,
-    ) -> Result<String> {
-        let address = parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
+    async fn operator_growth_status(&self, authenticated_sender_address: &str) -> Result<String> {
+        let address =
+            parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
         let branded = self.growth.lock().await.branded_count();
         self.growth
             .lock()
@@ -2284,11 +2282,9 @@ impl AcolyteBrandingControl for SharedBrandingControl {
             .operator_status(address, branded, unix_seconds()?)
     }
 
-    async fn operator_growth_facts(
-        &self,
-        authenticated_sender_address: &str,
-    ) -> Result<String> {
-        let address = parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
+    async fn operator_growth_facts(&self, authenticated_sender_address: &str) -> Result<String> {
+        let address =
+            parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
         let branded = self.growth.lock().await.branded_count();
         Ok(self
             .growth
@@ -3678,17 +3674,9 @@ mod tests {
         };
         let quote = quote_initial_branding(U256::from_u64(1_000), 1_000).unwrap();
         let declined_inbox = "a".repeat(64);
-        let declined_acolyte =
-            address("0x0000000000000000000000000000000000000001");
+        let declined_acolyte = address("0x0000000000000000000000000000000000000001");
         runtime
-            .enqueue_offer(
-                &declined_inbox,
-                declined_acolyte,
-                "7",
-                minter,
-                quote,
-                2,
-            )
+            .enqueue_offer(&declined_inbox, declined_acolyte, "7", minter, quote, 2)
             .unwrap();
         let offer_id = runtime.state.actions[0].offer_id.clone();
         runtime
@@ -3704,22 +3692,13 @@ mod tests {
         );
 
         let branded_inbox = "b".repeat(64);
-        let branded_acolyte =
-            address("0x0000000000000000000000000000000000000002");
+        let branded_acolyte = address("0x0000000000000000000000000000000000000002");
         runtime
-            .enqueue_offer(
-                &branded_inbox,
-                branded_acolyte,
-                "7",
-                minter,
-                quote,
-                4,
-            )
+            .enqueue_offer(&branded_inbox, branded_acolyte, "7", minter, quote, 4)
             .unwrap();
         let latest = runtime.state.actions.len() - 1;
         runtime.state.actions[latest].phase = BrandingPhase::Completed;
-        runtime.state.actions[latest].observed_branding_status =
-            Some(HelperBrandingStatus::Active);
+        runtime.state.actions[latest].observed_branding_status = Some(HelperBrandingStatus::Active);
         assert_eq!(
             runtime.state_for(
                 &branded_inbox,

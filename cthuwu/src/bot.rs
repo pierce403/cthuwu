@@ -325,8 +325,7 @@ impl UwUBot {
                         .to_owned(),
                 ));
             }
-            let (Some(control), Some(address)) =
-                (&self.branding_control, message.sender_address)
+            let (Some(control), Some(address)) = (&self.branding_control, message.sender_address)
             else {
                 return Ok(Some(
                     "operator referral activation could not bind an authenticated EVM address."
@@ -341,8 +340,7 @@ impl UwUBot {
         // closes the crash window after the contact note was committed and prevents an old direct
         // onboarding from manufacturing a bounty by opening a later referral URL.
         if role == PrincipalRole::User
-            && let (Some(control), Some(address)) =
-                (&self.branding_control, message.sender_address)
+            && let (Some(control), Some(address)) = (&self.branding_control, message.sender_address)
         {
             control.mark_contact(message.inbox_id, address).await?;
             if self
@@ -741,12 +739,8 @@ impl UwUBot {
             && let Some(response) = natural_response.as_ref()
         {
             let mut response = response.clone();
-            self.finish_onboarding_if_needed(
-                &contact,
-                authenticated_sender_address,
-                &mut response,
-            )
-            .await?;
+            self.finish_onboarding_if_needed(&contact, authenticated_sender_address, &mut response)
+                .await?;
             return Ok(response);
         }
 
@@ -896,12 +890,8 @@ impl UwUBot {
             Err(_) => warn!("could not acquire Evolution runtime to finish public turn"),
         }
         contact_save?;
-        self.finish_onboarding_if_needed(
-            &contact,
-            authenticated_sender_address,
-            &mut response,
-        )
-        .await?;
+        self.finish_onboarding_if_needed(&contact, authenticated_sender_address, &mut response)
+            .await?;
         Ok(response)
     }
 
@@ -914,8 +904,7 @@ impl UwUBot {
         if contact.stage != OnboardingStage::Complete {
             return Ok(());
         }
-        let (Some(control), Some(address)) =
-            (&self.branding_control, authenticated_sender_address)
+        let (Some(control), Some(address)) = (&self.branding_control, authenticated_sender_address)
         else {
             return Ok(());
         };
@@ -1365,11 +1354,21 @@ fn maybe_append_onboarding_prompt(contact: &mut Contact, created: bool, response
         return;
     }
     let prompt = match contact.stage {
-        OnboardingStage::Name => "if u'd like to become an established acolyte, what should i call u? u can pass or say “just chat” anytime.",
-        OnboardingStage::Hopes => "what's one hope u'd like this lil network to help with? passing is always okay.",
-        OnboardingStage::Resources => "is there one skill or resource u might voluntarily share someday? this is never a promise or obligation.",
-        OnboardingStage::Needs => "what kind of help would be useful to u? u can keep it private by passing.",
-        OnboardingStage::SharingConsent => "may i use only the profile details u chose to share for private match suggestions? yes or no; no does not block onboarding.",
+        OnboardingStage::Name => {
+            "if u'd like to become an established acolyte, what should i call u? u can pass or say “just chat” anytime."
+        }
+        OnboardingStage::Hopes => {
+            "what's one hope u'd like this lil network to help with? passing is always okay."
+        }
+        OnboardingStage::Resources => {
+            "is there one skill or resource u might voluntarily share someday? this is never a promise or obligation."
+        }
+        OnboardingStage::Needs => {
+            "what kind of help would be useful to u? u can keep it private by passing."
+        }
+        OnboardingStage::SharingConsent => {
+            "may i use only the profile details u chose to share for private match suggestions? yes or no; no does not block onboarding."
+        }
         OnboardingStage::Complete => return,
     };
     response.push_str("\n\n");
