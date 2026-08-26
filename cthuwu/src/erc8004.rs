@@ -828,6 +828,7 @@ pub struct SidecarErc8004Gateway {
     data_dir: PathBuf,
     rpc_endpoint: crate::token_eye::RpcEndpointHandle,
     config: RegistrationConfig,
+    referral_bounty_base_units: String,
     timeout: Duration,
 }
 
@@ -856,6 +857,8 @@ impl SidecarErc8004Gateway {
             data_dir: data_dir.into(),
             rpc_endpoint,
             config,
+            referral_bounty_base_units: crate::growth::DEFAULT_REFERRAL_BOUNTY_BASE_UNITS
+                .to_owned(),
             timeout: DEFAULT_HELPER_TIMEOUT,
         })
     }
@@ -880,8 +883,16 @@ impl SidecarErc8004Gateway {
             data_dir: data_dir.into(),
             rpc_endpoint,
             config,
+            referral_bounty_base_units: crate::growth::DEFAULT_REFERRAL_BOUNTY_BASE_UNITS
+                .to_owned(),
             timeout: DEFAULT_HELPER_TIMEOUT,
         })
+    }
+
+    pub fn with_referral_bounty_policy(mut self, amount_base_units: &str) -> Result<Self> {
+        crate::growth::validate_referral_bounty_amount(amount_base_units)?;
+        self.referral_bounty_base_units = amount_base_units.to_owned();
+        Ok(self)
     }
 }
 
@@ -920,6 +931,10 @@ impl Erc8004Gateway for SidecarErc8004Gateway {
             .env(
                 "CTHUWU_ERC8004_MAX_FEE_PER_GAS_WEI",
                 &self.config.max_fee_per_gas_wei,
+            )
+            .env(
+                "CTHUWU_REFERRAL_BOUNTY_BASE_UNITS",
+                &self.referral_bounty_base_units,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

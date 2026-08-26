@@ -34,6 +34,104 @@ same `#t=` fragment. Once assignment resolves, the main chat page can copy a rec
 that assigned Tentacle as `t` and the current local browser identity as `r`; neither address enters
 the HTTP request.
 
+### Durable referral attribution
+
+The browser-local pin is an untrusted hint, not payout authority. After the recovered identity has
+an authenticated Direct route, the browser sends one exact
+`cthuwu:referral-attribution:v1` text control. The Tentacle consumes it before contact memory or
+inference and binds the referrer to the SDK-authenticated EVM sender. Because inbound message IDs
+are durably claimed before processing, the browser retries the same control after handoff/reconnect
+and, with a short cooldown, before a later Direct send until the authenticated Tentacle returns an
+exact terminal `cthuwu:referral-attribution-ack:v1` control. Only that authenticated acknowledgement
+is stored; it reports the Tentacle's canonical immutable referrer (or terminal direct onboarding),
+drives the referrer shown in later Branding review, and prevents further retries. The controls are
+not displayed as chat prose. The referrer must be nonzero, different from the new acolyte and
+servicing Tentacle treasury, and already known locally as either an onboarded acolyte or an
+authenticated operator. Malformed, unknown, self, zero, and treasury referrers create no
+attribution, acknowledgement, or payout.
+
+The first accepted referrer for an acolyte address is canonical and immutable. A later fragment,
+browser refresh, XMTP reconnect, different local contact record, or delayed Branding request cannot
+replace it. A completed direct onboarding is also terminal for attribution: opening a referral URL
+afterward cannot manufacture a bounty. The durable `state/acolyte-growth.json` record is keyed by
+the authenticated acolyte address, pins the referrer's verified payout address and authenticated
+XMTP delivery inbox, refreshes that inbox only when the same authenticated address returns, and
+survives browser and Tentacle restarts. The recovered XMTP inbox is also unique across acolyte
+reward records: changing to another associated wallet cannot create a second onboarding identity
+or bounty. A referrer resolving to that same inbox is rejected as an ineligible self-referral.
+
+For the one-time UWU bounty, **successful referred onboarding** means the authenticated sender's
+canonical local contact reaches `OnboardingStage::Complete` and that terminal contact state is
+durably reconciled into the growth record. Merely opening a URL, sending the attribution control,
+reloading, reconnecting, joining a group, or creating another local record is not success. A direct
+onboarding creates no bounty. The reward state is:
+
+```text
+new_contact -> attributed -> onboarding_complete -> reward_pending -> submitted -> confirmed
+```
+
+`onboarding_complete` is persisted with an immediate retry time before the exact signer action is
+prepared, so a crash in that transition resumes. The deterministic action ID is
+`referral-bounty:<lowercase-acolyte-address-without-0x>`; a second completion for the same address
+cannot create another action. Confirmed records are terminal and are recovered without rebroadcast.
+
+### One-time UWU onboarding bounty
+
+The onboarding bounty is separate from every Branding payment. Its default is exactly one UWU,
+`1000000000000000000` base units, configured only by
+`CTHUWU_REFERRAL_BOUNTY_BASE_UNITS`. New, direct, and merely attributed records adopt a changed
+policy on restart; changing the amount while a reward is onboarding-complete, pending, or submitted
+fails closed until that promised reward is reconciled. Previously confirmed records retain their
+historical amount for aggregate reporting.
+
+The servicing Tentacle pays the immutable verified referrer from its own wallet on Base mainnet.
+The sidecar accepts only the canonical UWU contract, configured amount, exact treasury, exact
+acolyte, exact referrer, and acolyte-bound action ID. It derives the sole ERC-20 `transfer` calldata
+itself; frontend, XMTP, and model data cannot supply an alternate chain, token, destination, amount,
+value, or calldata. Referral transfers share the production ERC-8004/Branding signer nonce journal
+and add a dedicated acolyte-bound journal containing the exact nonce, calldata hash, preparation
+block, and transaction hash. Both the referral intent and nonce allocation are durable before
+broadcast.
+
+Restart recovery first uses a persisted transaction hash. If a crash occurred before that hash was
+saved and the allocated nonce was consumed, the executor scans bounded canonical UWU logs from the
+preparation block and accepts only the transaction with the exact sender, nonce, destination,
+calldata, and one matching `Transfer(treasury, referrer, amount)` event. A successful receipt must
+be canonical and contain exactly that transfer. If UWU or Base ETH is insufficient before
+broadcast, the reward remains pending, the authenticated operator receives the exact token and gas
+shortfalls, and reconciliation resumes automatically after funding. Funding notices are
+fingerprinted and rate-limited rather than silently dropped or repeated on every maintenance tick.
+
+The contract's existing immutable referrer and 10% sale/upkeep share are unchanged. Branding
+consent, referral attribution, the one-time onboarding bounty, and later Branding economics are four
+separate authorities and state transitions.
+
+### Growth and conversion behavior
+
+Growing the acolyte network is an ongoing Tentacle objective. Runtime-verified growth facts tell the
+public model whether the current sender is an acolyte, their immutable referrer and bounty phase,
+their exact shareable referral URL, and their Branding completion state. The authenticated operator
+model additionally receives total, branded/unbranded, seven-day onboarding, links-sent, successful
+referral, paid-base-unit, configured-bounty, and exact operator-link facts. Models do not infer any
+of those values from chat prose.
+
+An authenticated new contact is durably recorded, receives optional onboarding prompts at a spaced
+cadence, and may skip every profile question without blocking completion. Once established, an
+unbranded acolyte receives a prominent Branding action and a natural offer on an eligible turn. The
+offer explains that Branding is an on-chain service/routing relationship—not ownership—and shows
+the exact price, first upkeep, controller, immutable referrer, nonce, and deadline before a separate
+EIP-712 consent step. Expired offers and temporary inspection, funding, or signature failures remain
+resumable. Closing the review defers a decision; the explicit “decline · don't ask again” action is
+durable and suppresses later offers. A verified completion is also durable and stops Branding nags.
+
+Established acolytes and authenticated operators can copy or use native mobile sharing for
+`/#t=<tentacle-wallet>&r=<their-wallet>`. The Tentacle returns that exact link when recruiting comes
+up, celebrates confirmed Branding and referral rewards, and suggests sharing with an appropriate
+person. The weekly operator recruitment loop includes one concrete action, the current link, and
+current funnel statistics; it rotates copy, deduplicates delivery, and resets after a successful
+referral. These prompts must remain specific and consensual: no spam, deception, pressure, repeated
+bothering after refusal, or unsupported payout claims.
+
 ## Acolyte names
 
 The random browser EOA deterministically maps through the frozen, versioned `acolyte-v1` table to a

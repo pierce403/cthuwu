@@ -24,9 +24,15 @@ export function pinReferrer(
 ): string | undefined {
   const key = `cthuwu.referrer.v1:${environment}:${acolyte.toLowerCase()}`;
   const existing = storage.getItem(key) ?? undefined;
-  if (existing) return existing;
-  if (offered) storage.setItem(key, offered);
-  return offered;
+  const pinned = existing === undefined ? undefined : canonicalAddress(existing);
+  if (pinned) return pinned;
+  const candidate = offered === undefined ? undefined : canonicalAddress(offered);
+  if (candidate) storage.setItem(key, candidate);
+  return candidate;
+}
+
+export function encodeReferralAttribution(referrer: string): string {
+  return `[[cthuwu:referral-attribution:v1;referrer=${canonicalAddress(referrer)}]]`;
 }
 
 export function recruitmentUrl(origin: string, tentacle: string, referrer: string): string {
@@ -44,5 +50,15 @@ function addressParam(params: URLSearchParams, name: string): string {
     return value;
   } catch {
     throw new Error(`The ${name} link parameter must be a nonzero Ethereum address`);
+  }
+}
+
+function canonicalAddress(value: string): string {
+  try {
+    const address = getAddress(value).toLowerCase();
+    if (address === ZERO) throw new Error("zero");
+    return address;
+  } catch {
+    throw new Error("Referral attribution requires a nonzero Ethereum address");
   }
 }

@@ -13,6 +13,7 @@ pub mod economics;
 mod erc8004;
 pub mod evolution;
 pub mod evolution_runtime;
+mod growth;
 pub mod health;
 pub mod hermes;
 pub mod image_gen;
@@ -57,6 +58,7 @@ use erc8004::{
 };
 use evolution::{LifecycleAction, LifecycleReceipt, LifecycleReceiptStatus, LineageStore};
 use evolution_runtime::{EvolutionRuntime, EvolutionStartupOptions, MandatoryRecoveryKind};
+use growth::{DEFAULT_PUBLIC_ORIGIN, DEFAULT_REFERRAL_BOUNTY_BASE_UNITS};
 use inference::{
     DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_TIMEOUT_SECONDS,
     DEFAULT_VENICE_MODEL, DEFAULT_VENICE_TIMEOUT_SECONDS, InferenceConfig, InferenceRouter,
@@ -261,6 +263,22 @@ struct Cli {
         default_value = "10000000000"
     )]
     erc8004_max_fee_per_gas_wei: String,
+
+    /// One-time UWU onboarding referral bounty, in canonical token base units.
+    #[arg(
+        long,
+        env = "CTHUWU_REFERRAL_BOUNTY_BASE_UNITS",
+        default_value = DEFAULT_REFERRAL_BOUNTY_BASE_UNITS
+    )]
+    referral_bounty_base_units: String,
+
+    /// Public HTTPS origin used to construct fragment-only recruitment links.
+    #[arg(
+        long,
+        env = "CTHUWU_PUBLIC_ORIGIN",
+        default_value = DEFAULT_PUBLIC_ORIGIN
+    )]
+    public_origin: String,
 
     /// Optional name used only when this durable Tentacle has never chosen one before.
     #[arg(long, env = "CTHUWU_ERC8004_PUBLIC_NAME")]
@@ -879,13 +897,16 @@ async fn main() -> Result<()> {
         .local_tentacle_id()
         .to_owned();
     let registration_config = registration_config_from_cli(&cli)?;
-    let registration_gateway = Arc::new(SidecarErc8004Gateway::new_with_handle(
-        &cli.node,
-        &cli.sidecar,
-        &cli.data_dir,
-        base_rpc_control.endpoint_handle(),
-        registration_config.clone(),
-    )?);
+    let registration_gateway = Arc::new(
+        SidecarErc8004Gateway::new_with_handle(
+            &cli.node,
+            &cli.sidecar,
+            &cli.data_dir,
+            base_rpc_control.endpoint_handle(),
+            registration_config.clone(),
+        )?
+        .with_referral_bounty_policy(&cli.referral_bounty_base_units)?,
+    );
     let registration = Arc::new(tokio::sync::Mutex::new(TentacleRegistration::open(
         &cli.data_dir,
         &tentacle_id,
@@ -949,6 +970,8 @@ async fn main() -> Result<()> {
         tentacle_wallet,
         registration_gateway,
         registration.clone(),
+        &cli.referral_bounty_base_units,
+        &cli.public_origin,
     )?);
     let mut operator_store = OperatorStore::new(&cli.data_dir, cli.xmtp_env.as_str())?;
     repair_operator_conflict(&mut operator_store)?;
@@ -1752,6 +1775,11 @@ async fn run_branding_supervisor(
             // Only a positive transport acknowledgement advances an offer/receipt or starts the
             // funding-notice cooldown. Ambiguous delivery remains durable and is retried exactly.
             branding.acknowledge_delivery(&delivery, delivered).await;
+            if !delivered {
+                // A revoked/offline operator or unavailable inbox must not turn a durable notice
+                // into a tight retry loop. The unchanged delivery remains pending.
+                tokio::time::sleep(branding.maintenance_interval()).await;
+            }
             continue;
         }
         tokio::select! {

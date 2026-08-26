@@ -18,6 +18,7 @@ import type { LoadedIdentity } from "./identity.js";
 import {
   ALLEGIANCE_KEY,
   ALLEGIANCE_VALUE,
+  CANONICAL_UWU,
   ERC8004_CHAIN_ID,
   ERC8004_IDENTITY_REGISTRY,
   ERC8004_REPUTATION_REGISTRY,
@@ -255,6 +256,73 @@ describe("narrow ERC-8004 signer protocol", () => {
       expect(() => parseErc8004Request(request({ type: "register", nonce: "7", ...extra }))).toThrow("missing or unknown fields");
     }
     expect(() => parseErc8004Request(request({ type: "send_transaction" }))).toThrow("unsupported ERC-8004 operation");
+  });
+
+  it("binds referral bounties to canonical Base, UWU, acolyte, referrer, and policy amount", () => {
+    const previousPolicy = process.env.CTHUWU_REFERRAL_BOUNTY_BASE_UNITS;
+    process.env.CTHUWU_REFERRAL_BOUNTY_BASE_UNITS = "1000000000000000000";
+    try {
+      const acolyte = "0x3333333333333333333333333333333333333333";
+      const referrer = "0x4444444444444444444444444444444444444444";
+      const actionId = `referral-bounty:${acolyte.slice(2)}`;
+      const operation = {
+        type: "referral_bounty",
+        wallet: WALLET,
+        acolyte,
+        referrer,
+        token: CANONICAL_UWU,
+        chainId: 8453,
+        amountBaseUnits: "1000000000000000000",
+        configuredAmountBaseUnits: "1000000000000000000",
+        transactionHash: null,
+        transactionNonce: null,
+      };
+      expect(parseErc8004Request({ version: 1, actionId, operation }).operation).toMatchObject({
+        type: "referral_bounty",
+        wallet: WALLET,
+        acolyte,
+        referrer,
+        token: CANONICAL_UWU,
+        chainId: 8453,
+        amountBaseUnits: "1000000000000000000",
+      });
+      for (const altered of [
+        { token: WALLET },
+        { chainId: 1 },
+        { amountBaseUnits: "1" },
+        { configuredAmountBaseUnits: "1" },
+        { referrer: WALLET },
+        { referrer: acolyte },
+        { referrer: "0x0000000000000000000000000000000000000000" },
+      ]) {
+        expect(() => parseErc8004Request({
+          version: 1,
+          actionId,
+          operation: { ...operation, ...altered },
+        })).toThrow();
+      }
+      expect(() => parseErc8004Request({
+        version: 1,
+        actionId: "referral-bounty:another-acolyte",
+        operation,
+      })).toThrow(/bound to the expected acolyte/u);
+      expect(() => parseErc8004Request({
+        version: 1,
+        actionId,
+        operation: { ...operation, data: "0xdeadbeef" },
+      })).toThrow(/unknown fields/u);
+      expect(() => parseErc8004Request({
+        version: 1,
+        actionId,
+        operation: { ...operation, transactionHash: `0x${"ab".repeat(32)}` },
+      })).toThrow(/hash and nonce/u);
+    } finally {
+      if (previousPolicy === undefined) {
+        delete process.env.CTHUWU_REFERRAL_BOUNTY_BASE_UNITS;
+      } else {
+        process.env.CTHUWU_REFERRAL_BOUNTY_BASE_UNITS = previousPolicy;
+      }
+    }
   });
 
   it("allows only exact allegiance bytes or a deliberate clear", () => {

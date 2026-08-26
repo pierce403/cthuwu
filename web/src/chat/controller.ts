@@ -21,6 +21,7 @@ import {
   type ChannelSnapshot,
   type ChatChannel,
   type ChatWorkspace,
+  type WorkspaceMessage,
   type WorkspaceSnapshot,
 } from "./types";
 
@@ -29,6 +30,8 @@ const CHANNEL_LABELS: Record<ChatChannel, string> = {
   acolytes: "Acolytes",
   global: "Global",
 };
+const OPERATOR_GROWTH_REGISTRATION = "[[cthuwu:growth-operator-register:v1]]";
+const OPERATOR_GROWTH_ACK = "[[cthuwu:growth-operator-ack:v1]]";
 const STATUS_COPY = {
   loading: "loading message history…",
   "awaiting-assignment": "waiting for the assigned Tentacle to provision this channel…",
@@ -74,6 +77,7 @@ interface ChatElements {
   activity: HTMLElement;
   rewardStatus: HTMLElement;
   brandingReview: HTMLButtonElement;
+  brandingStart: HTMLButtonElement;
   copyReferral: HTMLButtonElement;
   referralStatus: HTMLElement;
   brandingDialog: HTMLDialogElement;
@@ -105,6 +109,7 @@ export function initializeChatController(
   let unsubscribe: (() => void) | undefined;
   let connection: Promise<void> | undefined;
   let latest: WorkspaceSnapshot | undefined;
+  let canonicalGrowthReferrer: string | undefined;
   let renderedChannel: ChatChannel | undefined;
   let sending = false;
   let loadingEarlier = false;
@@ -125,6 +130,10 @@ export function initializeChatController(
   const activeChannel = (snapshot: WorkspaceSnapshot): ChatChannel =>
     operatorSurface ? "direct" : snapshot.activeChannel;
   const nowSeconds = dependencies.nowSeconds ?? (() => BigInt(Math.floor(Date.now() / 1000)));
+  if (!operatorSurface && config.referrer) {
+    elements.referralStatus.textContent =
+      `Referral link names ${shortId(config.referrer)}. After authenticated Tentacle verification, an eligible completed onboarding pays that address the one-time UWU bounty.`;
+  }
 
   const updateComposerControls = (): void => {
     if (!latest) return;
@@ -147,6 +156,14 @@ export function initializeChatController(
     const previousCount = previous?.channels[channelId].messages.length ?? 0;
     const received = !switched && channel.messages.length > previousCount;
     renderedChannel = channelId;
+    const referralAcknowledgement = latestReferralAcknowledgement(
+      snapshot.channels.direct.messages,
+    );
+    if (referralAcknowledgement) {
+      canonicalGrowthReferrer = referralAcknowledgement.referrer === "none"
+        ? identity.address.toLowerCase()
+        : referralAcknowledgement.referrer;
+    }
 
     elements.root.dataset.state = snapshot.connected ? "connected" : "retryable-error";
     const verifiedOperatorDirect = snapshot.connected && channelId === "direct" &&
@@ -158,7 +175,19 @@ export function initializeChatController(
     elements.name.textContent = operatorSurface ? operatorTarget : channelId === "direct"
       ? snapshot.tentacleName
       : channelId === "acolytes" ? `${snapshot.tentacleName} · acolytes` : "Cthuwu · global";
-    elements.copyReferral.disabled = operatorSurface || !snapshot.assignedTentacleAddress;
+    elements.copyReferral.disabled = !snapshot.assignedTentacleAddress;
+    const brandingCanBeCompleted = snapshot.assignmentState === "liveness-required" ||
+      snapshot.assignmentState === "anchor-verified" ||
+      snapshot.assignmentState === "rotation-verified";
+    elements.brandingStart.hidden =
+      operatorSurface || !brandingCanBeCompleted || !snapshot.connected;
+    if (!elements.brandingStart.hidden && elements.brandingReview.hidden) {
+      elements.activity.hidden = false;
+      if (!elements.rewardStatus.textContent) {
+        elements.rewardStatus.textContent =
+          "Unbranded acolyte · review what Branding does and its exact UWU cost before consenting.";
+      }
+    }
     elements.panel.setAttribute("aria-labelledby", `tab-${channelId}`);
     elements.messages.setAttribute("aria-label", operatorSurface
       ? "Direct operator messages"
@@ -213,22 +242,28 @@ export function initializeChatController(
       });
       // Operator/tool output is literal text. Public UI markers have no control meaning here and
       // must never be removed from an auditable privileged transcript.
+      const operatorGrowthControl = operatorSurface &&
+        (message.text === OPERATOR_GROWTH_REGISTRATION || message.text === OPERATOR_GROWTH_ACK);
       const branding = operatorSurface || channelId !== "direct"
-        ? { text: message.text }
+        ? { text: operatorGrowthControl ? "" : message.text }
         : parseBrandingMessage(message.text, message.mine ? "mine" : "theirs");
       const control = operatorSurface
-        ? { text: message.text }
+        ? { text: branding.text }
         : parseTentacleUi(branding.text, message.mine, channelId);
       bubble.append(sender, document.createTextNode(control.text), time);
       // Exact Branding controls are transport state, not chat prose. Keep an otherwise empty
       // control message out of the transcript while preserving malformed, duplicated, misplaced,
       // or wrong-direction markers literally.
-      if (control.text.length > 0 || !branding.control) elements.messages.append(bubble);
+      if (control.text.length > 0) elements.messages.append(bubble);
       if (control.reward) {
         elements.activity.hidden = false;
+        const amount = control.reward.baseUnits
+          ? formatUwuDisplay(control.reward.amount)
+          : `${control.reward.amount.toLocaleString()} UWU`;
+        const label = control.reward.baseUnits ? "referral reward" : "reward";
         elements.rewardStatus.textContent = control.reward.status === "confirmed"
-          ? `${control.reward.amount.toLocaleString()} UWU reward confirmed on Base`
-          : `${control.reward.amount.toLocaleString()} UWU reward queued · awaiting confirmed Base transfer`;
+          ? `${amount} ${label} confirmed on Base`
+          : `${amount} ${label} queued · awaiting confirmed Base transfer`;
       }
       if (dependencies.brandingOffers !== false && branding.control) {
         switch (branding.control.type) {
@@ -320,6 +355,12 @@ export function initializeChatController(
         workspace = await createWorkspace(config, identity);
         if (operatorSurface) workspace.setActiveChannel("direct");
         unsubscribe = workspace.subscribe(render);
+        if (operatorSurface) {
+          await workspace.send("direct", OPERATOR_GROWTH_REGISTRATION).catch(() => {
+            elements.referralStatus.textContent =
+              "Send one authenticated operator message before sharing this referral link.";
+          });
+        }
         if (focusComposer && !elements.input.disabled) elements.input.focus();
       } catch (error) {
         console.error(error);
@@ -423,20 +464,46 @@ export function initializeChatController(
   elements.brandingReview.addEventListener("click", () => {
     if (!operatorSurface && currentBrandingOffer) renderBrandingDialog(true);
   });
+  elements.brandingStart.addEventListener("click", () => {
+    if (!workspace || !latest || operatorSurface || sending) return;
+    elements.brandingStart.disabled = true;
+    void workspace.send("direct", "I want to complete my Acolyte Branding NFT.").then(() => {
+      elements.rewardStatus.textContent =
+        "Branding requested · the Tentacle is preparing an exact Base offer with cost and referrer details.";
+    }).catch((error) => setComposerError(publicError(error))).finally(() => {
+      elements.brandingStart.disabled = false;
+    });
+  });
   elements.copyReferral.addEventListener("click", () => {
     const target = latest?.assignedTentacleAddress;
     if (!target) return;
     const url = recruitmentUrl(location.origin, target, identity.address);
-    const copy = navigator.clipboard?.writeText(url);
-    if (!copy) {
-      elements.referralStatus.textContent = "could not copy the referral link";
+    const copyToClipboard = (): void => {
+      const copy = navigator.clipboard?.writeText(url);
+      if (!copy) {
+        elements.referralStatus.textContent = "could not copy the referral link";
+        return;
+      }
+      void copy.then(() => {
+        elements.referralStatus.textContent = "referral link copied";
+      }).catch(() => {
+        elements.referralStatus.textContent = "could not copy the referral link";
+      });
+    };
+    if (typeof navigator.share === "function") {
+      void navigator.share({
+        title: "Join me as a Cthuwu acolyte",
+        text: "A voluntary invite to meet my Cthuwu Tentacle.",
+        url,
+      }).then(() => {
+        elements.referralStatus.textContent = "referral link shared";
+      }).catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        copyToClipboard();
+      });
       return;
     }
-    void copy.then(() => {
-      elements.referralStatus.textContent = "referral link copied";
-    }).catch(() => {
-      elements.referralStatus.textContent = "could not copy the referral link";
-    });
+    copyToClipboard();
   });
 
   const closeWorkspace = async (): Promise<void> => {
@@ -488,7 +555,7 @@ export function initializeChatController(
       return;
     }
 
-    const pinnedReferrer = config.referrer?.toLowerCase();
+    const pinnedReferrer = canonicalGrowthReferrer ?? config.referrer?.toLowerCase();
     if (pinnedReferrer && offer.referrer !== pinnedReferrer) {
       if (
         workspace && !requestedReplacementOffers.has(offer.offerId) &&
@@ -504,6 +571,7 @@ export function initializeChatController(
 
     const changedOffer = currentBrandingOffer?.marker !== offer.marker;
     currentBrandingOffer = offer;
+    elements.brandingStart.hidden = true;
     currentBrandingConsent = consent;
     currentBrandingReceipt = receipt;
     if (changedOffer) {
@@ -587,7 +655,7 @@ export function initializeChatController(
       if (currentBrandingConsent && offer.deadline >= nowSeconds() + 1n) {
         await runBrandingAction(async () => workspace!.send("direct", currentBrandingConsent!.marker), "pending");
       } else {
-        const referrer = config.referrer ?? offer.referrer;
+        const referrer = canonicalGrowthReferrer ?? config.referrer ?? offer.referrer;
         await runBrandingAction(async () => workspace!.send(
           "direct",
           encodeBrandingRequest(referrer, localAcolyteName),
@@ -758,6 +826,7 @@ function chatElements(): ChatElements {
     activity: required("activity-card"),
     rewardStatus: required("reward-status"),
     brandingReview: required("branding-review"),
+    brandingStart: required("branding-start"),
     copyReferral: required("copy-referral"),
     referralStatus: required("referral-status"),
     brandingDialog: required("branding-offer"),
@@ -783,19 +852,58 @@ function parseTentacleUi(
   channel: ChatChannel,
 ): {
   text: string;
-  reward?: { status: "pending" | "confirmed"; amount: bigint };
+  reward?: { status: "pending" | "confirmed"; amount: bigint; baseUnits: boolean };
 } {
+  if (
+    mine &&
+    channel === "direct" &&
+    /^\[\[cthuwu:referral-attribution:v1;referrer=0x[0-9a-f]{40}\]\]$/u.test(text)
+  ) {
+    return { text: "" };
+  }
   if (mine || channel !== "direct") return { text };
   let visible = text;
-  let reward: { status: "pending" | "confirmed"; amount: bigint } | undefined;
+  let reward: {
+    status: "pending" | "confirmed";
+    amount: bigint;
+    baseUnits: boolean;
+  } | undefined;
+  visible = visible.replace(
+    /\n?\[\[cthuwu:referral-attribution-ack:v1;status=(?:accepted|immutable|direct);referrer=(?:0x[0-9a-f]{40}|none)\]\]$/u,
+    "",
+  );
   visible = visible.replace(
     /\n?\[\[cthuwu:reward:v1;status=(pending|confirmed);amount=([1-9][0-9]{0,19})\]\]/gu,
     (_match, status: "pending" | "confirmed", amount: string) => {
-      reward = { status, amount: BigInt(amount) };
+      reward = { status, amount: BigInt(amount), baseUnits: false };
+      return "";
+    },
+  );
+  visible = visible.replace(
+    /\n?\[\[cthuwu:referral-reward:v1;status=confirmed;amount=([1-9][0-9]{0,77})\]\]/gu,
+    (_match, amount: string) => {
+      reward = { status: "confirmed", amount: BigInt(amount), baseUnits: true };
       return "";
     },
   );
   return { text: visible.trimEnd(), ...(reward ? { reward } : {}) };
+}
+
+function latestReferralAcknowledgement(
+  messages: readonly WorkspaceMessage[],
+): { status: "accepted" | "immutable" | "direct"; referrer: string | "none" } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.mine) continue;
+    const match = /(?:^|\n)\[\[cthuwu:referral-attribution-ack:v1;status=(accepted|immutable|direct);referrer=(0x[0-9a-f]{40}|none)\]\]$/u
+      .exec(message.text);
+    if (!match) continue;
+    const status = match[1] as "accepted" | "immutable" | "direct";
+    const referrer = match[2]!;
+    if ((status === "direct") !== (referrer === "none")) continue;
+    return { status, referrer };
+  }
+  return undefined;
 }
 
 function brandingDecisionKey(offerId: string): string {
@@ -811,9 +919,13 @@ function brandingDecision(offerId: string): string | null {
 }
 
 function formatUwu(value: bigint): string {
+  return `${formatUwuDisplay(value)} (${value} base units)`;
+}
+
+function formatUwuDisplay(value: bigint): string {
   const whole = value / 1_000_000_000_000_000_000n;
   const fraction = (value % 1_000_000_000_000_000_000n).toString().padStart(18, "0").replace(/0+$/u, "");
-  return `${whole.toLocaleString()}${fraction ? `.${fraction}` : ""} UWU (${value} base units)`;
+  return `${whole.toLocaleString()}${fraction ? `.${fraction}` : ""} UWU`;
 }
 
 function formatBasis(value: bigint): string {

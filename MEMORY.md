@@ -1,15 +1,18 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-20
+Last reviewed: 2026-08-26
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
   Agent0 discovery plus same-block canonical ERC-8004 and XMTP endpoint verification; an existing
   active Branding wins. The first valid `r` is pinned per browser identity and is surfaced in the
-  Branding review. A v2 offer becomes authority only after exact EIP-712 consent and canonical
-  receipt/state verification; ordinary XMTP text is never mint consent.
+  Branding review. After authenticated Direct handoff, one strict control offers that hint to the
+  Tentacle, which binds the first locally verified referrer immutably to the recovered acolyte
+  address. A v2 offer becomes authority only after exact EIP-712 consent and canonical receipt/state
+  verification; ordinary XMTP text is never mint consent or payout authority.
 - Leaderboard wallet addresses are Direct-chat links. The root UI copies social recruitment URLs
-  using the currently assigned Tentacle for `t` and the local browser identity for `r`.
+  using the currently assigned Tentacle for `t` and the local browser identity for `r`; established
+  acolytes and authenticated operators receive equivalent copy/share actions.
 - A first Unminted browser connection without explicit `#t=` or a retained eligible route races
   non-push `fhtagn?` liveness controls against at most the top five funded single-agent Tentacles in
   the completely validated leaderboard snapshot (refreshing one complete snapshot when absent).
@@ -627,6 +630,50 @@ See [Council protocol](docs/protocol/README.md), [Council security](docs/protoco
 
 See [ERC-8004 Tentacle registration and leaderboard](docs/erc-8004.md).
 
+## Acolyte growth and onboarding-referral decisions
+
+- Growth is an explicit recurring Tentacle objective. Runtime facts—not transcript inference—supply
+  whether a sender is an acolyte, Branding terminal/progress state, immutable referrer, bounty phase,
+  exact shareable URL, and operator funnel totals. The model may recruit and follow up, but must not
+  spam, deceive, pressure, leak identity data, or continue after a clear durable refusal.
+- Referral URLs remain `/#t=<tentacle-wallet>&r=<referrer-wallet>` fragments. Browser first-touch
+  pinning is only an untrusted hint; after authenticated Direct handoff, one exact control proposes
+  it. The browser retries the same proposal after an unacknowledged crash/reconnect and persists only
+  an exact terminal acknowledgement from the authenticated Tentacle; that acknowledgement supplies
+  the canonical referrer for later Branding review. The Tentacle accepts only a nonzero established local acolyte or authenticated operator,
+  distinct from the new acolyte and Tentacle treasury, and pins it by the SDK-authenticated EVM
+  acolyte address. A later URL, refresh, reconnect, duplicate record, delayed Branding, or already
+  complete direct onboarding cannot overwrite or manufacture attribution. Attribution also pins
+  the verified referrer's delivery inbox; only a later message authenticated to that same payout
+  address may refresh it. The recovered XMTP inbox is unique across reward records, so a second
+  associated address cannot create another onboarding bounty; a referrer on that inbox is rejected
+  as self-referral.
+- Successful referred onboarding is exactly the canonical retained contact reaching
+  `OnboardingStage::Complete` and that terminal event being reconciled into
+  `state/acolyte-growth.json`. Opening the link, connecting, or merely attributing is not success.
+  The durable reward path is `attributed -> onboarding_complete -> reward_pending -> submitted ->
+  confirmed`, with deterministic action ID `referral-bounty:<lowercase-acolyte-without-0x>`.
+- The one-time bounty defaults to `1000000000000000000` UWU base units and is configured only by
+  `CTHUWU_REFERRAL_BOUNTY_BASE_UNITS`; `CTHUWU_PUBLIC_ORIGIN` defaults to `https://cthuwu.app` for
+  exact shareable links. The servicing Tentacle pays its immutable verified referrer from the
+  Tentacle treasury. Direct onboarding has no bounty, and one acolyte can never create two rewards.
+- The bounty executor shares the production ERC-8004/Branding nonce journal and is narrowly bound to
+  Base mainnet, canonical UWU, exact treasury/acolyte/referrer, configured amount, and deterministic
+  action. It derives `transfer` calldata, persists intent/nonce before broadcast, stores the hash,
+  recovers by hash or bounded nonce/log search, and requires a canonical receipt with exactly one
+  matching `Transfer`. Frontend, XMTP, or model fields cannot select arbitrary transfer parameters.
+- Insufficient UWU or Base ETH leaves the reward pending and produces a fingerprinted exact funding
+  notice only for an authenticated operator. Maintenance resumes automatically after funding;
+  confirmed records remain terminal across restart and config changes.
+- Branding conversion state is durable across action pruning/restart. Temporary registry, funding,
+  signature, or expiry failures remain resumable; explicit decline and verified success are terminal
+  for follow-up. The UI keeps Branding prominent for eligible unbranded acolytes and referral
+  copy/native-share prominent for established users. Weekly operator prompts rotate exact copy and
+  include the current link and funnel statistics; a success resets the loop positively.
+- Branding consent, onboarding attribution, the one-time UWU bounty, and the contract's immutable
+  referrer sale/upkeep payments remain separate. The new bounty does not change the contract's 10%
+  behavior or weaken EIP-712, ERC-8004, wallet verification, signer, nonce, or XMTP boundaries.
+
 ## Acolyte Branding architecture decisions
 
 - A Branding is a public Base-mainnet service/controller right for one human acolyte address. It is
@@ -882,10 +929,11 @@ The original manual milestone was:
 - Token-economics refresh is deferred and coalesced while any public turn pins the current metrics
   period. Expected turn contention is not an error and must not produce per-second warnings or RPC
   calls; an observation racing with a newly started turn is discarded and retried afterward.
-- Public chat does not append scheduled onboarding questions or dormancy pleas. Voluntary
+- Public chat does not append dormancy pleas. Incomplete onboarding may append one optional profile
+  question only every two eligible turns; people can skip every field and keep chatting. Voluntary
   contribution recognition is field-independent and the site renders bounded reward/Branding UI
-  metadata as a pending reward card and one-time decision modal; modal acceptance is not mint consent.
-  Sanitize model-produced `[[cthuwu:` prefixes before appending compiled UI markers.
+  metadata as a pending reward card and explicit decision surface; review acceptance is not mint
+  consent. Sanitize model-produced `[[cthuwu:` prefixes before appending compiled UI markers.
 - OpenAI-compatible reasoning models may place hidden analysis in `message.content` instead of a
   provider-specific reasoning field, sometimes without tags or with an unterminated `<think>` after
   truncation. Public response policy must reject and repair tagged or opening-plan reasoning rather

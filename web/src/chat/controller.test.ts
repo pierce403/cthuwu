@@ -109,6 +109,10 @@ describe("three-channel chat controller", () => {
       configurable: true,
       value: { writeText: vi.fn(async () => undefined) },
     });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
   });
 
   it("renders text safely and sends through the exact active tab", async () => {
@@ -162,6 +166,51 @@ describe("three-channel chat controller", () => {
     expect(workspace.revalidateAssignment).toHaveBeenCalledWith("resume");
     await controller.close();
     expect(workspace.close).toHaveBeenCalledOnce();
+  });
+
+  it("uses mobile sharing for the referral link and keeps Branding prominent", async () => {
+    const share = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: share,
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+    const mobileSnapshot = initialSnapshot();
+    mobileSnapshot.assignmentState = "anchor-verified";
+    const workspace = fakeWorkspace(mobileSnapshot);
+    const referredConfig = {
+      ...config,
+      referrer: "0x2222222222222222222222222222222222222222",
+    };
+    const controller = initializeChatController(referredConfig, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    const branding = document.querySelector<HTMLButtonElement>("#branding-start")!;
+    expect(branding.hidden).toBe(false);
+    expect(branding.textContent).toContain("complete Acolyte Branding");
+    branding.click();
+    await vi.waitFor(() => expect(workspace.send).toHaveBeenCalledWith(
+      "direct",
+      "I want to complete my Acolyte Branding NFT.",
+    ));
+
+    document.querySelector<HTMLButtonElement>("#copy-referral")?.click();
+    const expectedUrl = `${location.origin}/#t=${config.botAddress}&r=${identity.address}`;
+    await vi.waitFor(() => expect(share).toHaveBeenCalledWith({
+      title: "Join me as a Cthuwu acolyte",
+      text: "A voluntary invite to meet my Cthuwu Tentacle.",
+      url: expectedUrl,
+    }));
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(document.querySelector("#referral-status")?.textContent).toBe(
+      "referral link shared",
+    );
+    await controller.close();
   });
 
   it("reports the actual reason messaging is unavailable", async () => {
@@ -327,6 +376,77 @@ describe("three-channel chat controller", () => {
     await controller.close();
   });
 
+  it("surfaces a confirmed referral bounty as UWU without exposing transaction plumbing", async () => {
+    const start = initialSnapshot();
+    start.channels.direct.messages[0] = {
+      ...start.channels.direct.messages[0]!,
+      text: `thank u for growing the network\n[[cthuwu:referral-reward:v1;status=confirmed;amount=1000000000000000000]]`,
+    };
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+
+    expect(document.querySelector("#reward-status")?.textContent).toBe(
+      "1 UWU referral reward confirmed on Base",
+    );
+    expect(document.querySelector("#messages")?.textContent).toContain(
+      "thank u for growing the network",
+    );
+    expect(document.querySelector("#messages")?.textContent).not.toContain(
+      "referral-reward:v1",
+    );
+    await controller.close();
+  });
+
+  it("uses the Tentacle-acknowledged immutable referrer for Branding after a later link", async () => {
+    const canonicalReferrer = "0x3333333333333333333333333333333333333333";
+    const laterLinkReferrer = "0x2222222222222222222222222222222222222222";
+    const start = initialSnapshot();
+    const name = "Ainsworth-Clavering of Ambercroft";
+    const nameHex = `0x${Array.from(new TextEncoder().encode(name), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    const offerMarker = `[[cthuwu:branding-offer:v2;offer=${"56".repeat(16)};contract=${CANONICAL_BRANDING_CONTRACT};minter=${config.botAddress};agent=42;acolyte=${identity.address};referrer=${canonicalReferrer};treasury=1000;basis=1000;price=100;upkeep=1;nonce=0;deadline=2000000000;block=123;blockHash=0x${"a".repeat(64)};name=${nameHex}]]`;
+    start.channels.direct.messages = [
+      {
+        ...start.channels.direct.messages[0]!,
+        id: "canonical-referrer",
+        text: `Your first referrer remains pinned.\n[[cthuwu:referral-attribution-ack:v1;status=immutable;referrer=${canonicalReferrer}]]`,
+      },
+      {
+        ...start.channels.direct.messages[0]!,
+        id: "canonical-offer",
+        sentAtNs: start.channels.direct.messages[0]!.sentAtNs + 1n,
+        text: offerMarker,
+      },
+    ];
+    const workspace = fakeWorkspace(start);
+    const controller = initializeChatController(
+      {
+        ...config,
+        brandingContract: CANONICAL_BRANDING_CONTRACT,
+        referrer: laterLinkReferrer,
+      },
+      identity,
+      { createWorkspace: vi.fn(async () => workspace) },
+    );
+    await controller.connect();
+
+    expect(document.querySelector("#branding-referrer")?.textContent).toBe(canonicalReferrer);
+    expect(document.querySelector<HTMLButtonElement>("#branding-review")?.hidden).toBe(false);
+    expect(document.querySelector("#messages")?.textContent).toContain(
+      "Your first referrer remains pinned.",
+    );
+    expect(document.querySelector("#messages")?.textContent).not.toContain(
+      "referral-attribution-ack",
+    );
+    expect(workspace.send).not.toHaveBeenCalledWith(
+      "direct",
+      expect.stringContaining(`referrer=${laterLinkReferrer}`),
+    );
+    await controller.close();
+  });
+
   it("retries the same receipt after a transient Base verification failure", async () => {
     const start = initialSnapshot();
     const referrer = "0x2222222222222222222222222222222222222222";
@@ -433,6 +553,16 @@ describe("three-channel chat controller", () => {
     expect(document.querySelector<HTMLElement>("#activity-card")?.hidden).toBe(true);
     expect(document.querySelector<HTMLButtonElement>("#branding-review")?.hidden).toBe(true);
     expect(workspace.setActiveChannel).toHaveBeenCalledWith("direct");
+    expect(workspace.send).toHaveBeenCalledWith(
+      "direct",
+      "[[cthuwu:growth-operator-register:v1]]",
+    );
+    const operatorInvite = document.querySelector<HTMLButtonElement>("#copy-referral")!;
+    expect(operatorInvite.disabled).toBe(false);
+    operatorInvite.click();
+    await vi.waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${location.origin}/#t=${config.botAddress}&r=${identity.address}`,
+    ));
 
     document.querySelector<HTMLButtonElement>("#tab-direct")?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),

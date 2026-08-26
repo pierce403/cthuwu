@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOnboardingLink, pinReferrer, recruitmentUrl } from "./onboarding-links";
+import { encodeReferralAttribution, parseOnboardingLink, pinReferrer, recruitmentUrl } from "./onboarding-links";
 
 const tentacle = "0x1111111111111111111111111111111111111111";
 const referrer = "0x2222222222222222222222222222222222222222";
@@ -24,6 +24,17 @@ describe("onboarding links", () => {
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
     expect(pinReferrer("production", tentacle, referrer, storage)).toBe(referrer);
     expect(pinReferrer("production", tentacle, "0x3333333333333333333333333333333333333333", storage)).toBe(referrer);
+  });
+
+  it("rejects corrupted persisted referral state instead of trusting localStorage", () => {
+    const storage = { getItem: () => "not-an-address", setItem: () => undefined };
+    expect(() => pinReferrer("production", tentacle, referrer, storage)).toThrow(/nonzero Ethereum/u);
+  });
+
+  it("encodes the exact authenticated Direct attribution control", () => {
+    expect(encodeReferralAttribution(referrer)).toBe(
+      `[[cthuwu:referral-attribution:v1;referrer=${referrer}]]`,
+    );
   });
 
   it("builds a browser-only social referral URL", () => {

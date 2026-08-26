@@ -100,6 +100,7 @@ const DEFAULT_MAX_FEE_PER_GAS_WEI = 10_000_000_000n;
 const DEFAULT_SAFETY_BPS = 12_500n;
 const DEFAULT_RESERVE_WEI = 50_000_000_000_000n;
 const MAX_SIGNER_JOURNAL_BYTES = 4 * 1024;
+const MAX_REFERRAL_JOURNAL_BYTES = 8 * 1024;
 const MAX_DISCOVERY_JOURNAL_BYTES = 64 * 1024;
 const MAX_SIGNATURE_BYTES = 8 * 1024;
 const BRANDING_DOMAIN_NAME = "Cthuwu Acolyte Branding";
@@ -130,10 +131,12 @@ const brandingAbi = parseAbi([
 ]);
 
 const erc20Abi = parseAbi([
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
   "function decimals() view returns (uint8)",
   "function balanceOf(address account) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
+  "function transfer(address to, uint256 amount) returns (bool)",
 ]);
 
 const erc1271Abi = parseAbi([
@@ -253,7 +256,21 @@ export type CompleteBrandingOperation = {
   acolyteName: string;
 };
 
+export type ReferralBountyOperation = {
+  type: "referral_bounty";
+  wallet: Address;
+  acolyte: Address;
+  referrer: Address;
+  token: Address;
+  chainId: 8453;
+  amountBaseUnits: string;
+  configuredAmountBaseUnits: string;
+  transactionHash?: Hex;
+  transactionNonce?: string;
+};
+
 type BrandingOperation = BrandingInspectOperation | CompleteBrandingOperation;
+type ClosedWalletOperation = BrandingOperation | ReferralBountyOperation;
 
 export type PreparedErc8004Transaction = {
   chainId: 8453;
@@ -265,7 +282,7 @@ export type PreparedErc8004Transaction = {
 export type Erc8004Request = {
   version: 1;
   actionId: string;
-  operation: ReadOperation | WriteOperation | BrandingOperation;
+  operation: ReadOperation | WriteOperation | ClosedWalletOperation;
 };
 
 export type Erc8004Response =
@@ -875,6 +892,86 @@ export function parseErc8004Request(value: unknown): Erc8004Request {
         },
       };
     }
+    case "referral_bounty": {
+      exactKeys(operation, [
+        "type",
+        "wallet",
+        "acolyte",
+        "referrer",
+        "token",
+        "chainId",
+        "amountBaseUnits",
+        "configuredAmountBaseUnits",
+        "transactionHash",
+        "transactionNonce",
+      ]);
+      if (
+        (operation.transactionHash === null) !== (operation.transactionNonce === null) ||
+        (operation.transactionHash !== null && typeof operation.transactionHash !== "string") ||
+        (operation.transactionNonce !== null && typeof operation.transactionNonce !== "string")
+      ) {
+        throw new PermanentSignerError(
+          "invalid_request",
+          "referral transaction hash and nonce must be absent or provided together",
+        );
+      }
+      if (operation.chainId !== ERC8004_CHAIN_ID) {
+        throw new PermanentSignerError("referral_chain", "referral bounty is Base-mainnet only");
+      }
+      const wallet = walletAddress(operation.wallet);
+      const acolyte = walletAddress(operation.acolyte);
+      const referrer = walletAddress(operation.referrer);
+      const token = walletAddress(operation.token);
+      const amountBaseUnits = uint256Decimal(operation.amountBaseUnits, "amountBaseUnits", {
+        positive: true,
+      });
+      const configuredAmountBaseUnits = uint256Decimal(
+        operation.configuredAmountBaseUnits,
+        "configuredAmountBaseUnits",
+        { positive: true },
+      );
+      const policyAmount = requiredReferralPolicyAmount();
+      if (
+        token !== CANONICAL_UWU ||
+        amountBaseUnits !== configuredAmountBaseUnits ||
+        amountBaseUnits !== policyAmount ||
+        referrer === wallet ||
+        referrer === acolyte ||
+        acolyte === wallet
+      ) {
+        throw new PermanentSignerError(
+          "referral_policy",
+          "referral bounty token, amount, treasury, acolyte, or destination violates policy",
+        );
+      }
+      const expectedActionId = `referral-bounty:${acolyte.slice(2).toLowerCase()}`;
+      if (actionId !== expectedActionId) {
+        throw new PermanentSignerError(
+          "referral_binding",
+          "referral bounty action ID is not bound to the expected acolyte",
+        );
+      }
+      return {
+        version: 1,
+        actionId,
+        operation: {
+          type: "referral_bounty",
+          wallet,
+          acolyte,
+          referrer,
+          token,
+          chainId: ERC8004_CHAIN_ID,
+          amountBaseUnits,
+          configuredAmountBaseUnits,
+          ...(operation.transactionHash === null
+            ? {}
+            : {
+                transactionHash: transactionHash(operation.transactionHash),
+                transactionNonce: transactionNonce(operation.transactionNonce),
+              }),
+        },
+      };
+    }
     case "register":
       exactKeys(
         operation,
@@ -1114,12 +1211,22 @@ async function installSignerAllocation(
   try {
     await link(temporary, target);
     await chmod(target, 0o600);
+    await syncStateDirectory(path.dirname(target));
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
     throw error;
   } finally {
     await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function syncStateDirectory(directory: string): Promise<void> {
+  const handle = await open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -1268,7 +1375,7 @@ type BrandingSignerAllocation = {
   fingerprint: string;
 };
 
-export type BrandingTransactionPhase = "approve" | "mint" | "name_trait" | "brand_avatar";
+export type BrandingTransactionPhase = "approve" | "mint" | "name_trait" | "brand_avatar" | "referral_bounty";
 
 function brandingSignerFingerprint(
   actionId: string,
@@ -1322,7 +1429,11 @@ function parseBrandingSignerAllocation(raw: string): BrandingSignerAllocation {
   if (
     value.version !== 2 ||
     value.chainId !== ERC8004_CHAIN_ID ||
-    (value.phase !== "approve" && value.phase !== "mint" && value.phase !== "name_trait") ||
+    (value.phase !== "approve" &&
+      value.phase !== "mint" &&
+      value.phase !== "name_trait" &&
+      value.phase !== "brand_avatar" &&
+      value.phase !== "referral_bounty") ||
     typeof value.fingerprint !== "string" ||
     !/^[0-9a-f]{64}$/u.test(value.fingerprint)
   ) {
@@ -2347,6 +2458,7 @@ async function replacePrivateFile(target: string, contents: string): Promise<voi
   try {
     await rename(temporary, target);
     await chmod(target, 0o600);
+    await syncStateDirectory(directory);
   } finally {
     await unlink(temporary).catch(() => undefined);
   }
@@ -2827,6 +2939,17 @@ function envBigInt(name: string, fallback: bigint): bigint {
     throw new PermanentSignerError("configuration", `${name} must be a canonical nonnegative integer`);
   }
   return BigInt(value);
+}
+
+function requiredReferralPolicyAmount(): string {
+  const value = process.env.CTHUWU_REFERRAL_BOUNTY_BASE_UNITS;
+  if (value === undefined) {
+    throw new PermanentSignerError(
+      "configuration",
+      "CTHUWU_REFERRAL_BOUNTY_BASE_UNITS must be supplied by the supervising Tentacle",
+    );
+  }
+  return uint256Decimal(value, "CTHUWU_REFERRAL_BOUNTY_BASE_UNITS", { positive: true });
 }
 
 async function feeParameters(publicClient: PublicClient): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
@@ -4231,6 +4354,525 @@ async function completeBranding(
   );
 }
 
+type ReferralBountyJournal = {
+  version: 1;
+  chainId: 8453;
+  token: Address;
+  wallet: Address;
+  acolyte: Address;
+  referrer: Address;
+  amountBaseUnits: string;
+  actionId: string;
+  nonce: string;
+  calldataHash: Hex;
+  fromBlock: string;
+  fingerprint: string;
+  transactionHash: Hex | null;
+};
+
+type ReferralFunding = {
+  ethBalance: bigint;
+  ethTarget: bigint;
+  ethShortfall: bigint;
+  uwuBalance: bigint;
+  uwuTarget: bigint;
+  uwuShortfall: bigint;
+  gas: bigint;
+};
+
+function referralJournalPath(identity: LoadedIdentity, acolyte: Address): string {
+  return path.join(
+    path.dirname(identity.identityPath),
+    `referral-bounty-v1-${acolyte.slice(2).toLowerCase()}.json`,
+  );
+}
+
+function referralJournalFingerprint(
+  operation: ReferralBountyOperation,
+  actionId: string,
+  nonce: string,
+  data: Hex,
+  fromBlock: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      version: 1,
+      chainId: ERC8004_CHAIN_ID,
+      token: CANONICAL_UWU,
+      wallet: operation.wallet,
+      acolyte: operation.acolyte,
+      referrer: operation.referrer,
+      amountBaseUnits: operation.amountBaseUnits,
+      actionId,
+      nonce,
+      calldataHash: keccak256(data),
+      fromBlock,
+    }))
+    .digest("hex");
+}
+
+function parseReferralJournal(raw: string): ReferralBountyJournal {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new PermanentSignerError("referral_journal", "referral bounty journal is not valid JSON");
+  }
+  if (!isRecord(value)) {
+    throw new PermanentSignerError("referral_journal", "referral bounty journal is not an object");
+  }
+  exactKeys(value, [
+    "version", "chainId", "token", "wallet", "acolyte", "referrer",
+    "amountBaseUnits", "actionId", "nonce", "calldataHash", "fromBlock",
+    "fingerprint", "transactionHash",
+  ]);
+  if (
+    value.version !== 1 ||
+    value.chainId !== ERC8004_CHAIN_ID ||
+    typeof value.amountBaseUnits !== "string" ||
+    typeof value.actionId !== "string" ||
+    typeof value.nonce !== "string" ||
+    typeof value.fromBlock !== "string" ||
+    typeof value.fingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.fingerprint) ||
+    (value.transactionHash !== null && typeof value.transactionHash !== "string")
+  ) {
+    throw new PermanentSignerError("referral_journal", "referral bounty journal is incomplete");
+  }
+  return {
+    version: 1,
+    chainId: ERC8004_CHAIN_ID,
+    token: walletAddress(value.token),
+    wallet: walletAddress(value.wallet),
+    acolyte: walletAddress(value.acolyte),
+    referrer: walletAddress(value.referrer),
+    amountBaseUnits: uint256Decimal(value.amountBaseUnits, "journal amount", { positive: true }),
+    actionId: boundedString(value.actionId, "journal actionId", 128),
+    nonce: transactionNonce(value.nonce),
+    calldataHash: transactionHash(value.calldataHash),
+    fromBlock: decimalId(value.fromBlock),
+    fingerprint: value.fingerprint,
+    transactionHash: value.transactionHash === null ? null : transactionHash(value.transactionHash),
+  };
+}
+
+async function loadReferralJournal(
+  identity: LoadedIdentity,
+  operation: ReferralBountyOperation,
+  actionId: string,
+  data: Hex,
+): Promise<ReferralBountyJournal | undefined> {
+  const journalPath = referralJournalPath(identity, operation.acolyte);
+  let stat;
+  try {
+    stat = await lstat(journalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REFERRAL_JOURNAL_BYTES) {
+    throw new PermanentSignerError(
+      "referral_journal",
+      "referral bounty journal is not a bounded regular file",
+    );
+  }
+  await chmod(journalPath, 0o600);
+  const journal = parseReferralJournal(await readFile(journalPath, "utf8"));
+  const fingerprint = referralJournalFingerprint(
+    operation,
+    actionId,
+    journal.nonce,
+    data,
+    journal.fromBlock,
+  );
+  if (
+    journal.token !== CANONICAL_UWU ||
+    journal.wallet !== operation.wallet ||
+    journal.acolyte !== operation.acolyte ||
+    journal.referrer !== operation.referrer ||
+    journal.amountBaseUnits !== operation.amountBaseUnits ||
+    journal.actionId !== actionId ||
+    journal.calldataHash !== keccak256(data) ||
+    journal.fingerprint !== fingerprint ||
+    (operation.transactionHash !== undefined && journal.transactionHash !== operation.transactionHash) ||
+    (operation.transactionNonce !== undefined && journal.nonce !== operation.transactionNonce)
+  ) {
+    throw new PermanentSignerError(
+      "referral_journal",
+      "referral bounty request conflicts with its durable acolyte-bound journal",
+    );
+  }
+  return journal;
+}
+
+async function persistReferralJournal(
+  identity: LoadedIdentity,
+  journal: ReferralBountyJournal,
+): Promise<void> {
+  const stateDirectory = path.dirname(identity.identityPath);
+  const stateStat = await lstat(stateDirectory);
+  if (!stateStat.isDirectory() || stateStat.isSymbolicLink()) {
+    throw new PermanentSignerError("referral_journal", "identity state directory is invalid");
+  }
+  await chmod(stateDirectory, 0o700);
+  const encoded = `${JSON.stringify(journal)}\n`;
+  if (Buffer.byteLength(encoded, "utf8") > MAX_REFERRAL_JOURNAL_BYTES) {
+    throw new PermanentSignerError("referral_journal", "referral bounty journal is oversized");
+  }
+  const target = referralJournalPath(identity, journal.acolyte);
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(encoded, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporary, target);
+    await chmod(target, 0o600);
+    await syncStateDirectory(stateDirectory);
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function referralFunding(
+  publicClient: PublicClient,
+  wallet: Address,
+  amount: bigint,
+  data: Hex,
+): Promise<ReferralFunding> {
+  const [chainId, decimals, uwuBalance, ethBalance, fees] = await Promise.all([
+    publicClient.getChainId(),
+    publicClient.readContract({
+      address: CANONICAL_UWU,
+      abi: erc20Abi,
+      functionName: "decimals",
+    }),
+    publicClient.readContract({
+      address: CANONICAL_UWU,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [wallet],
+    }),
+    publicClient.getBalance({ address: wallet }),
+    feeParameters(publicClient),
+  ]);
+  if (chainId !== ERC8004_CHAIN_ID || decimals !== UWU_DECIMALS) {
+    throw new PermanentSignerError(
+      "referral_deployment",
+      "referral bounty requires canonical Base mainnet and 18-decimal UWU",
+    );
+  }
+  const code = await publicClient.getCode({ address: CANONICAL_UWU });
+  if (code === undefined || code === "0x") {
+    throw new PermanentSignerError("referral_deployment", "canonical UWU has no deployed code");
+  }
+  const gasCeiling = envBigInt(
+    "CTHUWU_ERC8004_MAX_GAS_PER_TRANSACTION",
+    DEFAULT_MAX_GAS_PER_TRANSACTION,
+  );
+  let gas: bigint;
+  try {
+    gas = await publicClient.estimateGas({
+      account: wallet,
+      to: CANONICAL_UWU,
+      data,
+      value: 0n,
+    });
+  } catch {
+    gas = gasCeiling;
+  }
+  if (gas > gasCeiling) {
+    throw new RecoverableSignerError("gas_ceiling", "estimated referral transfer gas exceeds policy");
+  }
+  let l1Fee: bigint;
+  try {
+    l1Fee = await publicClient.estimateL1Fee({ account: wallet, to: CANONICAL_UWU, data });
+  } catch {
+    l1Fee = gasCeiling * fees.maxFeePerGas;
+  }
+  const safetyBps = envBigInt("CTHUWU_ERC8004_GAS_SAFETY_BPS", DEFAULT_SAFETY_BPS);
+  const reserve = envBigInt("CTHUWU_ERC8004_POST_REGISTRATION_RESERVE_WEI", DEFAULT_RESERVE_WEI);
+  const estimated = gas * fees.maxFeePerGas + l1Fee;
+  const ethTarget = (estimated * safetyBps + 9_999n) / 10_000n + reserve;
+  return {
+    ethBalance,
+    ethTarget,
+    ethShortfall: ethTarget > ethBalance ? ethTarget - ethBalance : 0n,
+    uwuBalance,
+    uwuTarget: amount,
+    uwuShortfall: amount > uwuBalance ? amount - uwuBalance : 0n,
+    gas,
+  };
+}
+
+function referralResultBase(
+  operation: ReferralBountyOperation,
+  funding: ReferralFunding,
+): Record<string, unknown> {
+  return {
+    kind: "referral_bounty",
+    chainId: ERC8004_CHAIN_ID,
+    token: CANONICAL_UWU,
+    wallet: operation.wallet,
+    acolyte: operation.acolyte,
+    referrer: operation.referrer,
+    amountBaseUnits: operation.amountBaseUnits,
+    ethBalanceWei: funding.ethBalance.toString(),
+    ethTargetWei: funding.ethTarget.toString(),
+    ethShortfallWei: funding.ethShortfall.toString(),
+    uwuBalanceBaseUnits: funding.uwuBalance.toString(),
+    uwuTargetBaseUnits: funding.uwuTarget.toString(),
+    uwuShortfallBaseUnits: funding.uwuShortfall.toString(),
+  };
+}
+
+async function verifyReferralReceipt(
+  publicClient: PublicClient,
+  operation: ReferralBountyOperation,
+  journal: ReferralBountyJournal,
+  data: Hex,
+  funding: ReferralFunding,
+): Promise<Record<string, unknown>> {
+  const hash = journal.transactionHash;
+  if (hash === null) {
+    throw new PermanentSignerError("referral_journal", "receipt verification has no hash");
+  }
+  let receipt;
+  try {
+    receipt = await publicClient.getTransactionReceipt({ hash });
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    if (name.includes("TransactionReceiptNotFound")) {
+      return {
+        ...referralResultBase(operation, funding),
+        disposition: "submitted",
+        transactionHash: hash,
+        transactionNonce: journal.nonce,
+        receiptBlockNumber: null,
+        receiptBlockHash: null,
+      };
+    }
+    throw error;
+  }
+  if (receipt.status !== "success") {
+    throw new PermanentSignerError("referral_reverted", "canonical UWU referral transfer reverted");
+  }
+  const transaction = await publicClient.getTransaction({ hash });
+  if (
+    getAddress(transaction.from) !== operation.wallet ||
+    transaction.to === null ||
+    getAddress(transaction.to) !== CANONICAL_UWU ||
+    transaction.nonce.toString() !== journal.nonce ||
+    transaction.input !== data ||
+    transaction.value !== 0n
+  ) {
+    throw new PermanentSignerError(
+      "referral_receipt",
+      "confirmed transaction does not match the exact referral transfer journal",
+    );
+  }
+  let exactTransfers = 0;
+  for (const log of receipt.logs) {
+    if (getAddress(log.address) !== CANONICAL_UWU) continue;
+    try {
+      const decoded = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, strict: true });
+      if (
+        decoded.eventName === "Transfer" &&
+        getAddress(decoded.args.from) === operation.wallet &&
+        getAddress(decoded.args.to) === operation.referrer &&
+        decoded.args.value === BigInt(operation.amountBaseUnits)
+      ) {
+        exactTransfers += 1;
+      }
+    } catch {
+      // Non-Transfer canonical token logs cannot prove the payout.
+    }
+  }
+  if (exactTransfers !== 1) {
+    throw new PermanentSignerError(
+      "referral_receipt",
+      "receipt does not contain exactly one expected canonical UWU Transfer",
+    );
+  }
+  const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+  if (block.hash !== receipt.blockHash) {
+    throw new RecoverableSignerError("referral_reorg", "referral receipt block is not canonical");
+  }
+  return {
+    ...referralResultBase(operation, funding),
+    disposition: "confirmed",
+    transactionHash: hash,
+    transactionNonce: journal.nonce,
+    receiptBlockNumber: receipt.blockNumber.toString(),
+    receiptBlockHash: receipt.blockHash,
+  };
+}
+
+async function recoverReferralHashByNonce(
+  publicClient: PublicClient,
+  operation: ReferralBountyOperation,
+  journal: ReferralBountyJournal,
+  data: Hex,
+): Promise<Hex | undefined> {
+  const head = await publicClient.getBlockNumber();
+  let from = BigInt(journal.fromBlock);
+  if (from > head) {
+    throw new RecoverableSignerError("referral_reorg", "referral preparation block is ahead of Base");
+  }
+  let candidates = 0;
+  while (from <= head) {
+    const to = from + 9_999n < head ? from + 9_999n : head;
+    const logs = await publicClient.getLogs({ address: CANONICAL_UWU, fromBlock: from, toBlock: to });
+    for (const log of logs) {
+      let matches = false;
+      try {
+        const decoded = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, strict: true });
+        matches = decoded.eventName === "Transfer" &&
+          getAddress(decoded.args.from) === operation.wallet &&
+          getAddress(decoded.args.to) === operation.referrer &&
+          decoded.args.value === BigInt(operation.amountBaseUnits);
+      } catch {
+        matches = false;
+      }
+      if (!matches || log.transactionHash === null) continue;
+      candidates += 1;
+      if (candidates > 32) {
+        throw new PermanentSignerError("referral_recovery", "too many transfer candidates for bounded recovery");
+      }
+      const transaction = await publicClient.getTransaction({ hash: log.transactionHash });
+      if (
+        getAddress(transaction.from) === operation.wallet &&
+        transaction.nonce.toString() === journal.nonce &&
+        transaction.input === data
+      ) {
+        return log.transactionHash;
+      }
+    }
+    from = to + 1n;
+  }
+  return undefined;
+}
+
+async function executeReferralBounty(
+  publicClient: PublicClient,
+  identity: LoadedIdentity,
+  operation: ReferralBountyOperation,
+  actionId: string,
+  rpcEndpoint: string,
+): Promise<Record<string, unknown>> {
+  const wallet = assertProductionIdentity(identity, operation.wallet);
+  const amount = BigInt(operation.amountBaseUnits);
+  const data = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [operation.referrer, amount],
+  });
+  const funding = await referralFunding(publicClient, wallet, amount, data);
+  let journal = await loadReferralJournal(identity, operation, actionId, data);
+  if (journal === undefined && operation.transactionHash !== undefined) {
+    throw new PermanentSignerError(
+      "referral_journal",
+      "frontend or Rust supplied a transaction without the durable signer journal",
+    );
+  }
+  if (journal !== undefined && journal.transactionHash !== null) {
+    return verifyReferralReceipt(publicClient, operation, journal, data, funding);
+  }
+  const [pendingNonce, latestNonce] = await Promise.all([
+    publicClient.getTransactionCount({ address: wallet, blockTag: "pending" }),
+    publicClient.getTransactionCount({ address: wallet, blockTag: "latest" }),
+  ]);
+  if (journal !== undefined && latestNonce > Number(journal.nonce)) {
+    const recovered = await recoverReferralHashByNonce(publicClient, operation, journal, data);
+    if (recovered === undefined) {
+      throw new RecoverableSignerError(
+        "referral_recovery",
+        "the allocated referral nonce was consumed but its exact canonical UWU transfer was not found",
+      );
+    }
+    journal = { ...journal, transactionHash: recovered };
+    await persistReferralJournal(identity, journal);
+    return verifyReferralReceipt(publicClient, operation, journal, data, funding);
+  }
+  if (funding.ethShortfall !== 0n || funding.uwuShortfall !== 0n) {
+    return {
+      ...referralResultBase(operation, funding),
+      disposition: "funding_required",
+      transactionHash: null,
+      transactionNonce: null,
+      receiptBlockNumber: null,
+      receiptBlockHash: null,
+    };
+  }
+  const allocation = await authorizeBrandingSignerNonce(
+    identity,
+    actionId,
+    "referral_bounty",
+    CANONICAL_UWU,
+    data,
+    pendingNonce,
+    latestNonce,
+  );
+  if (journal !== undefined && journal.nonce !== allocation.nonce.toString()) {
+    throw new PermanentSignerError("referral_journal", "shared signer allocation nonce changed");
+  }
+  if (journal === undefined) {
+    const fromBlock = (await publicClient.getBlockNumber()).toString();
+    const nonce = allocation.nonce.toString();
+    journal = {
+      version: 1,
+      chainId: ERC8004_CHAIN_ID,
+      token: CANONICAL_UWU,
+      wallet,
+      acolyte: operation.acolyte,
+      referrer: operation.referrer,
+      amountBaseUnits: operation.amountBaseUnits,
+      actionId,
+      nonce,
+      calldataHash: keccak256(data),
+      fromBlock,
+      fingerprint: referralJournalFingerprint(operation, actionId, nonce, data, fromBlock),
+      transactionHash: null,
+    };
+    // The exact reward and shared signer nonce are durable before any broadcast.
+    await persistReferralJournal(identity, journal);
+  }
+  const account = privateKeyToAccount(identity.walletKey);
+  const walletClient = createWalletClient({
+    account,
+    chain: base,
+    transport: http(rpcEndpoint, { timeout: 20_000, retryCount: 0 }),
+  });
+  const hash = await walletClient.sendTransaction({
+    account,
+    chain: base,
+    to: CANONICAL_UWU,
+    data,
+    value: 0n,
+    gas: funding.gas,
+    ...(await feeParameters(publicClient)),
+    nonce: Number(journal.nonce),
+  });
+  journal = { ...journal, transactionHash: hash };
+  await persistReferralJournal(identity, journal);
+  try {
+    await publicClient.waitForTransactionReceipt({ hash, confirmations: 1, timeout: 30_000 });
+  } catch {
+    return {
+      ...referralResultBase(operation, funding),
+      disposition: "submitted",
+      transactionHash: hash,
+      transactionNonce: journal.nonce,
+      receiptBlockNumber: null,
+      receiptBlockHash: null,
+    };
+  }
+  return verifyReferralReceipt(publicClient, operation, journal, data, funding);
+}
+
 export async function handleErc8004Request(
   request: Erc8004Request,
   rpcEndpoint: string,
@@ -4370,6 +5012,15 @@ export async function handleErc8004Request(
           publicClient,
           operation,
           await loadIdentity(),
+          request.actionId,
+          rpcEndpoint,
+        );
+        break;
+      case "referral_bounty":
+        result = await executeReferralBounty(
+          publicClient,
+          await loadIdentity(),
+          operation,
           request.actionId,
           rpcEndpoint,
         );

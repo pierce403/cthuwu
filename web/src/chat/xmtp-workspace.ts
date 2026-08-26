@@ -12,6 +12,7 @@ import {
 import { Wallet, getBytes } from "ethers";
 import type { AppConfig } from "../config";
 import { isLocalIdentity, type StoredIdentity } from "../identity";
+import { encodeReferralAttribution } from "../onboarding-links";
 import {
   RegistryUnavailableError,
   resolveTentacleAssignment,
@@ -61,6 +62,7 @@ import {
 
 const HISTORY_PAGE_SIZE = 40n;
 const MAX_MESSAGES_PER_CHANNEL = 1_000;
+const REFERRAL_RETRY_COOLDOWN_MS = 30_000;
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const LIVENESS_WINDOW_MS = 15_000;
 
@@ -310,6 +312,8 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private streamGeneration = 0;
   private registryFailureCount = 0;
   private nextAutomaticRegistryAttemptAt = 0;
+  private referralAcknowledged = false;
+  private lastReferralAttemptAt = 0;
   private readonly typingTimers: Partial<Record<ChatChannel, ReturnType<typeof setTimeout>>> = {};
 
   constructor(
@@ -447,6 +451,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         this.emit();
         throw error;
       }
+      await this.sendReferralAttributionIfNeeded().catch(() => undefined);
     } else {
       await this.revalidateBoundGroupChannel(channelId);
     }
@@ -966,6 +971,10 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.bindChannel("direct", [direct.id], direct.id, true);
     this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : "Intro Tentacle";
     await this.loadHistory("direct", false);
+    // The browser-local first-valid pin is only a hint until the authenticated Direct sender binds
+    // it at the Tentacle. Retry after handoff/reconnect until an authenticated terminal ACK appears
+    // in Direct history; the Tentacle's durable first-write rule makes retries idempotent.
+    await this.sendReferralAttributionIfNeeded(true);
   }
 
   private async verifyCurrentDirect(assignment: TentacleAssignment): Promise<void> {
@@ -1071,6 +1080,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       await Promise.all(this.streams.splice(0).map((stream) => stream.return().then(() => undefined)));
       await this.startStreams();
       await this.client.conversations.sync();
+      await this.sendReferralAttributionIfNeeded(true);
       this.needsStreamRestart = false;
       this.connected = true;
       this.emit();
@@ -1106,6 +1116,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     }
     const decoded = decodeChatMessage(message, this.inboxId);
     if (!decoded) return;
+    this.noteReferralAcknowledgement(channelId, decoded);
     this.addMessage(channelId, decoded, true);
     if (!decoded.mine) this.clearTyping(channelId);
   }
@@ -1397,6 +1408,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
           return value ? [value] : [];
         })
         .sort(compareMessages);
+      for (const message of decoded) this.noteReferralAcknowledgement(channelId, message);
       current.messages = mergeMessages(current.messages, decoded).slice(-MAX_MESSAGES_PER_CHANNEL);
       current.hasMore = [...current.historyByConversation.values()].some(({ hasMore }) => hasMore);
       current.status = current.messages.length === 0 ? "empty" : "ready";
@@ -1435,6 +1447,56 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.markRead(channelId);
     }
     this.emit();
+  }
+
+  private referralAcknowledgementKey(peerInboxId: string): string {
+    return `cthuwu.referral-ack.v1:${this.config.environment}:${this.identity.address.toLowerCase()}:${peerInboxId}`;
+  }
+
+  private noteReferralAcknowledgement(
+    channelId: ChatChannel,
+    message: WorkspaceMessage,
+  ): void {
+    if (
+      !this.config.referrer ||
+      message.mine ||
+      channelId !== "direct" ||
+      message.senderInboxId !== this.currentTentacleInboxId ||
+      !/(?:^|\n)\[\[cthuwu:referral-attribution-ack:v1;status=(?:accepted|immutable|direct);referrer=(?:0x[0-9a-f]{40}|none)\]\]$/u
+        .test(message.text)
+    ) {
+      return;
+    }
+    this.referralAcknowledged = true;
+    if (!this.currentTentacleInboxId) return;
+    try {
+      this.storage?.setItem(
+        this.referralAcknowledgementKey(this.currentTentacleInboxId),
+        "acknowledged",
+      );
+    } catch {
+      // The in-memory acknowledgement still prevents retries for this workspace.
+    }
+  }
+
+  private async sendReferralAttributionIfNeeded(force = false): Promise<void> {
+    if (!this.config.referrer || !this.direct || !this.currentTentacleInboxId) return;
+    let persisted = false;
+    try {
+      persisted = this.storage?.getItem(
+        this.referralAcknowledgementKey(this.currentTentacleInboxId),
+      ) === "acknowledged";
+    } catch {
+      persisted = false;
+    }
+    if (this.referralAcknowledged || persisted) {
+      this.referralAcknowledged = true;
+      return;
+    }
+    const now = this.nowMs();
+    if (!force && now - this.lastReferralAttemptAt < REFERRAL_RETRY_COOLDOWN_MS) return;
+    await this.direct.sendText(encodeReferralAttribution(this.config.referrer));
+    this.lastReferralAttemptAt = now;
   }
 
   private bindChannel(

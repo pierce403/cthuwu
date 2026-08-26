@@ -414,6 +414,65 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
+  it("retries referral attribution after restart until the authenticated Tentacle ACKs it", async () => {
+    const referrer = "0x3333333333333333333333333333333333333333";
+    const referredConfig = { ...config, referrer };
+    const first = fixture();
+    const workspace = new XmtpMultiChannelWorkspace(
+      first.client as never,
+      referredConfig,
+      identity,
+      {
+        resolveAssignment: vi.fn(async () => anchored),
+        storage: localStorage,
+      },
+    );
+    await workspace.start();
+    expect(first.direct.sendText).toHaveBeenCalledWith(
+      `[[cthuwu:referral-attribution:v1;referrer=${referrer}]]`,
+    );
+    await workspace.revalidateAssignment("retry");
+    expect(first.direct.sendText).toHaveBeenCalledTimes(1);
+    await workspace.close();
+
+    const unacknowledged = fixture();
+    const recovered = new XmtpMultiChannelWorkspace(
+      unacknowledged.client as never,
+      referredConfig,
+      identity,
+      {
+        resolveAssignment: vi.fn(async () => anchored),
+        storage: localStorage,
+      },
+    );
+    await recovered.start();
+    expect(unacknowledged.direct.sendText).toHaveBeenCalledWith(
+      `[[cthuwu:referral-attribution:v1;referrer=${referrer}]]`,
+    );
+    unacknowledged.streams.messages.push({
+      ...textMessage("referral-ack", directId, 1_700_000_000_000_000_001n),
+      content: `[[cthuwu:referral-attribution-ack:v1;status=accepted;referrer=${referrer}]]`,
+    });
+    const acknowledgementKey =
+      `cthuwu.referral-ack.v1:production:${identity.address.toLowerCase()}:${tentacle}`;
+    await vi.waitFor(() => expect(localStorage.getItem(acknowledgementKey)).toBe("acknowledged"));
+    await recovered.close();
+
+    const acknowledged = fixture();
+    const finalRestart = new XmtpMultiChannelWorkspace(
+      acknowledged.client as never,
+      referredConfig,
+      identity,
+      {
+        resolveAssignment: vi.fn(async () => anchored),
+        storage: localStorage,
+      },
+    );
+    await finalRestart.start();
+    expect(acknowledged.direct.sendText).not.toHaveBeenCalled();
+    await finalRestart.close();
+  });
+
   it("probes explicit deep-linked tentacle with liveness query before connecting as anchor-verified", async () => {
     const value = fixture();
     const anchorConfig = { ...config, tentacleAnchor: address };

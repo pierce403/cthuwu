@@ -11,6 +11,7 @@ use crate::{
     evolution_runtime::{
         ConversationObservation, EvolutionRuntime, PublicTurnStart, PublicTurnToken,
     },
+    growth::REFERRAL_CONTROL_PREFIX,
     matching::suggest_matches,
     model::{Model, ModelPolicy, ModelRequest},
     operator::{ModelControl, OperatorHarness},
@@ -27,6 +28,8 @@ use tracing::warn;
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+const OPERATOR_GROWTH_REGISTRATION: &str = "[[cthuwu:growth-operator-register:v1]]";
+const OPERATOR_GROWTH_ACK: &str = "[[cthuwu:growth-operator-ack:v1]]";
 
 fn onboarding_contribution_kind(stage: OnboardingStage) -> Option<AcolyteContributionKind> {
     match stage {
@@ -315,8 +318,47 @@ impl UwUBot {
             return Ok(Some(response.to_owned()));
         }
 
-        // Branding controls carry EIP-712 signatures and are interpreted only by the strict local
-        // parser. Consume them before public-turn accounting, contact state, or either model lane.
+        if message.text == OPERATOR_GROWTH_REGISTRATION {
+            if role != PrincipalRole::Operator {
+                return Ok(Some(
+                    "operator referral activation requires a currently authenticated operator conversation."
+                        .to_owned(),
+                ));
+            }
+            let (Some(control), Some(address)) =
+                (&self.branding_control, message.sender_address)
+            else {
+                return Ok(Some(
+                    "operator referral activation could not bind an authenticated EVM address."
+                        .to_owned(),
+                ));
+            };
+            control.register_operator(message.inbox_id, address).await?;
+            return Ok(Some(OPERATOR_GROWTH_ACK.to_owned()));
+        }
+
+        // Reconcile an already-complete local onboarding before accepting any referral hint. This
+        // closes the crash window after the contact note was committed and prevents an old direct
+        // onboarding from manufacturing a bounty by opening a later referral URL.
+        if role == PrincipalRole::User
+            && let (Some(control), Some(address)) =
+                (&self.branding_control, message.sender_address)
+        {
+            control.mark_contact(message.inbox_id, address).await?;
+            if self
+                .contacts
+                .load(message.inbox_id)?
+                .is_some_and(|contact| contact.stage == OnboardingStage::Complete)
+            {
+                control
+                    .mark_onboarding_complete(message.inbox_id, address)
+                    .await?;
+            }
+        }
+
+        // Branding controls carry EIP-712 signatures and referral attribution controls are
+        // untrusted hints. Both are interpreted only by strict local parsers before public-turn
+        // accounting, contact state, or either model lane.
         if let Some(control) = &self.branding_control {
             match control
                 .handle_public_message(message.inbox_id, message.sender_address, message.text)
@@ -326,9 +368,12 @@ impl UwUBot {
                     return Ok(Some(limit_response(response, role)));
                 }
                 Ok(None) => {}
-                Err(error) if message.text.contains("[[cthuwu:branding-") => {
-                    warn!(%error, "rejected an invalid or stale Acolyte Branding control");
-                    return Ok(Some("that exact Branding request is stale or does not match this authenticated conversation, so it authorized nothing, fwiend.".to_owned()));
+                Err(error)
+                    if message.text.contains("[[cthuwu:branding-")
+                        || message.text.starts_with(REFERRAL_CONTROL_PREFIX) =>
+                {
+                    warn!(%error, "rejected an invalid or stale strict public control");
+                    return Ok(Some("that exact Branding or referral control is stale, malformed, or does not match this authenticated conversation, so it authorized nothing, fwiend.".to_owned()));
                 }
                 Err(error) => return Err(error),
             }
@@ -336,6 +381,26 @@ impl UwUBot {
 
         let response = match role {
             PrincipalRole::Operator => {
+                let mut growth_runtime_facts = String::new();
+                if let (Some(control), Some(address)) =
+                    (&self.branding_control, message.sender_address)
+                {
+                    if let Err(error) = control.register_operator(message.inbox_id, address).await {
+                        warn!(%error, "could not persist authenticated operator growth identity");
+                    }
+                    match control.operator_growth_facts(address).await {
+                        Ok(facts) => growth_runtime_facts = facts,
+                        Err(error) => {
+                            warn!(%error, "could not read authenticated operator growth facts")
+                        }
+                    }
+                    if is_growth_status_request(message.text) {
+                        return Ok(Some(limit_response(
+                            control.operator_growth_status(address).await?,
+                            role,
+                        )));
+                    }
+                }
                 if is_natural_identity_or_purpose_request(message.text) {
                     let public_name = match &self.registry_control {
                         Some(control) => control.public_name().await,
@@ -375,7 +440,11 @@ impl UwUBot {
                     Ok(Some(response)) => response,
                     Ok(None) => self
                         .operator_harness
-                        .respond(message.inbox_id, message.text)
+                        .respond_with_runtime_facts(
+                            message.inbox_id,
+                            message.text,
+                            &growth_runtime_facts,
+                        )
                         .await
                         .unwrap_or_else(|_| {
                             "THE PRIVILEGED DREAM-CURRENT FAILED. I DID NOT COMPLETE YOUR REQUEST, OPERATOR."
@@ -617,6 +686,20 @@ impl UwUBot {
         let (mut contact, created) = self.contacts.load_or_create(inbox_id)?;
         contact.mark_seen();
 
+        if is_invite_request(text) {
+            let response = match (&self.branding_control, authenticated_sender_address) {
+                (Some(control), Some(address)) => match control.referral_link(address).await? {
+                    Some(link) => format!(
+                        "here's ur shareable acolyte invite, fwiend: {link}\n\nshare it with people who might genuinely enjoy this; the first valid referral stays pinned, and a successful completed onboarding earns the configured one-time UWU bounty. please don't spam anyone, uwu."
+                    ),
+                    None => "i can give u a referral link once this optional local onboarding is complete. we can finish it gradually, or u can say “just chat” to skip the profile questions without pressure, uwu.".to_owned(),
+                },
+                _ => "i can't bind a referral link without a currently authenticated EVM address and the growth supervisor, fwiend.".to_owned(),
+            };
+            self.contacts.save(&contact)?;
+            return Ok(response);
+        }
+
         if let Some(command) = text.trim().strip_prefix('/') {
             if is_operator_only_command(command) {
                 self.contacts.save(&contact)?;
@@ -624,6 +707,13 @@ impl UwUBot {
                     .to_owned());
             }
             if let Some(response) = self.handle_legacy_command(&mut contact, command).await? {
+                let mut response = response;
+                self.finish_onboarding_if_needed(
+                    &contact,
+                    authenticated_sender_address,
+                    &mut response,
+                )
+                .await?;
                 return Ok(response);
             }
         }
@@ -650,7 +740,14 @@ impl UwUBot {
         if voluntary_contribution.is_none()
             && let Some(response) = natural_response.as_ref()
         {
-            return Ok(response.clone());
+            let mut response = response.clone();
+            self.finish_onboarding_if_needed(
+                &contact,
+                authenticated_sender_address,
+                &mut response,
+            )
+            .await?;
+            return Ok(response);
         }
 
         let mut contribution_kind = voluntary_contribution.map(|(field, kind, value)| {
@@ -668,7 +765,15 @@ impl UwUBot {
             if is_casual_pass(text) {
                 contact.skip();
                 self.contacts.save(&contact)?;
-                return Ok("no worries at all, lil star—we can just keep chatting uwu.".to_owned());
+                let mut response =
+                    "no worries at all, lil star—we can just keep chatting uwu.".to_owned();
+                self.finish_onboarding_if_needed(
+                    &contact,
+                    authenticated_sender_address,
+                    &mut response,
+                )
+                .await?;
+                return Ok(response);
             }
             if looks_like_onboarding_answer(contact.stage, text) {
                 contribution_kind = onboarding_contribution_kind(contact.stage);
@@ -685,7 +790,18 @@ impl UwUBot {
         let mut response = match natural_response {
             Some(response) => response,
             None => {
-                let profile = contact.model_profile_markdown();
+                let mut profile = contact.model_profile_markdown();
+                if let (Some(control), Some(address)) =
+                    (&self.branding_control, authenticated_sender_address)
+                    && let Ok((growth, branding_state, _)) =
+                        control.growth_context(inbox_id, address).await
+                {
+                    profile.push_str("\n## RUNTIME-VERIFIED GROWTH STATE\n");
+                    profile.push_str(&growth.runtime_facts());
+                    profile.push_str("\ngrowth.branding_completion_state=");
+                    profile.push_str(&branding_state);
+                    profile.push('\n');
+                }
                 sanitize_model_ui_markers(self.model_reply(&profile, text, &model_policy).await)
             }
         };
@@ -707,7 +823,18 @@ impl UwUBot {
                 "\n[[cthuwu:reward:v1;status=pending;amount={reward}]]"
             ));
         }
-        if contribution_kind.is_some() {
+        let branding_due = match (&self.branding_control, authenticated_sender_address) {
+            (Some(control), Some(address)) => control
+                .growth_context(inbox_id, address)
+                .await
+                .map(|(_, _, should_offer)| should_offer)
+                .unwrap_or(false),
+            _ => false,
+        };
+        if contribution_kind.is_some()
+            || (contact.stage == OnboardingStage::Complete && branding_due)
+            || is_branding_interest(text)
+        {
             match (self.branding_control.as_ref(), authenticated_sender_address) {
                 (None, _) => response.push_str(
                     "\n\ni saved what u shared, but this node's Branding supervisor is unavailable, so no invitation was created. its operator needs to repair the node before i can retry, uwu.",
@@ -724,7 +851,7 @@ impl UwUBot {
                         .await
                     {
                         Ok(true) => response.push_str(
-                            "\n\ni'm checking a precise Acolyte Branding invitation against canonical Base state too; if it is safe and still unminted, i'll send the review separately, uwu.",
+                            "\n\ni'm checking a precise Acolyte Branding invitation against canonical Base state too. the separate review will explain what it does, its exact UWU price and upkeep, and the immutable referrer before asking for EIP-712 consent, uwu.",
                         ),
                         Ok(false) => response.push_str(
                             "\n\nan exact Acolyte Branding invitation is already queued for this conversation, fwiend.",
@@ -745,6 +872,7 @@ impl UwUBot {
                 .unwrap_or(u32::MAX)
                 .min(9),
         );
+        maybe_append_onboarding_prompt(&mut contact, created, &mut response);
         let contact_save = self.contacts.save(&contact);
         let response_time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let turn_token = turn_guard.take();
@@ -768,7 +896,50 @@ impl UwUBot {
             Err(_) => warn!("could not acquire Evolution runtime to finish public turn"),
         }
         contact_save?;
+        self.finish_onboarding_if_needed(
+            &contact,
+            authenticated_sender_address,
+            &mut response,
+        )
+        .await?;
         Ok(response)
+    }
+
+    async fn finish_onboarding_if_needed(
+        &self,
+        contact: &Contact,
+        authenticated_sender_address: Option<&str>,
+        response: &mut String,
+    ) -> Result<()> {
+        if contact.stage != OnboardingStage::Complete {
+            return Ok(());
+        }
+        let (Some(control), Some(address)) =
+            (&self.branding_control, authenticated_sender_address)
+        else {
+            return Ok(());
+        };
+        if !control
+            .mark_onboarding_complete(&contact.inbox_id, address)
+            .await?
+        {
+            return Ok(());
+        }
+        let (growth, _, _) = control.growth_context(&contact.inbox_id, address).await?;
+        if let Some(referrer) = growth.immutable_referrer.as_deref() {
+            response.push_str(&format!(
+                "\n\nonboarding complete—ur original referral to {} is durably recorded, and its one-time UWU bounty is queued for exact Base verification. refreshing or reconnecting cannot create another payout, uwu.",
+                short_address_text(referrer),
+            ));
+        } else {
+            response.push_str("\n\nonboarding complete, lil acolyte! this was a direct onboarding, so no referral bounty was created, uwu.");
+        }
+        if let Some(link) = growth.shareable_referral_url {
+            response.push_str(&format!(
+                "\n\nur own invite is ready too: {link}\nshare it with someone who might genuinely enjoy joining—no pressure and no spam, fwiend."
+            ));
+        }
+        Ok(())
     }
 
     async fn queue_information_reward(
@@ -1151,6 +1322,67 @@ fn is_casual_pass(text: &str) -> bool {
         text.trim().to_ascii_lowercase().as_str(),
         "pass" | "skip" | "not now" | "rather not" | "no thanks" | "just chat"
     )
+}
+
+fn is_invite_request(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    normalized == "/invite"
+        || [
+            "referral link",
+            "invite link",
+            "invite an acolyte",
+            "recruit an acolyte",
+            "how can i invite",
+            "how do i invite",
+        ]
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
+fn is_growth_status_request(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    normalized == "/growth"
+        || normalized == "growth status"
+        || normalized.contains("recruitment stats")
+        || normalized.contains("recruitment link")
+        || normalized.contains("referral stats")
+}
+
+fn is_branding_interest(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    normalized.contains("complete branding")
+        || normalized.contains("branding nft")
+        || normalized == "brand me"
+        || normalized == "i want branding"
+}
+
+fn maybe_append_onboarding_prompt(contact: &mut Contact, created: bool, response: &mut String) {
+    if contact.stage == OnboardingStage::Complete || contact.awaiting_onboarding_answer {
+        return;
+    }
+    contact.onboarding_turns_since_prompt = contact.onboarding_turns_since_prompt.saturating_add(1);
+    if created || contact.onboarding_turns_since_prompt < 2 || response.contains('?') {
+        return;
+    }
+    let prompt = match contact.stage {
+        OnboardingStage::Name => "if u'd like to become an established acolyte, what should i call u? u can pass or say “just chat” anytime.",
+        OnboardingStage::Hopes => "what's one hope u'd like this lil network to help with? passing is always okay.",
+        OnboardingStage::Resources => "is there one skill or resource u might voluntarily share someday? this is never a promise or obligation.",
+        OnboardingStage::Needs => "what kind of help would be useful to u? u can keep it private by passing.",
+        OnboardingStage::SharingConsent => "may i use only the profile details u chose to share for private match suggestions? yes or no; no does not block onboarding.",
+        OnboardingStage::Complete => return,
+    };
+    response.push_str("\n\n");
+    response.push_str(prompt);
+    contact.awaiting_onboarding_answer = true;
+    contact.onboarding_turns_since_prompt = 0;
+}
+
+fn short_address_text(value: &str) -> String {
+    if value.len() <= 16 {
+        return value.to_owned();
+    }
+    format!("{}…{}", &value[..8], &value[value.len() - 6..])
 }
 
 fn looks_like_onboarding_answer(stage: OnboardingStage, text: &str) -> bool {
@@ -1846,6 +2078,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingBrandingControl {
         offers: AtomicUsize,
+        operator_registrations: AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -1867,6 +2100,15 @@ mod tests {
             _text: &str,
         ) -> Result<Option<String>> {
             Ok(None)
+        }
+
+        async fn register_operator(
+            &self,
+            _inbox_id: &str,
+            _authenticated_sender_address: &str,
+        ) -> Result<()> {
+            self.operator_registrations.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -2423,6 +2665,39 @@ mod tests {
         assert_eq!(contact.hopes.as_deref(), Some("safer protocols"));
         assert_eq!(contact.resources.as_deref(), Some("Rust review"));
         assert_eq!(contact.needs.as_deref(), Some("design help"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_operator_can_activate_an_attributable_referral_link_without_inference() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Arc::new(RecordingBrandingControl::default());
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let bot = configured_bot(
+            root.path(),
+            model.clone(),
+            OperatorStore::new(root.path(), "dev").unwrap(),
+            Arc::new(RecordingTools {
+                calls: StdMutex::new(Vec::new()),
+            }),
+        )
+        .with_branding_control(control.clone());
+        let response = bot
+            .receive_authenticated_claimed_with_address(
+                "operator-growth-register",
+                "aabbcc",
+                Some("0x1111111111111111111111111111111111111111"),
+                "1750000000000000000",
+                OPERATOR_GROWTH_REGISTRATION,
+                PrincipalRole::Operator,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, OPERATOR_GROWTH_ACK);
+        assert_eq!(control.operator_registrations.load(Ordering::SeqCst), 1);
+        assert!(model.messages.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

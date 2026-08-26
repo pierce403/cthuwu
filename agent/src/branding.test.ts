@@ -316,6 +316,39 @@ describe("narrow Acolyte Branding executor", () => {
     }
   });
 
+  it("shares the signer nonce journal with an exact referral-bounty phase", async () => {
+    const { identity, directory } = await journalIdentity();
+    try {
+      const actionId = `referral-bounty:${ACOLYTE.slice(2).toLowerCase()}`;
+      expect(
+        await authorizeBrandingSignerNonce(
+          identity,
+          actionId,
+          "referral_bounty",
+          CANONICAL_UWU,
+          "0x1234",
+          9,
+          9,
+        ),
+      ).toEqual({ nonce: 9, existed: false });
+      expect(await readFile(
+        path.join(directory, "erc8004-signer-nonce-v1-9.json"),
+        "utf8",
+      )).toContain('"phase":"referral_bounty"');
+      await expect(authorizeBrandingSignerNonce(
+        identity,
+        actionId,
+        "referral_bounty",
+        CANONICAL_UWU,
+        "0x5678",
+        10,
+        9,
+      )).rejects.toThrow("reserved by another exact action");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("binds a reserved nonce to exact action ID, destination, and calldata hash", async () => {
     const { identity, directory } = await journalIdentity();
     try {

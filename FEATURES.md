@@ -100,10 +100,13 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
     and XMTP endpoint for the wallet. Fresh same-block canonical Base reads then authorize that exact
     identity, wallet, endpoint, and bounded current profile name; XMTP independently verifies that
     the resolved inbox belongs to the linked wallet. The first valid `r` value is pinned per local
-    acolyte identity and later links cannot replace it.
+    acolyte identity and later links cannot replace it. After authenticated Direct handoff, one
+    strict referral-attribution control binds that hint to the recovered sender address; the
+    Tentacle validates and persists it before contact memory or model inference.
   - Every verified leaderboard wallet address links to the root chat fragment for that Tentacle.
-    The main chat interface can copy a social referral URL whose `t` is the currently assigned
-    Tentacle and whose `r` is the sharer's locally recovered browser wallet.
+    The main chat interface prominently exposes Branding for unbranded acolytes and can copy or
+    natively share a recruitment URL whose `t` is the currently assigned Tentacle and whose `r` is
+    the sharer's locally recovered browser wallet. Operators have the same copyable-link action.
   - Passphrase-encrypted PBKDF2/AES-GCM export and import recover the wallet identity, not message history or necessarily the same XMTP installation.
   - Reset is environment-scoped, confirmed, and explains possible inbox loss and the Browser SDK's unencrypted local database.
 - **Test Criteria**:
@@ -121,7 +124,9 @@ its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibil
   - [x] Unit tests reject malformed, zero, duplicated, ambiguous, or unverifiable onboarding-link
     authority and prove first-touch referral pinning.
   - [x] UI tests prove leaderboard wallet links target Direct chat and copied referral URLs bind the
-    current assigned Tentacle and local acolyte address in the browser-only fragment.
+    current assigned Tentacle and local acolyte address in the browser-only fragment; mobile native
+    sharing falls back to clipboard, and a crash-safe handoff retries attribution only until the
+    authenticated Tentacle returns a terminal acknowledgement.
 
 ### External browser-wallet identity connector
 
@@ -1093,8 +1098,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     `CTHUWU_ECONOMICS_PRIVATE_KEY`; the lifecycle executor must call a separately isolated signer/key
     service rather than receive a raw key from uwubot.
   - The revenue-split core uses configurable shares: 15% parent, 10% operating acolyte, 5%
-    recruiter, and 70% earning Tentacle by default. The intended model rewards recruitment, but no
-    authenticated revenue source or payout executor is committed.
+    recruiter, and 70% earning Tentacle by default. It still has no authenticated general-revenue
+    source or generic payout executor. The separately bounded one-time onboarding referral bounty
+    described below is not an implementation of those general revenue splits.
   - `--rpc-endpoint`, `--token-contract`, `--observe-tokens`, `--observe-interval`, `--min-tier`,
     `--token-tier-intensity`, `--token-decimals`, and `--token-total-supply` have corresponding
     `CTHUWU_*` environment variables. RPC endpoint values are hidden/sanitized because provider URLs
@@ -1106,13 +1112,15 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     result queues nothing. Name, hopes, occupation or offered resources, and needs use declining information
     hunger as the local profile fills. The source message/category and exact treasury-bound
     transfer are durable and idempotent, and only a matching confirmed Base receipt is payment.
-  - Ordinary replies never append scheduled onboarding questions or public dormancy pleas.
+  - Public chat never appends dormancy pleas. Incomplete onboarding may append at most one optional
+    profile question every two eligible turns; first answers still lead with the requested help,
+    every question can be skipped, and ordinary conversation continues without forced completion.
     Explicit voluntary statements such as `I hope...`, `I work as...`, or `I need...` are routed
     independently of onboarding stage, while questions and requests such as `I need you to...`
     remain conversation rather than profile data. A queued reward is exposed as typed bounded UI
     metadata and the main chat page labels it pending until a confirmed Base receipt exists.
     Model prose is sanitized before compiled UI metadata is appended, so prompt text cannot forge a
-    reward card or Branding modal.
+    reward card, referral attribution, or Branding modal.
   - Free-form mission or money-making ideas are not yet auto-paid: model prose is untrusted and
     cannot authorize treasury spending. A future bounded contribution assessor must persist an
     explainable category/score without giving public prompt text direct payout authority.
@@ -1487,6 +1495,76 @@ phase.
     assignment de-duplication, mobile controls, and offline snapshot display.
   - [x] The static production build uses the checked-in hostname/Agent0-subgraph-restricted public
     Graph key; a production-origin query on 2026-08-12 returned Agent0 without indexing errors.
+
+### Acolyte growth, immutable referrals, and UWU onboarding bounties
+
+- **Stability**: in-progress
+- **Description**: Make honest acolyte recruitment and Branding completion persistent Tentacle
+  objectives, with first-touch attribution and one crash-safe UWU reward for a completed referred
+  onboarding.
+- **Properties**:
+  - Growth is a compiled ongoing objective for both public and operator personas. The runtime gives
+    the model read-only structured facts instead of asking it to infer acolyte, Branding, referral,
+    payout, or aggregate funnel state from transcript prose.
+  - The durable local funnel is `new_contact -> acolyte -> branding_offered -> consent_pending ->
+    branded`. Inspection outages, expired offers, funding shortfalls, and signature problems remain
+    resumable. A verified active/completed Branding stops offers; an explicit refusal is stored as a
+    terminal preference and suppresses later nags.
+  - Root links retain the canonical browser-only
+    `/#t=<tentacle-wallet>&r=<referrer-wallet>` fragment. The browser pins the first syntactically
+    valid referrer per recovered identity and, after authenticated Direct handoff, sends one exact
+    referral control. It retries that same proposal across an unacknowledged crash/reconnect, then
+    persists only the authenticated Tentacle's terminal acknowledgement and uses its canonical
+    referrer for Branding. Fragments, frontend state, XMTP text, and model output remain untrusted.
+  - The Tentacle keys attribution by the SDK-authenticated EVM acolyte address and accepts only the
+    first locally verified nonzero referrer: an established acolyte or authenticated operator,
+    distinct from the acolyte and Tentacle treasury. A later link, reconnect, refresh, duplicate
+    contact record, delayed Branding, or completed direct onboarding cannot replace or create it.
+    The verified referrer inbox is pinned for delivery, can be refreshed only by that same
+    authenticated payout address, and cannot equal the referred acolyte's inbox. The recovered
+    acolyte inbox is unique across reward records, so switching associated wallets cannot create a
+    second reward identity.
+  - A successful referred onboarding is the terminal transition of the canonical retained contact
+    to `OnboardingStage::Complete`, reconciled durably into `state/acolyte-growth.json`. Opening a
+    link, connecting XMTP, or merely submitting attribution is not success.
+  - A success advances `attributed -> onboarding_complete -> reward_pending -> submitted ->
+    confirmed`. One deterministic acolyte-bound action ID makes duplicate completion and replay
+    idempotent across restarts. Confirmed transactions are recovered without rebroadcast.
+  - The one-time default bounty is exactly `1000000000000000000` UWU base units and has one policy
+    setting, `CTHUWU_REFERRAL_BOUNTY_BASE_UNITS`. `CTHUWU_PUBLIC_ORIGIN` supplies the HTTPS origin for
+    generated links. The servicing Tentacle pays the immutable referrer from its own treasury.
+  - The bounty is independent of EIP-712 Branding consent and the Branding contract's unchanged 10%
+    referral economics. Its executor is bound to Base `8453`, canonical UWU, the local treasury,
+    expected acolyte/referrer, configured amount, and deterministic action ID. It derives ERC-20
+    transfer calldata itself and rejects arbitrary chain, token, destination, amount, value, or data.
+  - Referral payouts share the ERC-8004/Branding signer nonce journal. The exact intent, allocated
+    nonce, calldata hash, preparation block, and later transaction hash are durable before/after
+    broadcast as applicable. Recovery verifies nonce, transaction, canonical receipt, and exactly
+    one matching UWU `Transfer` event.
+  - Insufficient UWU or Base ETH keeps the reward pending. The authenticated operator receives an
+    exact, fingerprinted funding notice, and periodic maintenance resumes automatically once funded.
+  - Every established acolyte and authenticated operator can obtain a current copyable referral
+    link; mobile uses native share when available. Operator recruitment prompts include the exact
+    link and current total, branded/unbranded, seven-day onboarding, links-sent, success, and paid-UWU
+    figures. Weekly prompts rotate and deduplicate, while a success positively resets the loop.
+  - Recruitment and conversion remain voluntary: the Tentacle may follow up on incomplete work but
+    must not spam, mislead, pressure, expose private identity data, or repeatedly bother someone who
+    clearly declined.
+- **Test Criteria**:
+  - [x] Browser tests cover first-fragment pinning, later-link rejection, reload persistence, exact
+    authenticated handoff controls, reconnect deduplication, visible reward attribution, copy/share,
+    prominent Branding, and operator referral UX on desktop and mobile-sized layouts.
+  - [x] Rust tests cover direct and referred onboarding, immutable/restart-safe attribution, exactly
+    one bounty, crashes around preparation/submission/confirmation, canonical confirmed recovery,
+    insufficient UWU/Base ETH, invalid referrers, durable decline/completion, and rate-limited
+    operator prompts.
+  - [x] Sidecar tests reject altered chain/token/treasury/acolyte/referrer/amount/action/calldata
+    inputs and cover the referral phase in the shared signer journal.
+  - [x] Branding tests retain the canonical immutable referrer in EIP-712 consent, and Foundry tests
+    continue to prove the existing 10% mint/upkeep/purchase/claim referral settlement unchanged.
+  - [ ] A funded production referred onboarding confirms one canonical UWU payout and the operator
+    sees its status over authenticated XMTP. This live exercise is a release gate, not assumed by
+    local tests.
 
 ### Base Acolyte Branding and controller routing
 

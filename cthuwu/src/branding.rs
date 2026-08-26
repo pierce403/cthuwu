@@ -10,6 +10,9 @@ use crate::{
         BASE_MAINNET_CHAIN_ID, Erc8004Gateway, IDENTITY_REGISTRY, RegistrationPhase,
         TentacleRegistration,
     },
+    growth::{
+        DurableBrandingState, GrowthContext, GrowthDeliveryAudience, GrowthRuntime,
+    },
     storage::{ensure_private_directory, restrict_file, sync_directory},
     token_eye::{Address, U256},
 };
@@ -56,6 +59,7 @@ const FUNDING_RETRY_SECONDS: u64 = 5 * 60;
 const FUNDING_NOTICE_COOLDOWN_SECONDS: u64 = 24 * 60 * 60;
 const TERMINAL_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(15);
+const BRANDING_FOLLOWUP_COOLDOWN_SECONDS: u64 = 24 * 60 * 60;
 
 const FIRST: &[&str] = &[
     "Ainsworth",
@@ -362,6 +366,8 @@ struct BrandingAction {
     first_week_upkeep: String,
     acolyte_name: String,
     phase: BrandingPhase,
+    #[serde(default)]
+    observed_branding_status: Option<HelperBrandingStatus>,
     inspection: Option<InspectionBinding>,
     consent: Option<ConsentBinding>,
     receipt: Option<ReceiptBinding>,
@@ -747,7 +753,7 @@ enum HelperDisposition {
     RepairRequired,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum HelperBrandingStatus {
     Unminted,
@@ -906,6 +912,91 @@ impl BrandingRuntime {
         }
     }
 
+    fn durable_branding_updates(
+        &self,
+    ) -> Result<Vec<(String, Address, DurableBrandingState, u64)>> {
+        let mut seen = BTreeSet::new();
+        let mut updates = Vec::new();
+        for action in self.state.actions.iter().rev() {
+            if !seen.insert(action.acolyte.clone()) {
+                continue;
+            }
+            let state = match action.phase {
+                BrandingPhase::Declined => Some(DurableBrandingState::Declined),
+                BrandingPhase::ReceiptPendingDelivery | BrandingPhase::Completed => {
+                    Some(DurableBrandingState::Branded)
+                }
+                BrandingPhase::FailedPermanent => match action.observed_branding_status {
+                    Some(HelperBrandingStatus::Active) => Some(DurableBrandingState::Branded),
+                    Some(HelperBrandingStatus::Expired) => Some(DurableBrandingState::Inactive),
+                    Some(HelperBrandingStatus::Ineligible) => {
+                        Some(DurableBrandingState::Ineligible)
+                    }
+                    Some(HelperBrandingStatus::RegistryUnavailable)
+                    | Some(HelperBrandingStatus::Unminted)
+                    | None => None,
+                },
+                BrandingPhase::Requested
+                | BrandingPhase::OfferPendingDelivery
+                | BrandingPhase::Offered
+                | BrandingPhase::Consented
+                | BrandingPhase::FundingRequired
+                | BrandingPhase::Expired
+                | BrandingPhase::Superseded => None,
+            };
+            if let Some(state) = state {
+                updates.push((
+                    action.inbox_id.clone(),
+                    parse_nonzero_address(&action.acolyte, "persisted Branding acolyte")?,
+                    state,
+                    action.updated_at_unix,
+                ));
+            }
+        }
+        Ok(updates)
+    }
+
+    fn state_for(&self, inbox_id: &str, acolyte: Address, now: u64) -> (&'static str, bool) {
+        let acolyte = acolyte.to_string();
+        let latest = self
+            .state
+            .actions
+            .iter()
+            .rfind(|action| action.inbox_id == inbox_id && action.acolyte == acolyte);
+        match latest {
+            None => ("not_offered", true),
+            Some(action) => match action.phase {
+                BrandingPhase::Requested | BrandingPhase::OfferPendingDelivery => {
+                    ("branding_offered", false)
+                }
+                BrandingPhase::Offered => ("consent_pending", false),
+                BrandingPhase::Consented
+                | BrandingPhase::FundingRequired
+                | BrandingPhase::ReceiptPendingDelivery => ("completion_pending", false),
+                BrandingPhase::Completed => ("branded", false),
+                BrandingPhase::Declined => ("declined", false),
+                BrandingPhase::FailedPermanent => match action.observed_branding_status {
+                    Some(HelperBrandingStatus::Active) => ("branded", false),
+                    Some(HelperBrandingStatus::Expired) => ("branding_expired", false),
+                    Some(HelperBrandingStatus::Ineligible) => ("branding_ineligible", false),
+                    Some(HelperBrandingStatus::RegistryUnavailable)
+                    | Some(HelperBrandingStatus::Unminted)
+                    | None => (
+                        "follow_up_due",
+                        now.saturating_sub(action.updated_at_unix)
+                            >= BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
+                    ),
+                },
+                BrandingPhase::Expired
+                | BrandingPhase::Superseded => (
+                    "follow_up_due",
+                    now.saturating_sub(action.updated_at_unix)
+                        >= BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
+                ),
+            },
+        }
+    }
+
     fn enqueue_offer(
         &mut self,
         inbox_id: &str,
@@ -1055,6 +1146,7 @@ impl BrandingRuntime {
             first_week_upkeep,
             acolyte_name: acolyte_name(acolyte),
             phase: BrandingPhase::Requested,
+            observed_branding_status: None,
             inspection: None,
             consent: None,
             receipt: None,
@@ -1471,6 +1563,9 @@ impl BrandingRuntime {
             now.saturating_sub(block_timestamp) <= MAX_INSPECTION_BLOCK_AGE_SECONDS,
             "Branding inspection is too old to anchor a fresh offer"
         );
+        if inspection.branding_status == HelperBrandingStatus::RegistryUnavailable {
+            bail!("canonical Branding registry was unavailable during inspection");
+        }
         if inspection.branding_status != HelperBrandingStatus::Unminted
             || !matches!(
                 inspection.disposition,
@@ -1479,8 +1574,11 @@ impl BrandingRuntime {
         {
             let current = &mut self.state.actions[index];
             current.phase = BrandingPhase::FailedPermanent;
-            current.last_error =
-                Some("the canonical Branding is no longer unminted; offer retired".to_owned());
+            current.observed_branding_status = Some(inspection.branding_status);
+            current.last_error = Some(format!(
+                "canonical Branding status is {:?}; offer retired",
+                inspection.branding_status
+            ));
             current.updated_at_unix = now;
             self.persist(now)?;
             return Ok(None);
@@ -1505,6 +1603,7 @@ impl BrandingRuntime {
         let text = offer_text(&action, &binding);
         let commitment = delivery_commitment("offer", &action.offer_id, &text);
         let current = &mut self.state.actions[index];
+        current.observed_branding_status = Some(HelperBrandingStatus::Unminted);
         current.inspection = Some(binding);
         current.phase = BrandingPhase::OfferPendingDelivery;
         current.pending_delivery = Some(PendingDelivery {
@@ -1744,6 +1843,7 @@ impl BrandingRuntime {
 /// repair and Branding execution cannot race the same persistent signer nonce.
 pub struct SharedBrandingControl {
     runtime: Mutex<BrandingRuntime>,
+    growth: Mutex<GrowthRuntime>,
     registration: Arc<Mutex<TentacleRegistration>>,
     wake: Notify,
 }
@@ -1754,14 +1854,29 @@ impl SharedBrandingControl {
         minter: Address,
         gateway: Arc<dyn Erc8004Gateway>,
         registration: Arc<Mutex<TentacleRegistration>>,
+        referral_bounty_base_units: &str,
+        public_origin: &str,
     ) -> Result<Self> {
+        let now = unix_seconds()?;
+        let runtime = BrandingRuntime::open(data_dir, minter, gateway.clone())?;
+        let mut growth = GrowthRuntime::open(
+            data_dir,
+            minter,
+            referral_bounty_base_units,
+            public_origin,
+            gateway,
+            now,
+        )?;
+        for (inbox_id, acolyte, state, observed_at) in runtime.durable_branding_updates()? {
+            growth.note_branding_state(&inbox_id, acolyte, state, observed_at)?;
+        }
         Ok(Self {
-            runtime: Mutex::new(BrandingRuntime::open(data_dir, minter, gateway)?),
+            runtime: Mutex::new(runtime),
+            growth: Mutex::new(growth),
             registration,
             wake: Notify::new(),
         })
     }
-
     pub fn maintenance_interval(&self) -> Duration {
         MAINTENANCE_INTERVAL
     }
@@ -1772,7 +1887,9 @@ impl SharedBrandingControl {
 
     pub async fn maintain_once(&self) -> Result<Option<BrandingDelivery>> {
         let now = unix_seconds()?;
-        if !self.runtime.lock().await.has_due(now) {
+        let branding_due = self.runtime.lock().await.has_due(now);
+        let growth_due = self.growth.lock().await.has_due(now);
+        if !branding_due && !growth_due {
             return Ok(None);
         }
         let mut registration = self.registration.lock().await;
@@ -1784,14 +1901,38 @@ impl SharedBrandingControl {
         };
         let Some(active_agent_id) = active_agent_id else {
             self.runtime.lock().await.defer_due(now)?;
+            self.growth.lock().await.defer_due(now)?;
             return Ok(None);
         };
+        if growth_due {
+            let branded = self.growth.lock().await.branded_count();
+            if let Some(delivery) = self.growth.lock().await.maintain_one(branded, now).await? {
+                drop(registration);
+                return Ok(Some(BrandingDelivery {
+                    target: match delivery.audience {
+                        GrowthDeliveryAudience::Inbox(inbox_id) => {
+                            BrandingDeliveryTarget::Inbox(inbox_id)
+                        }
+                        GrowthDeliveryAudience::Operators => BrandingDeliveryTarget::Operators,
+                    },
+                    text: delivery.text,
+                    commitment: format!("growth:{}", delivery.commitment),
+                }));
+            }
+        }
         let result = self
             .runtime
             .lock()
             .await
             .maintain_one(&active_agent_id, now)
             .await;
+        if result.is_ok() {
+            let updates = self.runtime.lock().await.durable_branding_updates()?;
+            let mut growth = self.growth.lock().await;
+            for (inbox_id, acolyte, state, observed_at) in updates {
+                growth.note_branding_state(&inbox_id, acolyte, state, observed_at)?;
+            }
+        }
         drop(registration);
         result
     }
@@ -1799,11 +1940,19 @@ impl SharedBrandingControl {
     pub async fn acknowledge_delivery(&self, delivery: &BrandingDelivery, delivered: bool) {
         match unix_seconds() {
             Ok(now) => {
-                if let Err(error) = self.runtime.lock().await.acknowledge_delivery(
-                    &delivery.commitment,
-                    delivered,
-                    now,
-                ) {
+                let result = if let Some(commitment) = delivery.commitment.strip_prefix("growth:") {
+                    self.growth
+                        .lock()
+                        .await
+                        .acknowledge_delivery(commitment, delivered, now)
+                } else {
+                    self.runtime.lock().await.acknowledge_delivery(
+                        &delivery.commitment,
+                        delivered,
+                        now,
+                    )
+                };
+                if let Err(error) = result {
                     tracing::warn!(%error, "could not persist Branding delivery acknowledgement");
                 }
             }
@@ -1864,6 +2013,65 @@ pub trait AcolyteBrandingControl: Send + Sync {
         authenticated_sender_address: Option<&str>,
         text: &str,
     ) -> Result<Option<String>>;
+
+    async fn mark_onboarding_complete(
+        &self,
+        _inbox_id: &str,
+        _authenticated_sender_address: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn mark_contact(
+        &self,
+        _inbox_id: &str,
+        _authenticated_sender_address: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn growth_context(
+        &self,
+        _inbox_id: &str,
+        _authenticated_sender_address: &str,
+    ) -> Result<(GrowthContext, String, bool)> {
+        Ok((
+            GrowthContext {
+                is_acolyte: false,
+                immutable_referrer: None,
+                referral_bounty_phase: None,
+                shareable_referral_url: None,
+            },
+            "unknown".to_owned(),
+            false,
+        ))
+    }
+
+    async fn referral_link(&self, _authenticated_sender_address: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn register_operator(
+        &self,
+        _inbox_id: &str,
+        _authenticated_sender_address: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn operator_growth_status(
+        &self,
+        _authenticated_sender_address: &str,
+    ) -> Result<String> {
+        Ok("GROWTH STATUS IS UNAVAILABLE IN THIS RUNTIME.".to_owned())
+    }
+
+    async fn operator_growth_facts(
+        &self,
+        _authenticated_sender_address: &str,
+    ) -> Result<String> {
+        Ok("growth.runtime=unavailable".to_owned())
+    }
 }
 
 #[async_trait]
@@ -1875,7 +2083,24 @@ impl AcolyteBrandingControl for SharedBrandingControl {
         quote: BrandingQuote,
     ) -> Result<bool> {
         let acolyte = parse_nonzero_address(authenticated_sender_address, "authenticated acolyte")?;
-        self.enqueue_offer(inbox_id, acolyte, acolyte, quote).await
+        let referrer = {
+            let growth = self.growth.lock().await;
+            if growth.identity_conflicts(inbox_id, acolyte)
+                || growth.branding_state(acolyte).is_some()
+            {
+                return Ok(false);
+            }
+            growth.immutable_referrer(acolyte).unwrap_or(acolyte)
+        };
+        let (_, should_offer) = self.runtime.lock().await.state_for(
+            inbox_id,
+            acolyte,
+            unix_seconds()?,
+        );
+        if !should_offer {
+            return Ok(false);
+        }
+        self.enqueue_offer(inbox_id, acolyte, referrer, quote).await
     }
 
     async fn handle_public_message(
@@ -1884,6 +2109,15 @@ impl AcolyteBrandingControl for SharedBrandingControl {
         authenticated_sender_address: Option<&str>,
         text: &str,
     ) -> Result<Option<String>> {
+        if let Some(response) = self
+            .growth
+            .lock()
+            .await
+            .handle_control(inbox_id, authenticated_sender_address, text, unix_seconds()?)?
+        {
+            self.wake.notify_one();
+            return Ok(Some(response));
+        }
         let parsed = match parse_branding_control(text) {
             BrandingControlMessage::NotBranding => return Ok(None),
             BrandingControlMessage::Invalid => {
@@ -1900,10 +2134,24 @@ impl AcolyteBrandingControl for SharedBrandingControl {
                 return Ok(Some("i could not bind that Branding control to an authenticated Ethereum address, so it authorized nothing, fwiend.".to_owned()));
             }
         };
+        if self.growth.lock().await.identity_conflicts(inbox_id, sender) {
+            return Ok(Some("this recovered XMTP identity is already pinned to another authenticated acolyte wallet, so changing associated wallets cannot authorize Branding or referral actions, fwiend.".to_owned()));
+        }
         let now = unix_seconds()?;
+        let declined = matches!(&parsed, BrandingControlMessage::Decline { .. });
         let response = match parsed {
             BrandingControlMessage::Request { referrer, name } => {
                 let referrer = parse_nonzero_address(&referrer, "requested Branding referrer")?;
+                let canonical = self
+                    .growth
+                    .lock()
+                    .await
+                    .immutable_referrer(sender)
+                    .unwrap_or(sender);
+                ensure!(
+                    referrer == canonical,
+                    "Branding request referrer differs from immutable onboarding attribution"
+                );
                 let controller_agent_id = self
                     .active_agent_id()
                     .await
@@ -1939,7 +2187,114 @@ impl AcolyteBrandingControl for SharedBrandingControl {
                 .decline(inbox_id, sender, &offer_id, now)?,
             BrandingControlMessage::NotBranding | BrandingControlMessage::Invalid => unreachable!(),
         };
+        if declined {
+            self.growth.lock().await.note_branding_state(
+                inbox_id,
+                sender,
+                DurableBrandingState::Declined,
+                now,
+            )?;
+        }
         Ok(Some(response))
+    }
+
+    async fn mark_contact(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: &str,
+    ) -> Result<bool> {
+        self.growth.lock().await.mark_contact(
+            inbox_id,
+            authenticated_sender_address,
+            unix_seconds()?,
+        )
+    }
+
+    async fn mark_onboarding_complete(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: &str,
+    ) -> Result<bool> {
+        let completed = self.growth.lock().await.mark_onboarding_complete(
+            inbox_id,
+            authenticated_sender_address,
+            unix_seconds()?,
+        )?;
+        if completed {
+            self.wake.notify_one();
+        }
+        Ok(completed)
+    }
+
+    async fn growth_context(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: &str,
+    ) -> Result<(GrowthContext, String, bool)> {
+        let acolyte = parse_nonzero_address(authenticated_sender_address, "authenticated acolyte")?;
+        let (context, durable_branding_state) = {
+            let growth = self.growth.lock().await;
+            (growth.context(acolyte), growth.branding_state(acolyte))
+        };
+        let (branding_state, should_offer) = match durable_branding_state {
+            Some(DurableBrandingState::Declined) => ("declined", false),
+            Some(DurableBrandingState::Branded) => ("branded", false),
+            Some(DurableBrandingState::Inactive) => ("branding_expired", false),
+            Some(DurableBrandingState::Ineligible) => ("branding_ineligible", false),
+            None => self.runtime.lock().await.state_for(inbox_id, acolyte, unix_seconds()?),
+        };
+        Ok((context, branding_state.to_owned(), should_offer))
+    }
+
+    async fn referral_link(&self, authenticated_sender_address: &str) -> Result<Option<String>> {
+        let address = parse_nonzero_address(authenticated_sender_address, "authenticated acolyte")?;
+        let now = unix_seconds()?;
+        let mut growth = self.growth.lock().await;
+        let context = growth.context(address);
+        if !context.is_acolyte {
+            return Ok(None);
+        }
+        growth.note_referral_link_sent(now)?;
+        Ok(context.shareable_referral_url)
+    }
+
+    async fn register_operator(
+        &self,
+        inbox_id: &str,
+        authenticated_sender_address: &str,
+    ) -> Result<()> {
+        self.growth.lock().await.register_operator(
+            inbox_id,
+            authenticated_sender_address,
+            unix_seconds()?,
+        )?;
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    async fn operator_growth_status(
+        &self,
+        authenticated_sender_address: &str,
+    ) -> Result<String> {
+        let address = parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
+        let branded = self.growth.lock().await.branded_count();
+        self.growth
+            .lock()
+            .await
+            .operator_status(address, branded, unix_seconds()?)
+    }
+
+    async fn operator_growth_facts(
+        &self,
+        authenticated_sender_address: &str,
+    ) -> Result<String> {
+        let address = parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
+        let branded = self.growth.lock().await.branded_count();
+        Ok(self
+            .growth
+            .lock()
+            .await
+            .operator_runtime_facts(address, branded, unix_seconds()?))
     }
 }
 
@@ -2147,7 +2502,7 @@ fn receipt_text(action: &BrandingAction) -> String {
     let inspection = action.inspection.as_ref().expect("receipt has inspection");
     let receipt = action.receipt.as_ref().expect("receipt is present");
     format!(
-        "the Branding mint and canonical Acolyte Name are verified on Base, uwu.\n[[cthuwu:branding-receipt:v2;offer={};contract={};token={};agent={};acolyte={};owner={};referrer={};price={};nonce={};block={};blockHash={};name={}]]",
+        "the Branding mint and canonical Acolyte Name are verified on Base—congrats, branded acolyte! ur ‘invite an acolyte’ action now makes it easy to share ur own referral link when it feels natural, uwu.\n[[cthuwu:branding-receipt:v2;offer={};contract={};token={};agent={};acolyte={};owner={};referrer={};price={};nonce={};block={};blockHash={};name={}]]",
         action.offer_id,
         BRANDING_CONTRACT,
         receipt.token_id,
@@ -2986,6 +3341,7 @@ mod tests {
             first_week_upkeep: "1".to_owned(),
             acolyte_name: "forged".to_owned(),
             phase: BrandingPhase::Completed,
+            observed_branding_status: Some(HelperBrandingStatus::Active),
             inspection: Some(InspectionBinding {
                 consent_nonce: "0".to_owned(),
                 deadline: "2000".to_owned(),
@@ -3295,5 +3651,86 @@ mod tests {
         let first = runtime.select_due_fairly(2).unwrap().unwrap();
         let second = runtime.select_due_fairly(2).unwrap().unwrap();
         assert_eq!((first, second), (0, 1));
+    }
+
+    #[test]
+    fn explicit_decline_and_success_both_stop_branding_followups() {
+        struct NeverGateway;
+        #[async_trait]
+        impl Erc8004Gateway for NeverGateway {
+            async fn invoke(
+                &self,
+                _action_id: &str,
+                _operation: serde_json::Value,
+            ) -> Result<serde_json::Value> {
+                bail!("unused")
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let minter = address("0x1111111111111111111111111111111111111111");
+        let store = BrandingStore::new(root.path()).unwrap();
+        let state = store.load_or_create(minter, 1).unwrap();
+        let mut runtime = BrandingRuntime {
+            store,
+            state,
+            minter,
+            gateway: Arc::new(NeverGateway),
+        };
+        let quote = quote_initial_branding(U256::from_u64(1_000), 1_000).unwrap();
+        let declined_inbox = "a".repeat(64);
+        let declined_acolyte =
+            address("0x0000000000000000000000000000000000000001");
+        runtime
+            .enqueue_offer(
+                &declined_inbox,
+                declined_acolyte,
+                "7",
+                minter,
+                quote,
+                2,
+            )
+            .unwrap();
+        let offer_id = runtime.state.actions[0].offer_id.clone();
+        runtime
+            .decline(&declined_inbox, declined_acolyte, &offer_id, 3)
+            .unwrap();
+        assert_eq!(
+            runtime.state_for(
+                &declined_inbox,
+                declined_acolyte,
+                3 + 10 * BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
+            ),
+            ("declined", false)
+        );
+
+        let branded_inbox = "b".repeat(64);
+        let branded_acolyte =
+            address("0x0000000000000000000000000000000000000002");
+        runtime
+            .enqueue_offer(
+                &branded_inbox,
+                branded_acolyte,
+                "7",
+                minter,
+                quote,
+                4,
+            )
+            .unwrap();
+        let latest = runtime.state.actions.len() - 1;
+        runtime.state.actions[latest].phase = BrandingPhase::Completed;
+        runtime.state.actions[latest].observed_branding_status =
+            Some(HelperBrandingStatus::Active);
+        assert_eq!(
+            runtime.state_for(
+                &branded_inbox,
+                branded_acolyte,
+                4 + 10 * BRANDING_FOLLOWUP_COOLDOWN_SECONDS,
+            ),
+            ("branded", false)
+        );
+        assert_eq!(
+            runtime.durable_branding_updates().unwrap()[0].2,
+            DurableBrandingState::Branded
+        );
     }
 }

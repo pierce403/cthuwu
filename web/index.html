@@ -98,6 +98,9 @@
             <button id="branding-review" class="activity-action" type="button" hidden>
               review Branding offer
             </button>
+            <button id="branding-start" class="activity-action branding-start" type="button" hidden>
+              complete Acolyte Branding
+            </button>
           </section>
           <div class="trust-row" aria-label="Connection privacy">
             <span class="trust-chip">
@@ -119,8 +122,8 @@
             </svg>
             <span>pause motion</span>
           </button>
-          <button id="copy-referral" class="motion-toggle" type="button" disabled>
-            copy referral link
+          <button id="copy-referral" class="motion-toggle invite-action" type="button" disabled>
+            invite an acolyte
           </button>
           <p id="referral-status" class="referral-status" role="status" aria-live="polite"></p>
           <nav class="site-nav" aria-label="Explore Cthuwu">
@@ -259,9 +262,9 @@
           </dl>
         </details>
         <p id="branding-status" class="branding-disclosure" role="status" aria-live="polite">Review the exact offer before signing.</p>
-        <p class="branding-disclosure">The first button verifies canonical Base state. A separate EIP-712 wallet signature then consents only to the displayed mint fields; neither step shares a private key.</p>
+        <p class="branding-disclosure">The first button verifies canonical Base state. A separate EIP-712 wallet signature then consents only to the displayed mint fields; neither step shares a private key. Close this window to decide later. Declining stops future Branding reminders.</p>
         <div class="branding-actions">
-          <button id="branding-decline" type="button" value="decline">not now</button>
+          <button id="branding-decline" type="button" value="decline">decline · don’t ask again</button>
           <button id="branding-accept" type="button" value="accept">review exact consent</button>
         </div>
       </form>

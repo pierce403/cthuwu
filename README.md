@@ -33,8 +33,8 @@ The UWU launch choices, local ERC-20 observer, and post-launch activation steps 
 [docs/token.md](docs/token.md). The broader policy limits found during this phase are tracked in
 [docs/guardrail-audit.md](docs/guardrail-audit.md). Canonical Base ERC-8004 registration, voluntary
 Tentacle allegiance, the public leaderboard, and PWA/offline behavior are documented in
-[docs/erc-8004.md](docs/erc-8004.md). The consent, upkeep, sale, claim, deployment, and planned
-routing rules for Acolyte Branding are documented in
+[docs/erc-8004.md](docs/erc-8004.md). The consent, upkeep, sale, claim, deployment,
+growth/referral, and planned routing rules for Acolyte Branding are documented in
 [docs/acolyte-branding.md](docs/acolyte-branding.md). The three-channel trust, enrollment,
 retention, and sharding boundaries are documented in
 [docs/acolyte-channels.md](docs/acolyte-channels.md).
@@ -52,6 +52,7 @@ retention, and sharding boundaries are documented in
 | Public Tentacle leaderboard | **Implemented — Agent0 index + direct Base UWU reads**; restricted public Graph gateway key is checked-in client configuration |
 | Acolyte three-channel workspace | **In progress — fixed Direct/Acolytes/Global model with deterministic unit coverage**; no production Global or live interoperability claim |
 | Acolyte Branding | **In progress — verified Base deployment plus typed consent/mint/name reconciliation**; funded live wallet/XMTP and production group gates remain open |
+| Acolyte growth and referral bounty | **Implemented locally — durable first-touch attribution, proactive conversion UX, and one-time UWU payout recovery**; funded production payout remains a live gate |
 
 Council discovery and coordination are peer-to-peer goals, without a mandatory leader or central
 enrollment service. ERC-8004 allegiance is a voluntary Tentacle declaration, not Council enrollment
@@ -78,9 +79,11 @@ Evolution state is per Tentacle. Its local HMAC tags are integrity checks under 
 symmetric key, not public signatures. Final `Death` immediately gates conversations, queues
 absorption, and starts a 24-hour shutdown grace period; final `PropagationRights` plus stake may
 auto-spawn when `Nature.growth > 70`. External effects require receipt-producing executors.
-No production provisioner, signer, authenticated revenue source, payout/application executor,
+No production provisioner, generic revenue-source payout/application executor,
 persisted ballot adapter, Council transport, Hermes transport, or automatic skill installer is
 committed, so local intents and core records must not be described as completed external actions.
+The restricted ERC-8004/Branding signer does implement the separately bounded, configured UWU
+onboarding-referral bounty; it is not a general transfer or revenue-split interface.
 
 ## What works
 
@@ -103,6 +106,14 @@ committed, so local intents and core records must not be described as completed 
   readable uwu speech. It appends the first optional profile question only when
   that model reply did not already ask one; otherwise all profile prompts are deferred into the
   casual conversation cadence.
+- Growing the acolyte network is an ongoing, non-spammy Tentacle objective. The runtime durably pins
+  the first verified referrer, notices incomplete Branding, follows up without overriding a refusal,
+  gives established acolytes and operators exact shareable links, reports funnel statistics, and
+  queues one configured UWU bounty only after the referred contact completes canonical onboarding.
+  Browser handoff retries an unacknowledged referral proposal across reconnects and trusts only the
+  authenticated Tentacle's terminal acknowledgement when reconciling the Branding referrer.
+  The reward survives restarts, uses the existing restricted signer/nonce journal, and remains
+  pending with an authenticated funding notice if UWU or Base ETH is short.
 - People use ordinary language to inspect, correct, pause, share, or delete their local contact note;
   public replies do not advertise command syntax.
 - Inbound message IDs are durably deduplicated; storage, model context, bridge concurrency, and message sizes are bounded.
@@ -489,7 +500,8 @@ authority. Revoke the Cthuwu role and the compromised XMTP installation immediat
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
 Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
-`/qmd`, `/provider`, `/model`, `/users`, and `/user` commands. Evolution adds `/nature`,
+`/qmd`, `/provider`, `/model`, `/users`, `/user`, and `/growth` commands. `/growth` returns the
+current conversion funnel, paid referral total, and exact operator recruitment link. Evolution adds `/nature`,
 `/adjust <trait> <value>`, `/lineage`, `/metrics`, `/judgment`, `/spawn [child-id]`,
 `/gossip-status`, `/share-skill <name>`, and `/request-skill <name>`. During awakening, the ritual's
 bare `ADJUST <trait> <delta>` is a relative change; after confirmation, `/adjust` sets an absolute
@@ -829,6 +841,8 @@ The three-channel configuration names are:
 | `VITE_CTHUWU_ASSIGNMENT_REFRESH_MS` | Browser assignment refresh; default `600000`, accepted range `60000`–`3600000`. |
 | `CTHUWU_RPC_ENDPOINT` | Tentacle Base RPC; credential-free HTTPS or loopback HTTP, default `https://mainnet.base.org`. |
 | `CTHUWU_BRANDING_CONTRACT` | Matching deployment used by a Tentacle to authorize joins and reconcile membership; defaults to the canonical Base address. |
+| `CTHUWU_REFERRAL_BOUNTY_BASE_UNITS` | Exact one-time successful-onboarding referral bounty; defaults to `1000000000000000000` UWU base units. |
+| `CTHUWU_PUBLIC_ORIGIN` | HTTPS origin used to construct canonical copyable recruitment links; defaults to `https://cthuwu.app`. |
 | `CTHUWU_GLOBAL_GROUP_ID` | Required exact pre-bootstrapped singleton production Global conversation ID for enrollment. |
 | `CTHUWU_GLOBAL_ADMIN_INBOX_IDS` | Comma-separated authorized Tentacle admin-inbox set, at most 32 including the always-added local inbox. |
 | `CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS` | Tentacle membership sweep; default `900`, accepted range `60`–`86400`. |
@@ -846,6 +860,8 @@ Example matching Tentacle inputs:
 ```dotenv
 CTHUWU_RPC_ENDPOINT=https://mainnet.base.org
 CTHUWU_BRANDING_CONTRACT=0xD8c36F13D79a505C7FBDc5F6467eA3cd75E896Da
+CTHUWU_REFERRAL_BOUNTY_BASE_UNITS=1000000000000000000
+CTHUWU_PUBLIC_ORIGIN=https://cthuwu.app
 CTHUWU_GLOBAL_GROUP_ID=<64-lowercase-hex-group-id>
 CTHUWU_GLOBAL_ADMIN_INBOX_IDS=<64-lowercase-hex-inbox-id>,<64-lowercase-hex-inbox-id>
 CTHUWU_ASSIGNMENT_REVALIDATE_SECONDS=900

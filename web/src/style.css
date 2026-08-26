@@ -464,6 +464,27 @@ h1 .uwu {
   color: var(--text);
 }
 
+.invite-action {
+  border-color: rgba(137, 255, 210, 0.52);
+  color: #eafff6;
+  background: linear-gradient(135deg, rgba(31, 113, 91, 0.72), rgba(86, 48, 132, 0.72));
+}
+
+.branding-start {
+  border-color: rgba(198, 158, 255, 0.72);
+  background: linear-gradient(135deg, rgba(104, 57, 158, 0.76), rgba(35, 111, 96, 0.64));
+  font-weight: 800;
+}
+
+@media (max-width: 720px) {
+  .invite-action,
+  .branding-start {
+    min-height: 2.75rem;
+    justify-content: center;
+    width: 100%;
+  }
+}
+
 .referral-status {
   min-height: 1em;
   margin: 0;
