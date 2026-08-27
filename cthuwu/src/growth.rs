@@ -1183,8 +1183,7 @@ impl GrowthRuntime {
         {
             self.state.records[index].last_funding_fingerprint = Some(fingerprint);
             self.state.records[index].last_funding_notice_unix = Some(now);
-            self.state.records[index].next_attempt_unix =
-                now.saturating_add(FUNDING_RETRY_SECONDS);
+            self.state.records[index].next_attempt_unix = now.saturating_add(FUNDING_RETRY_SECONDS);
         }
         self.persist(now)
     }
