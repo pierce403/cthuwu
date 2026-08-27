@@ -1177,16 +1177,14 @@ impl GrowthRuntime {
         }) else {
             return Ok(());
         };
-        if delivered {
-            let delivery = self.state.records[index].pending_delivery.take();
-            if let Some(delivery) = delivery {
-                if let Some(fingerprint) = delivery.funding_fingerprint {
-                    self.state.records[index].last_funding_fingerprint = Some(fingerprint);
-                    self.state.records[index].last_funding_notice_unix = Some(now);
-                    self.state.records[index].next_attempt_unix =
-                        now.saturating_add(FUNDING_RETRY_SECONDS);
-                }
-            }
+        if delivered
+            && let Some(delivery) = self.state.records[index].pending_delivery.take()
+            && let Some(fingerprint) = delivery.funding_fingerprint
+        {
+            self.state.records[index].last_funding_fingerprint = Some(fingerprint);
+            self.state.records[index].last_funding_notice_unix = Some(now);
+            self.state.records[index].next_attempt_unix =
+                now.saturating_add(FUNDING_RETRY_SECONDS);
         }
         self.persist(now)
     }

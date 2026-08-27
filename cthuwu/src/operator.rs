@@ -228,6 +228,7 @@ impl OperatorHarness {
         self
     }
 
+    #[cfg(test)]
     pub async fn respond(&self, operator_inbox_id: &str, text: &str) -> Result<String> {
         self.respond_with_runtime_facts(operator_inbox_id, text, "")
             .await
