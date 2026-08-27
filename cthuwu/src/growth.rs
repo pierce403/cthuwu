@@ -1962,9 +1962,27 @@ mod tests {
                 .handle_control(INBOX_A, Some(&address(4).to_string()), &first, 4)
                 .unwrap()
                 .unwrap()
-                .contains("same authenticated XMTP inbox")
+                .contains("already pinned to another authenticated acolyte wallet")
         );
         assert!(runtime.record(address(4)).is_none());
+        runtime
+            .register_operator(INBOX_C, &address(4).to_string(), 5)
+            .unwrap();
+        let operator_referral =
+            format!("[[cthuwu:referral-attribution:v1;referrer={}]]", address(4));
+        assert!(
+            runtime
+                .handle_control(
+                    INBOX_C,
+                    Some(&address(5).to_string()),
+                    &operator_referral,
+                    5,
+                )
+                .unwrap()
+                .unwrap()
+                .contains("same authenticated XMTP inbox")
+        );
+        assert!(runtime.record(address(5)).is_none());
         drop(runtime);
         let recovered = GrowthRuntime::open(
             root.path(),
