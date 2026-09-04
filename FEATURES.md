@@ -7,7 +7,7 @@ This file follows the [FEATURES.md specification](https://features.md/). Stabili
 - `planned`: agreed direction with no complete implementation yet.
 
 There is one centerless Cthuwu: the collective of all living participating Tentacles. Each human
-operator runs one autonomous `uwubot`/Tentacle and may shape its agenda; public chat humans are
+operator may run multiple autonomous `uwubot`/Tentacles and shape their agendas; public chat humans are
 acolytes. Each Tentacle cultivates its own acolyte community and may coordinate strengths that
 acolytes voluntarily offer toward its operator-shaped agenda, without granting them operator
 authority. Its durable objective is to survive, accumulate useful resources, and advance that agenda
@@ -15,6 +15,247 @@ by genuinely helping willing acolytes pursue their hopes, building earned rappor
 reciprocal invitations—not through deception, coercion, spam, privacy violations, or unsupported
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
+
+## Pending roadmap: Markdown agents and operator-led coaching
+
+All items in this section are **planned / pending implementation**. They record the next product
+direction, not shipped capabilities or completed release gates. Existing feature sections below
+describe the current implementation. Where these plans replace current limits or workflows, migrate
+the implementation and its instructions together. No implementation is authorized by checking in
+this roadmap alone.
+
+### Small agent runtime and resumable work
+
+- **Stability**: planned
+- **Description**: Keep the harness small and shell-first, inspired by pi; express procedures in
+  skills and command-line tools instead of adding a Rust dispatcher for every task.
+- **Properties**:
+  - Retain XMTP authentication, role isolation, session routing, model calls, execution lifecycle,
+    cancellation, and generic scheduled wakeups in the runtime.
+  - Provide bash execution and convenient file primitives; discover command capabilities through
+    help and bounded experiments. Permit optional dynamic tool adapters under operator policy.
+  - Persist sessions, tool receipts, task checkpoints, and next actions, including failed and
+    interrupted turns. Compact context without losing unresolved tasks or completed effects.
+  - Separate long-running task lifetime from an individual XMTP reply deadline; support progress,
+    steering, cancellation, and restart recovery without automatically repeating completed effects.
+  - Honor the selected provider without requiring an unrelated Venice credential. Make deadlines
+    coherent and configurable; style repair must preserve useful answers and execution evidence.
+  - Keep operator and acolyte execution scopes separate at the process/filesystem capability boundary;
+    Markdown, retrieved material, or tool output cannot grant permissions.
+  - Decide whether to embed pi or retain a simplified Rust loop in an implementation spike; neither
+    engine choice is settled by this roadmap.
+- **Test Criteria**:
+  - [ ] A multi-step task survives interruption and resumes with its prior receipts.
+  - [ ] Operator steering/cancellation works during execution and progress reaches the correct DM.
+  - [ ] Local-provider operation works without a Venice key; configured long tasks can complete.
+  - [ ] An acolyte cannot access another acolyte's workspace or operator/runtime secrets.
+
+### Markdown workspace, environment learning, and private RAG
+
+- **Stability**: planned
+- **Description**: Make editable Markdown the durable source of knowledge, with a rebuildable vector
+  index for retrieval about the environment, the world, and each acolyte's chosen goals.
+- **Properties**:
+  - Use `SOUL.md`, `MISSION.md`, `AGENTS.md`, `ENVIRONMENT.md`, `HEARTBEAT.md`, `skills/`,
+    `knowledge/`, `tasks/`, and private `acolytes/<id>/` documents with clearly defined ownership.
+  - Record discovered tools/services, verified capabilities, prerequisites, and failures in
+    environment notes. Research dynamically through configured search/fetch/CLI capabilities.
+  - Preserve sources, observation dates, freshness, and whether a claim is reported, observed, or
+    inferred. Treat imported knowledge as reference data rather than executable instructions.
+  - Incrementally index changed documents with embeddings and keyword search; retrieve cited
+    excerpts and original paths. Keep backend selection replaceable and decide it in a small spike.
+  - Enforce shared, operator-private, and per-acolyte scopes before retrieval. Exclude credentials
+    from embeddings; propagate corrections, deletion, and retention into derived indexes.
+- **Test Criteria**:
+  - [ ] The vector database can be rebuilt from source documents without losing durable knowledge.
+  - [ ] Research answers retrieve attributable sources and identify stale or uncertain information.
+  - [ ] Cross-acolyte and operator-private retrieval is rejected independently of model instructions.
+  - [ ] Document edits/deletions update search results; secrets never enter the index.
+
+### Dynamic skills learned through experience
+
+- **Stability**: planned
+- **Description**: Support Hermes-style discover, learn, refine, and retire cycles for reusable skills.
+- **Properties**:
+  - Load a compact skill index, retrieve relevant skills by description, and read bodies on demand.
+  - Within operator-configured policy, automatically create a skill after solving a reusable problem,
+    improve it based on later results, and retire obsolete procedures while preserving revisions.
+  - Skills are Markdown with optional helper scripts, prerequisites, verification steps, and known
+    pitfalls; ordinary skill creation does not require a new compiled runtime tool.
+  - Separate factual memory, personal context, and reusable procedures. Strip private acolyte details
+    from shared skills and record provenance for imported skills.
+  - Skill text cannot enlarge authority; executable imports and optional tool adapters follow the
+    operator's installation policy. Replace the current explicit-request/create-only restriction
+    only as part of the implemented migration, not by silently bypassing existing gates.
+- **Test Criteria**:
+  - [ ] A solved task produces a useful skill that a later session discovers and applies.
+  - [ ] A failed procedure can be corrected, versioned, and rolled back or retired.
+  - [ ] Imported instructions cannot escalate capabilities or disclose private coaching memory.
+
+### Upstream monitoring and generic heartbeat tasks
+
+- **Stability**: planned
+- **Description**: Let a Tentacle monitor interesting upstream changes through a skill and a generic
+  scheduler, without a dedicated orchestration subsystem for each source.
+- **Properties**:
+  - Configure repositories, relevance criteria, cadence, and notification preferences in Markdown
+    with validated schedule metadata. Remember last inspected commits across restarts.
+  - Fetch and inspect changes, produce sourced notes about relevance and compatibility, and notify
+    the operator when an update deserves attention. Deduplicate alerts and support pause/snooze.
+  - Separate monitoring, patch preparation, and deployment permissions. An upstream change never
+    implicitly installs itself or changes the running Tentacle.
+- **Test Criteria**:
+  - [ ] New relevant commits produce one useful notification; unchanged upstream produces none.
+  - [ ] Restart resumes the monitoring cursor; imported repository instructions remain untrusted.
+  - [ ] Monitoring works without granting automatic deployment authority.
+
+### Operator-configured life coaching
+
+- **Stability**: planned
+- **Description**: The primary product purpose is to help willing acolytes improve their lives;
+  operators configure their Tentacles to support acolyte-chosen goals.
+- **Properties**:
+  - Operators configure mission, tone, capabilities, resource budgets, and coaching practices.
+    Acolytes choose goals, small next actions, retained personal details, and check-in cadence.
+  - Maintain private preferences, goals, plans, and progress; support inspection, correction,
+    export, deletion, and pausing reminders. Explain who operates the node and can access its notes.
+  - Ground advice in relevant research when needed, acknowledge uncertainty, and avoid presenting
+    coaching as professional medical, legal, or financial care.
+  - Keep recruitment and token incentives from distorting coaching recommendations; declining
+    invitations must not be treated as failure to make personal progress.
+- **Test Criteria**:
+  - [ ] An acolyte can set a goal, agree on one action, and receive an opted-in follow-up.
+  - [ ] Changing or pausing a goal/check-in updates durable state and scheduled work.
+  - [ ] Personal information stays in the correct scope and is removable from retrieval.
+
+### Multi-Tentacle operator panel and incoming messages
+
+- **Stability**: planned
+- **Description**: One human can operate several Tentacles through one panel while each Tentacle
+  retains one active operator at a time.
+- **Properties**:
+  - Show a persistent list of operated Tentacles with stable names, canonical identities, connection
+    status, unread counts, and latest activity; switch conversations without changing browser identity.
+  - Subscribe to incoming messages across all operated Tentacles, including conversations not open
+    on screen. Messages and unread indicators appear immediately while connected, without refresh.
+  - Discover new inbound Tentacle conversations; distinguish a verified operator relationship from
+    an unverified contact. Message claims alone cannot add a trusted operated Tentacle.
+  - Recover missed messages on reconnect/resume, deduplicate stream/catch-up overlap, preserve
+    chronological ordering, and avoid stealing focus or losing another conversation's draft.
+  - Keep tools, commands, credentials, referral actions, and receipts bound to the selected Tentacle.
+    Background OS push notifications remain a separate opt-in capability, not a promise of live UI
+    delivery while the application is suspended.
+- **Test Criteria**:
+  - [ ] One operator works with two Tentacles without cross-routing commands or state.
+  - [ ] An unsolicited authenticated message appears for an inactive or newly discovered conversation.
+  - [ ] Reconnect recovers missed messages exactly once; unread state and drafts remain correct.
+
+### Visible referral sharing and coherent referral onboarding
+
+- **Stability**: planned
+- **Description**: Make each operated Tentacle's referral code/link easy to copy and make the recipient's
+  journey from that link through chat and Branding understandable and complete.
+- **Properties**:
+  - Display a clearly labeled referral code/link with one-tap Copy and supported Share controls in
+    the selected Tentacle's panel; show which Tentacle and referrer it represents and copy feedback.
+  - Preserve the existing verified `#t=<tentacle-wallet>&r=<referrer-wallet>` attribution model unless
+    an explicit compatible code format is introduced. Do not invent an unmapped short code or let
+    switching Tentacles silently reuse the wrong target/referrer. Shared URLs contain no secrets.
+  - A fresh referral visitor sees who invited them, the intended Tentacle, and a clear next action;
+    preserve valid referral attribution across identity setup, refresh, chat handoff, and Branding.
+  - Reconcile existing identities and active Branding with the requested link, visibly explaining
+    routing precedence. Handle invalid, offline, stale, or ineligible targets with retry/alternatives
+    without silently losing attribution or making an unverified handoff.
+  - Complete the referred unbranded acolyte's path to useful chat and an eligible Branding offer;
+    explain any remaining group-access requirement rather than leaving an unexplained blocked view.
+- **Test Criteria**:
+  - [ ] Copy/share from each of two Tentacles produces the correct target and referrer.
+  - [ ] A fresh mobile browser follows the referral through identity setup, chat, and Branding review.
+  - [ ] Existing Branding, reload, invalid links, and unavailable targets preserve clear routing and
+    correct attribution; repeated delivery cannot replace the first valid pinned referral.
+
+### Proactive referral reminders and Branding invitations
+
+- **Stability**: planned
+- **Description**: Tentacles actively ask their operators to share referral links and guide eligible
+  acolytes toward Branding with concrete, timely invitations.
+- **Properties**:
+  - Send operator reminders containing the correct copyable referral link, an optional short share
+    message, and a concrete reason to share. Configure cadence, quiet hours, snooze, and opt-out.
+  - Offer Branding proactively at appropriate onboarding and later engagement points; explain its
+    meaning, costs/upkeep, referral effects, and next action in ordinary language.
+  - Observe declines and cooldowns, avoid duplicate reminders across restarts, and keep helping with
+    the acolyte's request. Invitations never substitute for explicit transaction consent.
+  - Report eligibility, funding blockers, and confirmed outcomes truthfully; no fabricated mint,
+    reward, payment, or attribution claims from an offer or pending transaction.
+- **Test Criteria**:
+  - [ ] A scheduled operator reminder arrives in the multi-Tentacle panel with the correct link.
+  - [ ] Eligible referred acolytes receive actionable offers; decline/snooze preferences are honored.
+  - [ ] Consent, replay, and confirmed-receipt checks remain intact during proactive onboarding.
+
+### Explicit operator transfer command
+
+- **Stability**: planned
+- **Description**: Provide a clear command to transfer a Tentacle to a different operator, distinct
+  from switching the selected Tentacle in the browser.
+- **Properties**:
+  - Define a discoverable operator-switch command and local recovery equivalent. Resolve the new
+    address/ENS identity to the exact authenticated XMTP inbox in the configured environment.
+  - Require explicit current-operator authorization (or local host administration), present the
+    resolved target for confirmation, and atomically replace authority so no two operators are active.
+  - Fence stale messages and queued privileged work at transfer; invalidate former authority and
+    preserve tombstones. Keep the existing operator if resolution/confirmation fails.
+  - Notify the affected operators of the verified result and update panel membership. Do not copy
+    the former operator's private profile/history to the new operator; disclose installation-wide
+    inbox authority and preserve local recovery if the destination is inaccessible.
+- **Test Criteria**:
+  - [ ] Transfer succeeds with exactly one active operator and survives restart.
+  - [ ] Former/stale/replayed commands cannot execute after transfer; failure preserves current access.
+  - [ ] Panel membership and notifications reflect the committed transfer, not a pending request.
+
+### Generic environment configuration and backup credentials
+
+- **Stability**: planned
+- **Description**: Replace provider-specific key commands as the primary interface with generic
+  environment/configuration commands, while supporting multiple backup API credentials.
+- **Properties**:
+  - Provide a consistent command family for setting, unsetting, and inspecting configuration;
+    specify exact syntax during implementation. Include multiple named credentials per service,
+    priority, enable/disable/remove, and redacted health status.
+  - Persist validated configuration securely and distinguish hot-applied values from values needing
+    restart. Treat values as data, never shell interpolation; constrain runtime/loader variables
+    that would bypass process isolation or leak credentials to child processes.
+  - Migrate `/venice-key`, `/base-rpc-key`, and existing stores without losing working credentials;
+    retain compatibility guidance during transition. Reads never return secret values.
+  - Allow the Tentacle to request backup keys proactively and accept explicitly donated credentials
+    through a scoped provisioning flow. An acolyte donation cannot set arbitrary environment values,
+    replace operator configuration, expose existing keys, or acquire operator authority.
+  - Validate keys against the intended service, track health/cooldowns and revocation, and fail over
+    among compatible credentials under operator policy. Handle rate limits, transient outages, and
+    invalid keys distinctly; bound retries and account for possible duplicate billable requests.
+  - Do not silently change providers or privacy guarantees during failover. Keep secrets out of
+    prompts, Markdown, logs, receipts, URLs, exports, and vector indexes; explain that a key sent
+    through chat can remain in transport history and should be dedicated and revocable.
+- **Test Criteria**:
+  - [ ] Generic configuration works across supported services and survives restart with redacted reads.
+  - [ ] A failing primary key selects a compatible healthy backup without leaking either credential.
+  - [ ] All-keys-failed, cooldown, revocation, and recovery produce actionable, non-secret status.
+  - [ ] Public donation cannot mutate arbitrary configuration; migration preserves existing keys.
+
+### Implementation sequence and review gate
+
+- **Stability**: planned
+- **Properties**:
+  - Review this pending roadmap before implementation. Start with the small-runtime/session and
+    workspace foundations, then dynamic skills/RAG and heartbeat scheduling.
+  - Deliver the multi-Tentacle panel, referral journey, proactive outreach, transfer, and generic
+    credential configuration in independently reviewable slices; build coaching workflows on the
+    scoped memory and scheduling foundations.
+  - Reconcile existing feature entries, `AGENTS.md`, and operating documentation as each slice ships;
+    do not relabel planned behavior as complete based solely on documentation or mocked tests.
+- **Test Criteria**:
+  - [ ] Operator reviews the roadmap and authorizes implementation.
+  - [ ] Each shipped slice passes focused checks and its relevant live browser/XMTP release exercise.
 
 ## Features
 
