@@ -9,7 +9,7 @@ use std::{fs, io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
 pub const BASE_RPC_HELP: &str = "Infura is preferred because it offers a free plan: open https://app.infura.io/, sign in or create an account, create an API key with Base enabled, copy its API key, then send `/base-rpc-key <infura-api-key>`. u may also paste a full Base Mainnet HTTPS RPC endpoint. i'll validate chain 8453 before keeping it. the command remains in your XMTP history, so restrict the key to Base and this Tentacle when the provider allows it.";
-pub const VENICE_KEY_HELP: &str = "open https://venice.ai/settings/api, generate an Inference-Only API key (with spending/expiry limits if desired), then send `/venice-key <api-key>` here. i'll store it owner-only and never echo it. (the command remains in your XMTP history)";
+pub const VENICE_KEY_HELP: &str = "open https://venice.ai/settings/api, generate an Inference-Only API key (with spending/expiry limits if desired), then send `/env donate VENICE_API_KEY <api-key>` here. The legacy `/venice-key <api-key>` first-key flow is also supported. i'll store it owner-only and never echo it. (the command remains in your XMTP history)";
 
 const MAX_ENDPOINT_BYTES: u64 = 4 * 1024;
 const INFURA_KEY_BYTES: usize = 32;
@@ -25,6 +25,9 @@ pub trait BaseRpcControl: Send + Sync {
     fn configured(&self) -> Result<bool>;
     fn endpoint_handle(&self) -> RpcEndpointHandle;
     async fn provision(&self, candidate: &str, allow_replace: bool) -> Result<RpcProvisionReply>;
+    fn clear(&self) -> Result<String> {
+        bail!("RPC reset is unavailable in this runtime")
+    }
 }
 
 pub struct BaseRpcStore {
@@ -70,6 +73,14 @@ impl BaseRpcStore {
 
 #[async_trait]
 impl BaseRpcControl for BaseRpcStore {
+    fn clear(&self) -> Result<String> {
+        let fallback = "https://mainnet.base.org";
+        self.save(fallback)?;
+        self.endpoint
+            .replace(fallback)
+            .map_err(anyhow::Error::new)?;
+        Ok("Custom Base RPC credential removed. The public Base endpoint is now selected; its availability will be checked on use.".into())
+    }
     fn configured(&self) -> Result<bool> {
         Ok(load_endpoint(&self.path)?.is_some())
     }

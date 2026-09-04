@@ -34,3 +34,7 @@ contacts/
 /contracts/snapshots/
 /contracts/.gas-snapshot
 /contracts/lcov.info
+
+__pycache__/
+*.pyc
+.knowledge-index/

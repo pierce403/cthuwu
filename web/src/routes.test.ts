@@ -47,10 +47,10 @@ describe("public directory routes", () => {
     expect(document.querySelector("#messages")?.getAttribute("role")).toBe("log");
     expect(document.querySelector('[role="tablist"]')?.textContent).toContain("Direct operator DM");
     expect(document.querySelector("#operator-title")?.parentElement?.textContent).toContain(
-      "cannot grant a role",
+      "checks your operator access",
     );
-    expect(document.body.textContent).toContain("Remote-code-execution boundary");
-    expect(document.body.textContent).toContain("same Acolyte EOA and XMTP inbox");
+    expect(document.body.textContent).toContain("run commands as the OS account");
+    expect(document.body.textContent).toContain("uses the same identity");
     expect(document.body.textContent).toContain("only the public EOA");
     expect(document.querySelector("#operator-launch-command")).not.toBeNull();
     expect(document.querySelector("details.operator-troubleshooting")?.hasAttribute("open")).toBe(false);

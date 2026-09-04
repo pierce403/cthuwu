@@ -16,17 +16,27 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
-## Pending roadmap: Markdown agents and operator-led coaching
+## Markdown agents and operator-led coaching
 
-All items in this section are **planned / pending implementation**. They record the next product
-direction, not shipped capabilities or completed release gates. Existing feature sections below
-describe the current implementation. Where these plans replace current limits or workflows, migrate
-the implementation and its instructions together. No implementation is authorized by checking in
-this roadmap alone.
+Implementation was authorized by the operator and is now **in progress / pending live release
+verification**. The implemented scope and commands are in [docs/agent-workspace.md](docs/agent-workspace.md).
+Checked criteria below name local verification; unchecked end-to-end criteria remain open.
+
+| Slice | Implemented scope | Remaining boundary |
+|---|---|---|
+| Agent runtime | Existing Rust loop retained; iterative Bash, private session receipts, interruptible persistent jobs | Fixed 24-call / 15-minute job bounds; live progress and restart exercise |
+| Markdown and retrieval | Seeded mission/environment/heartbeat; SQLite vectors + FTS5 with local Ollama embeddings | Exact vector scan for small corpora; actual embedding-model quality exercise |
+| Dynamic skills | On-demand bodies, CLI create/refine/archive/retire lifecycle | No automatic remote skill/plugin installation |
+| Upstreams | Generic scheduler, fetched-head cursor, sourced commit notes, no-update suppression | Relevance is interpreted by the agent; no automatic deployments |
+| Coaching | Explicit private goals, update/view/delete, daily/weekly opt-in check-ins | Personal notes use exact inbox lookup; private semantic indexing remains pending |
+| Operator panel | One all-DM client, saved names, per-thread drafts/unreads, reconnect catch-up | Contacts are not an authority badge; live two-Tentacle exercise pending |
+| Referrals and Branding | Selected-target Copy/Share handshake, referral welcome, configurable reminders, earlier offers | Funded mobile Branding/onboarding exercise pending |
+| Transfer | Confirmed hot transfer, local recovery, epoch fencing, best-effort welcome | Delivery/relationship presentation needs the live two-inbox exercise |
+| Environment | Redacted generic controls, compatible credential pools, donation and failure cooldowns | RPC has one endpoint; other model keys validate on use |
 
 ### Small agent runtime and resumable work
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Keep the harness small and shell-first, inspired by pi; express procedures in
   skills and command-line tools instead of adding a Rust dispatcher for every task.
 - **Properties**:
@@ -42,17 +52,20 @@ this roadmap alone.
     coherent and configurable; style repair must preserve useful answers and execution evidence.
   - Keep operator and acolyte execution scopes separate at the process/filesystem capability boundary;
     Markdown, retrieved material, or tool output cannot grant permissions.
-  - Decide whether to embed pi or retain a simplified Rust loop in an implementation spike; neither
-    engine choice is settled by this roadmap.
+  - Retain the existing Rust loop to preserve the authenticated lane, signer, and transport boundaries;
+    add a stdlib workspace CLI rather than embedding another harness.
 - **Test Criteria**:
-  - [ ] A multi-step task survives interruption and resumes with its prior receipts.
+  - [x] Local tests preserve interrupted tool receipts across harness reconstruction; task resume/steer
+    and restart-pause state remain bound to the authorizing operator epoch.
   - [ ] Operator steering/cancellation works during execution and progress reaches the correct DM.
-  - [ ] Local-provider operation works without a Venice key; configured long tasks can complete.
+  - [x] Public/operator selected-model tests no longer require an unrelated Venice key; deterministic
+    model fallback and partial work do not mark background tasks complete.
+  - [ ] A configured long-running task completes through live XMTP and a process restart.
   - [ ] An acolyte cannot access another acolyte's workspace or operator/runtime secrets.
 
 ### Markdown workspace, environment learning, and private RAG
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Make editable Markdown the durable source of knowledge, with a rebuildable vector
   index for retrieval about the environment, the world, and each acolyte's chosen goals.
 - **Properties**:
@@ -67,14 +80,15 @@ this roadmap alone.
   - Enforce shared, operator-private, and per-acolyte scopes before retrieval. Exclude credentials
     from embeddings; propagate corrections, deletion, and retention into derived indexes.
 - **Test Criteria**:
-  - [ ] The vector database can be rebuilt from source documents without losing durable knowledge.
+  - [x] A local CLI test deletes and rebuilds the vector database from Markdown and checks equivalent retrieval.
   - [ ] Research answers retrieve attributable sources and identify stale or uncertain information.
   - [ ] Cross-acolyte and operator-private retrieval is rejected independently of model instructions.
-  - [ ] Document edits/deletions update search results; secrets never enter the index.
+  - [x] Local CLI tests cover changed/deleted sources, excluded private roots and symlinks, hybrid
+    ranking with fixture embeddings, and retired skills. Secrets must never be put in shared sources.
 
 ### Dynamic skills learned through experience
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Support Hermes-style discover, learn, refine, and retire cycles for reusable skills.
 - **Properties**:
   - Load a compact skill index, retrieve relevant skills by description, and read bodies on demand.
@@ -89,12 +103,13 @@ this roadmap alone.
     only as part of the implemented migration, not by silently bypassing existing gates.
 - **Test Criteria**:
   - [ ] A solved task produces a useful skill that a later session discovers and applies.
-  - [ ] A failed procedure can be corrected, versioned, and rolled back or retired.
+  - [x] Local CLI tests cover skill refinement, archived revisions, retirement, and non-overwriting init.
+    Reviewed archived instructions can be restored through the CLI or workspace file tools.
   - [ ] Imported instructions cannot escalate capabilities or disclose private coaching memory.
 
 ### Upstream monitoring and generic heartbeat tasks
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Let a Tentacle monitor interesting upstream changes through a skill and a generic
   scheduler, without a dedicated orchestration subsystem for each source.
 - **Properties**:
@@ -106,12 +121,13 @@ this roadmap alone.
     implicitly installs itself or changes the running Tentacle.
 - **Test Criteria**:
   - [ ] New relevant commits produce one useful notification; unchanged upstream produces none.
-  - [ ] Restart resumes the monitoring cursor; imported repository instructions remain untrusted.
+  - [x] A CLI fixture verifies persisted upstream-head deduplication and sourced notes without checkout,
+    merge, pull, or reset. Live scheduled notification delivery remains a release gate.
   - [ ] Monitoring works without granting automatic deployment authority.
 
 ### Operator-configured life coaching
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: The primary product purpose is to help willing acolytes improve their lives;
   operators configure their Tentacles to support acolyte-chosen goals.
 - **Properties**:
@@ -125,12 +141,14 @@ this roadmap alone.
     invitations must not be treated as failure to make personal progress.
 - **Test Criteria**:
   - [ ] An acolyte can set a goal, agree on one action, and receive an opted-in follow-up.
-  - [ ] Changing or pausing a goal/check-in updates durable state and scheduled work.
-  - [ ] Personal information stays in the correct scope and is removable from retrieval.
+  - [x] Local tests cover explicit goal retention/deletion and opt-in preferences; local controls are
+    dispatched before provider/funding gates.
+  - [x] Goal context is selected by the authenticated inbox and deletion removes it from that context;
+    private notes are outside the shared semantic corpus.
 
 ### Multi-Tentacle operator panel and incoming messages
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: One human can operate several Tentacles through one panel while each Tentacle
   retains one active operator at a time.
 - **Properties**:
@@ -146,13 +164,15 @@ this roadmap alone.
     Background OS push notifications remain a separate opt-in capability, not a promise of live UI
     delivery while the application is suspended.
 - **Test Criteria**:
-  - [ ] One operator works with two Tentacles without cross-routing commands or state.
-  - [ ] An unsolicited authenticated message appears for an inactive or newly discovered conversation.
-  - [ ] Reconnect recovers missed messages exactly once; unread state and drafts remain correct.
+  - [x] Unit tests route commands, drafts, unread state, and duplicate messages across two peer DMs.
+  - [ ] One operator works with two production Tentacles through a disconnect/reconnect.
+  - [x] Unit tests discover unsolicited peer DMs and reject mismatched peer bindings without granting authority.
+  - [x] A transport fixture tests stream/catch-up overlap, automatic reconnect, unread deduplication,
+    and preservation of another conversation’s draft. Live background/suspended delivery remains unverified.
 
 ### Visible referral sharing and coherent referral onboarding
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Make each operated Tentacle's referral code/link easy to copy and make the recipient's
   journey from that link through chat and Branding understandable and complete.
 - **Properties**:
@@ -169,14 +189,15 @@ this roadmap alone.
   - Complete the referred unbranded acolyte's path to useful chat and an eligible Branding offer;
     explain any remaining group-access requirement rather than leaving an unexplained blocked view.
 - **Test Criteria**:
-  - [ ] Copy/share from each of two Tentacles produces the correct target and referrer.
+  - [x] UI/transport tests bind copied links to the selected Tentacle and require a fresh authenticated
+    operator referral acknowledgement.
   - [ ] A fresh mobile browser follows the referral through identity setup, chat, and Branding review.
   - [ ] Existing Branding, reload, invalid links, and unavailable targets preserve clear routing and
     correct attribution; repeated delivery cannot replace the first valid pinned referral.
 
 ### Proactive referral reminders and Branding invitations
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Tentacles actively ask their operators to share referral links and guide eligible
   acolytes toward Branding with concrete, timely invitations.
 - **Properties**:
@@ -195,7 +216,7 @@ this roadmap alone.
 
 ### Explicit operator transfer command
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Provide a clear command to transfer a Tentacle to a different operator, distinct
   from switching the selected Tentacle in the browser.
 - **Properties**:
@@ -209,13 +230,14 @@ this roadmap alone.
     the former operator's private profile/history to the new operator; disclose installation-wide
     inbox authority and preserve local recovery if the destination is inaccessible.
 - **Test Criteria**:
-  - [ ] Transfer succeeds with exactly one active operator and survives restart.
-  - [ ] Former/stale/replayed commands cannot execute after transfer; failure preserves current access.
+  - [x] Local ACL tests atomically replace the sole operator and preserve the committed transfer on reload.
+  - [x] Local ACL tests fence former/stale authority and preserve the current operator on an invalid target;
+    scheduled tasks are also bound to the original authorization epoch.
   - [ ] Panel membership and notifications reflect the committed transfer, not a pending request.
 
 ### Generic environment configuration and backup credentials
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Description**: Replace provider-specific key commands as the primary interface with generic
   environment/configuration commands, while supporting multiple backup API credentials.
 - **Properties**:
@@ -238,15 +260,17 @@ this roadmap alone.
     through chat can remain in transport history and should be dedicated and revocable.
 - **Test Criteria**:
   - [ ] Generic configuration works across supported services and survives restart with redacted reads.
-  - [ ] A failing primary key selects a compatible healthy backup without leaking either credential.
+  - [x] A local HTTP regression test rejects the primary key, succeeds with the same-endpoint backup,
+    and checks redacted status plus removal of the old route override.
   - [ ] All-keys-failed, cooldown, revocation, and recovery produce actionable, non-secret status.
-  - [ ] Public donation cannot mutate arbitrary configuration; migration preserves existing keys.
+  - [x] Closed public donation parsing cannot set arbitrary environment values; local tests cover legacy
+    pool replacement rules and alias normalization without changing credential bytes.
 
 ### Implementation sequence and review gate
 
-- **Stability**: planned
+- **Stability**: in-progress
 - **Properties**:
-  - Review this pending roadmap before implementation. Start with the small-runtime/session and
+  - The operator reviewed this roadmap and authorized implementation and a direct push to main. Start with the small-runtime/session and
     workspace foundations, then dynamic skills/RAG and heartbeat scheduling.
   - Deliver the multi-Tentacle panel, referral journey, proactive outreach, transfer, and generic
     credential configuration in independently reviewable slices; build coaching workflows on the
@@ -254,7 +278,7 @@ this roadmap alone.
   - Reconcile existing feature entries, `AGENTS.md`, and operating documentation as each slice ships;
     do not relabel planned behavior as complete based solely on documentation or mocked tests.
 - **Test Criteria**:
-  - [ ] Operator reviews the roadmap and authorizes implementation.
+  - [x] Operator reviewed the roadmap and authorized implementation and publishing to main.
   - [ ] Each shipped slice passes focused checks and its relevant live browser/XMTP release exercise.
 
 ## Features
@@ -574,10 +598,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - Cargo exposes one application binary named `uwubot`.
   - The launcher and Rust runtime default to XMTP `production`, matching the deployed browser.
     `dev` and `local` remain explicit test-only overrides and never activate implicitly.
-  - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle. When no
-    Venice credential is loaded, both public acolytes and the authenticated operator receive the
-    out-of-band `/venice-key <api-key>` provisioning request before deterministic inference can
-    mask the missing dependency.
+  - Rust owns contact memory, consent, matching policy, model access, limits, and lifecycle. Both
+    lanes honor the selected provider without an unrelated Venice-key gate. Generic `/env` controls
+    configure providers and backup keys; legacy first-key provisioning remains compatible.
   - A recoverable Base RPC/rate-limit failure in ERC-8004 registration asks both the authenticated
     operator and acolytes for `/base-rpc-key <infura-api-key-or-https-endpoint>`, prefers Infura's
     free plan with exact dashboard and copy instructions, and warns against wallet private keys. A
@@ -607,8 +630,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     maximum; paths remain workspace-confined and symlink-safe, deletion never removes directories,
     and website reads reject credentials, redirects, non-text bodies, and local/non-public targets.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
-    ACL locally and exit without starting the transport. The ACL loads at runtime startup; management
-    requires stopping and restarting the Tentacle rather than mutating a live process.
+    ACL locally and exit without starting the transport. Local CLI changes require a stopped node and
+    restart; the confirmed `/operator-switch` command atomically updates the running shared ACL.
   - If legacy or manually corrupted state contains several active operators, normal interactive
     startup lists the exact candidates and asks which sole operator to retain; every other active
     candidate becomes a revoked tombstone. Non-interactive startup fails closed with exact
@@ -776,8 +799,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     requires its recognizable all-caps theatrical voice to retain light readable uwu touches.
   - The compiled preference is Venice `e2ee-deepseek-v4-flash` in TEE-only mode; a configured Venice
     credential is the explicit opt-in that permits remote prompt egress.
-  - If no Venice credential exists, public conversation asks the authenticated acolyte for
-    `/venice-key <api-key>`. The first candidate persists in owner-only `state/venice.key`, is never
+  - If inference is unavailable, public conversation may explain voluntary `/env donate VENICE_API_KEY`
+    provisioning. The legacy `/venice-key <api-key>` first-key flow remains compatible. The first candidate persists in owner-only `state/venice.key`, is never
     echoed or logged, and is removed if live catalog authentication or fresh TEE attestation fails.
     Public senders cannot replace an existing key; an active operator can.
   - A successfully validated first acolyte key selects Venice and, when the freshly observed
@@ -867,8 +890,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     public chat, or create contact notes. Revocation persists as a blocking tombstone.
   - Authorization applies to the whole XMTP inbox. Every installation legitimately attached to that
     inbox has operator authority; per-installation authorization is not implemented.
-  - `/operator/` is a separate static, direct-only XMTP console pinned to one explicit Tentacle
-    wallet. It reuses the canonical app Acolyte EOA/inbox, while operators using other clients need
+  - `/operator/` is a separate static, direct-only XMTP console with one all-DM client and a persistent
+    list of Tentacle contacts. Selection binds commands and referral controls to one verified peer wallet. It reuses the canonical app Acolyte EOA/inbox, while operators using other clients need
     not be Acolytes. The route bypasses Branding/rotation, so an Acolyte assigned to one Tentacle may
     operate another and reach an unregistered or underfunded node. It sends no group-join or
     role-claim control. The primary flow displays a new-node command containing only the public EOA;
@@ -888,8 +911,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     `operators/<inbox-id>.md` profile is seeded for each authenticated operator on first use. Each
     request loads a globally bounded snapshot plus the workspace's first project context file,
     workspace `MEMORY.md`, a top-level manifest, and a compact `skills/*/SKILL.md` index; full skills
-    remain progressive `read_file` reads. Bounded in-process dialogue history is also isolated by
-    operator inbox and cleared on restart.
+    remain progressive `read_file` reads. Bounded dialogue history and receipts persist privately by
+    operator inbox and model route; changing the route clears prior context. Interrupted tasks pause on restart.
   - Actor-anchored questions about Cthuwu's notes, memory, skills, or workspace take a deterministic
     local route. The response gives exact canonical host paths for the workspace, protected soul and
     shared memory, the current authenticated operator's profile, retained-contact root, workspace
@@ -918,15 +941,17 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     Push and authenticated `gh pr create` occur only for the matching operator request after
     validation; a canonical PR URL is required before success is claimed. Source updates explicitly
     leave the answering process old until a clean stop and `./uwu.sh` relaunch. This requires a
-    Git-backed workspace with trusted Git; the stock container has no checkout or Git/`gh`, so its
+    Git-backed workspace with trusted Git; the stock container includes Git/Python but has no checkout or `gh`, so its
     update path is image rebuild and redeployment.
   - When the current message explicitly asks to create or generate a reusable skill, one create-only
     `create_skill` call may write a fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
     canonical frontmatter, bounds the one-line description and Markdown instructions, and rejects
     traversal, symlinks, existing paths, and overwrites. The next operator turn rescans the skill
     index. General model-selected writes and edits remain unavailable; `/write` and `/edit` stay exact
-    direct commands, and the compiled creation gate outranks skill prose.
-  - An ordinary model-selected tool phase may use at most 30 seconds. Typed repository maintenance
+    direct commands, and the compiled creation gate outranks skill prose. Authorized Bash can also
+    learn, refine, archive, and retire skills through `scripts/workspace.py`; this is the dynamic lifecycle.
+  - An ordinary model-selected tool phase may use at most 300 seconds, clamped to the configured
+    tool limit and remaining authenticated budget. Typed repository maintenance
     may use up to 240 seconds for its compiled validation sequence. Shell execution may iterate up
     to 24 tool calls and one final completion step; non-shell mutation remains limited to one call.
     Every phase preserves a final local-completion reserve from the authenticated deadline.

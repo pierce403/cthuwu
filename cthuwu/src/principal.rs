@@ -306,6 +306,20 @@ impl OperatorStore {
         })
     }
 
+    /// One atomic persisted transfer, including former-operator tombstones and the new time fence.
+    pub fn transfer(&mut self, inbox_id: &str, label: &str) -> Result<AuthorizedOperator> {
+        let mut candidate = self.clone();
+        for record in &mut candidate.operators {
+            if record.status == OperatorStatus::Active {
+                record.status = OperatorStatus::Revoked;
+                record.revoked_at_unix = Some(unix_seconds());
+            }
+        }
+        let authorized = candidate.add_at(inbox_id, label, &unix_nanoseconds().to_string())?;
+        self.operators = candidate.operators;
+        Ok(authorized)
+    }
+
     /// Revocation is a tombstone: the inbox stays blocked instead of becoming a public user.
     pub fn revoke(&mut self, inbox_id: &str) -> Result<bool> {
         let inbox_id = normalize_operator_inbox_id(inbox_id)?;
@@ -603,6 +617,29 @@ mod tests {
     const OPERATOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_OPERATOR_ID: &str =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn transfer_is_atomic_and_fences_the_former_operator() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = OperatorStore::new(root.path(), "production").unwrap();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        store.add(&first, "first").unwrap();
+        assert!(store.transfer("invalid", "second").is_err());
+        assert_eq!(store.role_for(&first).unwrap(), PrincipalRole::Operator);
+        store.transfer(&second, "second").unwrap();
+        assert_eq!(
+            store.role_for(&first).unwrap(),
+            PrincipalRole::RevokedOperator
+        );
+        assert_eq!(
+            store.role_for_message(&second, "1").unwrap(),
+            PrincipalRole::StaleOperator
+        );
+        let reopened = OperatorStore::new(root.path(), "production").unwrap();
+        assert_eq!(reopened.active_operators().count(), 1);
+        assert_eq!(reopened.role_for(&second).unwrap(), PrincipalRole::Operator);
+    }
 
     #[test]
     fn operator_authorization_is_immediate_exact_persistent_and_revocable() {

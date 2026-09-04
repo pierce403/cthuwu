@@ -132,7 +132,7 @@ export function initializeChatController(
   const nowSeconds = dependencies.nowSeconds ?? (() => BigInt(Math.floor(Date.now() / 1000)));
   if (!operatorSurface && config.referrer) {
     elements.referralStatus.textContent =
-      `Referral link names ${shortId(config.referrer)}. After authenticated Tentacle verification, an eligible completed onboarding pays that address the one-time UWU bounty.`;
+      `Invited by ${shortId(config.referrer)}. Start by chatting about what you want help with. Branding is optional and requires a separate review and signature; referral rewards are confirmed only after eligible onboarding.`;
   }
 
   const updateComposerControls = (): void => {

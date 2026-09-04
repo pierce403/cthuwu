@@ -138,8 +138,16 @@ struct GrowthSnapshot {
     version: u32,
     records: Vec<ReferralRecord>,
     verified_operators: Vec<VerifiedOperator>,
+    #[serde(default)]
+    current_operator: Option<VerifiedOperator>,
     referrals_sent: u64,
     operator_prompt_variant: u8,
+    #[serde(default)]
+    operator_reminder_interval: Option<u64>,
+    #[serde(default)]
+    operator_snooze_until: u64,
+    #[serde(default)]
+    operator_quiet_hours: Option<(u8, u8)>,
     last_operator_prompt_unix: Option<u64>,
     pending_operator_prompt: Option<PendingDelivery>,
     updated_at_unix: u64,
@@ -185,6 +193,7 @@ impl GrowthContext {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GrowthDeliveryAudience {
     Inbox(String),
+    ActiveOperator(String),
     Operators,
 }
 
@@ -254,8 +263,12 @@ impl GrowthStore {
                     version: SNAPSHOT_VERSION,
                     records: Vec::new(),
                     verified_operators: Vec::new(),
+                    current_operator: None,
                     referrals_sent: 0,
                     operator_prompt_variant: 0,
+                    operator_reminder_interval: None,
+                    operator_snooze_until: 0,
+                    operator_quiet_hours: None,
                     last_operator_prompt_unix: Some(now),
                     pending_operator_prompt: None,
                     updated_at_unix: now,
@@ -531,63 +544,41 @@ impl GrowthRuntime {
         if address == self.minter {
             return Ok(());
         }
-        let inbox_id = inbox_id.to_ascii_lowercase();
-        let address_string = address.to_string();
-        if let Some(operator) = self
-            .state
-            .verified_operators
-            .iter_mut()
-            .find(|operator| operator.address == address_string)
-        {
-            if operator.inbox_id == inbox_id {
-                return Ok(());
-            }
-            operator.inbox_id = inbox_id.clone();
-            for record in &mut self.state.records {
-                if record.referrer.as_deref() == Some(address_string.as_str())
-                    && record.inbox_id != inbox_id
-                {
-                    record.referrer_inbox_id = Some(inbox_id.clone());
-                    record.updated_at_unix = record.updated_at_unix.max(now);
-                }
-            }
-            self.state
-                .verified_operators
-                .sort_by(|left, right| left.inbox_id.cmp(&right.inbox_id));
-            return self.persist(now);
-        }
-        if let Some(operator) = self
-            .state
-            .verified_operators
-            .iter_mut()
-            .find(|operator| operator.inbox_id == inbox_id)
-        {
-            if operator.address != address.to_string() {
-                operator.address = address.to_string();
-                self.persist(now)?;
-            }
+        let current = VerifiedOperator {
+            inbox_id: inbox_id.to_ascii_lowercase(),
+            address: address.to_string(),
+        };
+        if self.state.current_operator.as_ref() == Some(&current) {
             return Ok(());
         }
+        let mut next = self.state.clone();
+        // Historical verified referrals remain valid, while recruitment follows the active operator.
+        next.verified_operators.retain(|operator| {
+            operator.address != current.address && operator.inbox_id != current.inbox_id
+        });
         ensure!(
-            self.state.verified_operators.len() < MAX_OPERATORS,
+            next.verified_operators.len() < MAX_OPERATORS,
             "verified operator referral limit reached"
         );
-        self.state.verified_operators.push(VerifiedOperator {
-            inbox_id: inbox_id.clone(),
-            address: address_string.clone(),
-        });
-        for record in &mut self.state.records {
-            if record.referrer.as_deref() == Some(address_string.as_str())
-                && record.inbox_id != inbox_id
+        next.verified_operators.push(current.clone());
+        next.verified_operators
+            .sort_by(|a, b| a.inbox_id.cmp(&b.inbox_id));
+        for record in &mut next.records {
+            if record.referrer.as_deref() == Some(current.address.as_str())
+                && record.inbox_id != current.inbox_id
             {
-                record.referrer_inbox_id = Some(inbox_id.clone());
+                record.referrer_inbox_id = Some(current.inbox_id.clone());
                 record.updated_at_unix = record.updated_at_unix.max(now);
             }
         }
-        self.state
-            .verified_operators
-            .sort_by(|left, right| left.inbox_id.cmp(&right.inbox_id));
-        self.persist(now)
+        next.current_operator = Some(current);
+        next.pending_operator_prompt = None;
+        let previous = std::mem::replace(&mut self.state, next);
+        if let Err(error) = self.persist(now) {
+            self.state = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(crate) fn mark_onboarding_complete(
@@ -857,8 +848,58 @@ impl GrowthRuntime {
         )
     }
 
+    pub(crate) fn reminder_preferences(&mut self, arguments: &str, now: u64) -> Result<String> {
+        let mut next = self.state.clone();
+        match arguments.trim() {
+            "daily" => next.operator_reminder_interval = Some(86400),
+            "weekly" => next.operator_reminder_interval = Some(7 * 86400),
+            "off" => next.operator_reminder_interval = Some(0),
+            "quiet off" => next.operator_quiet_hours = None,
+            value if value.starts_with("snooze ") => {
+                let days: u64 = value[7..].trim().parse()?;
+                ensure!((1..=365).contains(&days), "snooze must be 1–365 days");
+                next.operator_snooze_until = now.saturating_add(days * 86400);
+            }
+            value if value.starts_with("quiet ") => {
+                let hours = value[6..]
+                    .split_whitespace()
+                    .map(str::parse::<u8>)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                ensure!(
+                    hours.len() == 2 && hours[0] < 24 && hours[1] < 24 && hours[0] != hours[1],
+                    "quiet hours require different UTC hours 0–23"
+                );
+                next.operator_quiet_hours = Some((hours[0], hours[1]));
+            }
+            _ => bail!(
+                "usage: /referrals daily|weekly|off|snooze <days>|quiet <startUTC> <endUTC>|quiet off"
+            ),
+        }
+        next.pending_operator_prompt = None;
+        let previous = std::mem::replace(&mut self.state, next);
+        if let Err(error) = self.persist(now) {
+            self.state = previous;
+            return Err(error);
+        }
+        Ok("Referral reminder preferences saved. Quiet hours use UTC. Use /referrals daily, weekly, off, or snooze <days>.".into())
+    }
+
+    fn reminders_allowed(&self, now: u64) -> bool {
+        let hour = ((now / 3600) % 24) as u8;
+        let quiet = self.state.operator_quiet_hours.is_some_and(|(start, end)| {
+            if start < end {
+                hour >= start && hour < end
+            } else {
+                hour >= start || hour < end
+            }
+        });
+        !quiet
+            && self.state.operator_snooze_until <= now
+            && self.state.operator_reminder_interval != Some(0)
+    }
+
     pub(crate) fn has_due(&self, now: u64) -> bool {
-        self.state.pending_operator_prompt.is_some()
+        (self.state.pending_operator_prompt.is_some() && self.reminders_allowed(now))
             || self.state.records.iter().any(|record| {
                 matches!(
                     record.phase,
@@ -868,9 +909,14 @@ impl GrowthRuntime {
                 ) && record.next_attempt_unix <= now
                     || record.pending_delivery.is_some()
             })
-            || (!self.state.verified_operators.is_empty()
+            || (self.state.current_operator.is_some()
                 && self.state.last_operator_prompt_unix.is_some_and(|last| {
-                    now.saturating_sub(last) >= OPERATOR_PROMPT_COOLDOWN_SECONDS
+                    self.reminders_allowed(now)
+                        && now.saturating_sub(last)
+                            >= self
+                                .state
+                                .operator_reminder_interval
+                                .unwrap_or(OPERATOR_PROMPT_COOLDOWN_SECONDS)
                 }))
     }
 
@@ -894,9 +940,12 @@ impl GrowthRuntime {
         branded: usize,
         now: u64,
     ) -> Result<Option<GrowthDelivery>> {
-        if let Some(delivery) = &self.state.pending_operator_prompt {
+        if let Some(delivery) = &self.state.pending_operator_prompt
+            && let Some(operator) = &self.state.current_operator
+            && self.reminders_allowed(now)
+        {
             return Ok(Some(GrowthDelivery {
-                audience: GrowthDeliveryAudience::Operators,
+                audience: GrowthDeliveryAudience::ActiveOperator(operator.inbox_id.clone()),
                 text: delivery.text.clone(),
                 commitment: delivery.commitment.clone(),
             }));
@@ -942,14 +991,23 @@ impl GrowthRuntime {
             }
             return self.reconcile_reward(index, now).await;
         }
-        if !self.state.verified_operators.is_empty()
-            && self
-                .state
-                .last_operator_prompt_unix
-                .is_some_and(|last| now.saturating_sub(last) >= OPERATOR_PROMPT_COOLDOWN_SECONDS)
+        if self.state.current_operator.is_some()
+            && self.state.last_operator_prompt_unix.is_some_and(|last| {
+                self.reminders_allowed(now)
+                    && now.saturating_sub(last)
+                        >= self
+                            .state
+                            .operator_reminder_interval
+                            .unwrap_or(OPERATOR_PROMPT_COOLDOWN_SECONDS)
+            })
         {
             let operator = parse_nonzero_address(
-                &self.state.verified_operators[0].address,
+                &self
+                    .state
+                    .current_operator
+                    .as_ref()
+                    .context("current operator is missing")?
+                    .address,
                 "persisted operator",
             )?;
             let stats = self.stats(branded, now);
@@ -969,7 +1027,7 @@ impl GrowthRuntime {
                 stats.recently_onboarded,
                 stats.successful_referrals,
                 stats.referral_uwu_paid_base_units,
-                "KEEP IT SPECIFIC AND CONSENSUAL; DO NOT SPAM OR PRESSURE ANYONE, UWU.",
+                "KEEP IT SPECIFIC AND CONSENSUAL; DO NOT SPAM OR PRESSURE ANYONE, UWU. Use /referrals off or /referrals snooze 7 to pause. Optional: keep a dedicated backup model key with /env add VENICE_API_KEY backup <key>; /env list shows redacted slots.",
             );
             let commitment = commitment("operator-prompt", &text);
             self.state.pending_operator_prompt = Some(PendingDelivery {
@@ -980,7 +1038,14 @@ impl GrowthRuntime {
             });
             self.persist(now)?;
             return Ok(Some(GrowthDelivery {
-                audience: GrowthDeliveryAudience::Operators,
+                audience: GrowthDeliveryAudience::ActiveOperator(
+                    self.state
+                        .current_operator
+                        .as_ref()
+                        .context("current operator is missing")?
+                        .inbox_id
+                        .clone(),
+                ),
                 text,
                 commitment,
             }));
@@ -1240,6 +1305,12 @@ fn validate_snapshot(snapshot: &GrowthSnapshot, minter: Address, reward: &str) -
         snapshot.operator_prompt_variant < 3,
         "invalid operator prompt variant"
     );
+    if let Some(operator) = &snapshot.current_operator {
+        ensure!(
+            snapshot.verified_operators.contains(operator),
+            "current operator is not verified"
+        );
+    }
     if let Some(delivery) = &snapshot.pending_operator_prompt {
         ensure!(
             delivery.target == GrowthDeliveryTarget::Operators
@@ -2354,5 +2425,34 @@ mod tests {
         let second_due = due + OPERATOR_PROMPT_COOLDOWN_SECONDS;
         let second = runtime.maintain_one(0, second_due).await.unwrap().unwrap();
         assert_ne!(first.text, second.text);
+        runtime
+            .register_operator(INBOX_A, &address(4).to_string(), second_due)
+            .unwrap();
+        let moved = runtime.maintain_one(0, second_due).await.unwrap().unwrap();
+        assert_eq!(
+            moved.audience,
+            GrowthDeliveryAudience::ActiveOperator(INBOX_A.into())
+        );
+        assert!(moved.text.contains(&format!("r={}", address(4))));
+        assert!(!moved.text.contains(&format!("r={}", address(2))));
+        runtime
+            .acknowledge_delivery(&moved.commitment, true, second_due)
+            .unwrap();
+        runtime.reminder_preferences("off", second_due).unwrap();
+        assert!(!runtime.has_due(second_due + 30 * 86400));
+        runtime.reminder_preferences("daily", second_due).unwrap();
+        runtime
+            .reminder_preferences("quiet 0 12", second_due)
+            .unwrap();
+        let next_day = ((second_due / 86400) + 2) * 86400;
+        assert!(!runtime.has_due(next_day));
+        runtime
+            .reminder_preferences("quiet off", second_due)
+            .unwrap();
+        assert!(runtime.has_due(next_day));
+        runtime
+            .reminder_preferences("snooze 7", second_due)
+            .unwrap();
+        assert!(!runtime.has_due(next_day));
     }
 }

@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-09-04
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
@@ -30,6 +30,32 @@ Last reviewed: 2026-08-26
   Unminted explicit route is Direct-only and visibly policy-blocks Acolytes/Global rather than
   sending an ordinary join that the non-intro Tentacle cannot authorize.
 
+## Markdown agent implementation (2026-09-04)
+
+- The operator approved the roadmap and direct publishing to main. Retain the Rust harness with
+  iterative Bash; do not add pi/Hermes as dependencies. The product's primary mission is practical,
+  consent-based life coaching. `docs/agent-workspace.md` is the command and boundary reference.
+- `scripts/workspace.py` is stdlib Python: SQLite FTS5 + optional local Ollama vectors, sourced
+  upstream cursors, and create/refine/archive/retire skill procedures. Only shared `knowledge/` and
+  active `skills/` are indexed. Private goal retrieval remains exact by authenticated inbox.
+- Operator sessions and receipts persist outside the workspace by inbox/model route. Generic jobs
+  persist with their authorizing ACL epoch, pause after restart/partial failure, and accept live
+  pause/steer/resume. Limits remain 24 tool calls and 15 minutes per job.
+- `/operator/` uses one Browser SDK client across all DMs; selection does not recreate the identity.
+  It keeps names/unreads, in-memory per-thread drafts, catch-up, and peer-bound referral activation.
+  A saved contact is not an operator-authority claim. Live two-node delivery remains unverified.
+- `/operator-switch` commits a confirmed hot transfer, with an offline `operator switch` equivalent.
+  Old operator tasks cannot run under the new epoch. Referral reminders retain historical attribution
+  but use the current verified operator, and cannot deliver the old operator's link to the new one.
+- `/env` replaces service-specific commands as the primary operator interface. Compatible model-key
+  pools support named backups, redacted health, rejection disable, rate-limit/transient cooldowns,
+  and at most three attempts per request. Legacy key stores are preserved; an empty override must
+  never resurrect a startup key. Only TOOL_* entries are injected into Bash children.
+- Acolytes explicitly retain goals and opt into check-ins. View/update/delete/pause work without
+  model or funding availability. The operator's MISSION.md guides coaching; recruitment cannot
+  substitute for progress on the acolyte's chosen goal. No actual embedding model was installed or
+  production XMTP/Branding transaction exercised during this implementation.
+
 ## Product
 
 - Each Tentacle presents as a cute little eldritch-horror companion; Cthuwu itself is the
@@ -42,7 +68,7 @@ Last reviewed: 2026-08-26
 - Each independently operated `uwubot` is one durable autonomous Tentacle with its own identity,
   wallet, personality, economics, reputation, lineage, and ERC-8004 agent ID. A restart creates a
   new incarnation, not a new Tentacle. One Tentacle's death is not Cthuwu's death.
-- Many human operators each run a Tentacle and may shape that Tentacle's agenda. Public humans who
+- Many human operators each run one or more Tentacles and may shape that Tentacle's agenda. Public humans who
   chat with a Tentacle are acolytes; they are not operators or Tentacles merely by chatting or
   holding UWU.
 - Each Tentacle cultivates its own acolyte community and may coordinate strengths that acolytes
@@ -67,13 +93,10 @@ Last reviewed: 2026-08-26
   explicitly disables Venice-native search and supplemental system prompting. It then falls back to
   proxy-bypassing loopback Ollama and deterministic behavior on any failure. It does not implement or
   claim full E2EE or independent quote verification.
-- With no Venice credential, public acolytes and the authenticated operator are asked for
-  `/venice-key <api-key>` before inference fallback can mask the missing dependency. The first
-  candidate persists owner-only in `state/venice.key`, is never echoed, and must authenticate to the
-  live catalog and pass fresh TEE attestation; invalid candidates are removed and only operators may
-  replace a loaded key. A funded treasury queues the configured whole-UWU reward to the
-  SDK-authenticated sender, but only an exact confirmed lifecycle-executor transfer receipt is
-  payment.
+- Both public and operator inference honor the selected provider even without a Venice key.
+  `/env donate VENICE_API_KEY` accepts a validated, bounded acolyte backup without replacement or
+  provider switching. The legacy `/venice-key` first-key flow remains for compatibility, including
+  its separately confirmed optional reward; backup donation does not create a reward claim.
 - Newly accepted voluntary onboarding facts can enqueue a separate treasury contribution reward:
   name 1%, hopes 0.8%, offered resources 0.6%, and needs 0.4%, floored to whole UWU from a fresh
   treasury observation and capped at 1% per event. The exact authenticated event and confirmed

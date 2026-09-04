@@ -12,6 +12,7 @@ export default defineConfig({
   outputDir: "test-results/playwright",
   use: {
     baseURL: "http://127.0.0.1:4173",
+    ...(process.env.CTHUWU_TEST_CHROMIUM ? { launchOptions: { executablePath: process.env.CTHUWU_TEST_CHROMIUM, args: ["--no-sandbox", "--disable-dev-shm-usage"] } } : {}),
     serviceWorkers: "allow",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

@@ -25,6 +25,10 @@ Cthuwu has two user-facing pieces:
 
 `uwubot` supervises the supported `@xmtp/agent-sdk` transport in `agent/`. Node is an internal transport detail: the operator still starts and stops one command. Direct libxmtp crates are not currently a stable, published Rust integration surface.
 
+Start with [the Markdown agent and operator guide](docs/agent-workspace.md) for Bash-based work,
+local retrieval, dynamic skills, coaching goals, background tasks, multiple Tentacles, referrals,
+operator transfer, and backup API keys.
+
 The detailed product contract and remaining release gates live in [FEATURES.md](FEATURES.md).
 The Council protocol is documented in [docs/protocol/README.md](docs/protocol/README.md).
 The local Evolution layer and its current network boundary are documented in

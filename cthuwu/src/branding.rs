@@ -731,6 +731,7 @@ impl BrandingStore {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BrandingDeliveryTarget {
+    ActiveOperator(String),
     Inbox(String),
     Operators,
 }
@@ -1911,6 +1912,9 @@ impl SharedBrandingControl {
                             BrandingDeliveryTarget::Inbox(inbox_id)
                         }
                         GrowthDeliveryAudience::Operators => BrandingDeliveryTarget::Operators,
+                        GrowthDeliveryAudience::ActiveOperator(inbox) => {
+                            BrandingDeliveryTarget::ActiveOperator(inbox)
+                        }
                     },
                     text: delivery.text,
                     commitment: format!("growth:{}", delivery.commitment),
@@ -1995,6 +1999,9 @@ impl SharedBrandingControl {
 
 #[async_trait]
 pub trait AcolyteBrandingControl: Send + Sync {
+    async fn referral_preferences(&self, _arguments: &str) -> Result<String> {
+        bail!("referral preferences unavailable")
+    }
     async fn enqueue_default_offer(
         &self,
         inbox_id: &str,
@@ -2270,6 +2277,13 @@ impl AcolyteBrandingControl for SharedBrandingControl {
         )?;
         self.wake.notify_one();
         Ok(())
+    }
+
+    async fn referral_preferences(&self, arguments: &str) -> Result<String> {
+        self.growth
+            .lock()
+            .await
+            .reminder_preferences(arguments, unix_seconds()?)
     }
 
     async fn operator_growth_status(&self, authenticated_sender_address: &str) -> Result<String> {

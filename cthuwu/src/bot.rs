@@ -1,5 +1,5 @@
 use crate::{
-    base_rpc::{BASE_RPC_HELP, BaseRpcControl, VENICE_KEY_HELP},
+    base_rpc::{BASE_RPC_HELP, BaseRpcControl},
     branding::{
         AcolyteBrandingControl, DEFAULT_INITIAL_PRICE_BASIS_POINTS, quote_initial_branding,
     },
@@ -59,6 +59,7 @@ pub struct UwUBot {
     base_rpc_control: Option<Arc<dyn BaseRpcControl>>,
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
+    coaching: Option<Arc<crate::coaching::Coaching>>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
     token_eye: Option<Arc<TokenEye>>,
     blockchain: BlockchainConfig,
@@ -113,6 +114,7 @@ impl UwUBot {
         evolution: Arc<Mutex<EvolutionRuntime>>,
     ) -> Self {
         Self {
+            coaching: None,
             contacts,
             processed,
             model,
@@ -136,6 +138,11 @@ impl UwUBot {
     ) -> Self {
         self.token_eye = token_eye;
         self.blockchain = blockchain;
+        self
+    }
+
+    pub fn with_coaching(mut self, coaching: Arc<crate::coaching::Coaching>) -> Self {
+        self.coaching = Some(coaching);
         self
     }
 
@@ -392,6 +399,9 @@ impl UwUBot {
                             warn!(%error, "could not read authenticated operator growth facts")
                         }
                     }
+                    if let Some(arguments) = message.text.strip_prefix("/referrals ") {
+                        return Ok(Some(control.referral_preferences(arguments).await?));
+                    }
                     if is_growth_status_request(message.text) {
                         return Ok(Some(limit_response(
                             control.operator_growth_status(address).await?,
@@ -504,6 +514,23 @@ impl UwUBot {
         text: &str,
     ) -> Result<String> {
         let started = Instant::now();
+        // Explicit local goal/privacy controls must work even while inference or funding is offline.
+        if let Some(coaching) = &self.coaching
+            && let Some(response) = coaching.handle(inbox_id, text)?
+        {
+            return Ok(response);
+        }
+        if is_local_data_control(text) {
+            let (mut contact, _) = self.contacts.load_or_create(inbox_id)?;
+            let response = if let Some(command) = text.trim().strip_prefix('/') {
+                self.handle_legacy_command(&mut contact, command).await?
+            } else {
+                self.handle_natural_control(&mut contact, text)?
+            };
+            if let Some(response) = response {
+                return Ok(response);
+            }
+        }
         let turn = {
             let mut evolution = self
                 .evolution
@@ -524,6 +551,21 @@ impl UwUBot {
             let (name, arguments) = command
                 .split_once(char::is_whitespace)
                 .unwrap_or((command, ""));
+            if name.eq_ignore_ascii_case("env") {
+                let Some(key) = arguments.strip_prefix("donate VENICE_API_KEY ") else {
+                    return Ok("environment configuration belongs to the operator. u may explicitly donate a dedicated backup using /env donate VENICE_API_KEY <key>; it never replaces an existing credential.".into());
+                };
+                if authenticated_sender_address.is_none() {
+                    return Ok(
+                        "credential donations require an SDK-authenticated XMTP sender, fwiend."
+                            .into(),
+                    );
+                }
+                let Some(control) = &self.model_control else {
+                    return Ok("credential provisioning is unavailable.".into());
+                };
+                return Ok(control.donate_venice_key(inbox_id, key).await.unwrap_or_else(|_| "that backup was not accepted; validation or the bounded donation slot check failed. existing keys are unchanged, fwiend.".into()));
+            }
             if name.eq_ignore_ascii_case("base-rpc-key") {
                 let Some(control) = &self.base_rpc_control else {
                     return Ok(format!(
@@ -633,15 +675,6 @@ impl UwUBot {
             && let Some(status) = control.public_status().await
         {
             return Ok(status);
-        }
-
-        if let Some(control) = &self.model_control
-            && matches!(control.venice_key_configured(), Ok(false))
-        {
-            return Ok(format!(
-                "this Tentacle needs a Venice key for its remote mind, fwiend. {}, uwu.",
-                VENICE_KEY_HELP
-            ));
         }
 
         let token_observation = match self
@@ -785,6 +818,9 @@ impl UwUBot {
             Some(response) => response,
             None => {
                 let mut profile = contact.model_profile_markdown();
+                if let Some(coaching) = &self.coaching {
+                    profile.push_str(&coaching.context(inbox_id)?);
+                }
                 if let (Some(control), Some(address)) =
                     (&self.branding_control, authenticated_sender_address)
                     && let Ok((growth, branding_state, _)) =
@@ -825,10 +861,7 @@ impl UwUBot {
                 .unwrap_or(false),
             _ => false,
         };
-        if contribution_kind.is_some()
-            || (contact.stage == OnboardingStage::Complete && branding_due)
-            || is_branding_interest(text)
-        {
+        if branding_due || is_branding_interest(text) {
             match (self.branding_control.as_ref(), authenticated_sender_address) {
                 (None, _) => response.push_str(
                     "\n\ni saved what u shared, but this node's Branding supervisor is unavailable, so no invitation was created. its operator needs to repair the node before i can retry, uwu.",
@@ -1047,8 +1080,8 @@ impl UwUBot {
         let response = match name.to_ascii_lowercase().as_str() {
             "help" => natural_help(),
             "profile" | "export" => format!(
-                "here's what i remember locally for this XMTP inbox, lil star:\n\n{}",
-                contact.profile_markdown()
+                "here's what i remember locally for this XMTP inbox, lil star:\n\n{}{}",
+                contact.profile_markdown(), self.coaching.as_ref().map(|c| c.context(&contact.inbox_id)).transpose()?.unwrap_or_default()
             ),
             "skip" => {
                 if contact.stage == OnboardingStage::Complete {
@@ -1075,6 +1108,9 @@ impl UwUBot {
             }
             "matches" => self.matches(contact)?,
             "forget" if arguments.eq_ignore_ascii_case("confirm") => {
+                if let Some(coaching) = &self.coaching {
+                    coaching.handle(&contact.inbox_id, "forget my goal")?;
+                }
                 self.contacts.delete(&contact.inbox_id)?;
                 "forgotten. ur local contact note is gone. copies of messages already delivered over XMTP are outside this local deletion."
                     .into()
@@ -1107,11 +1143,19 @@ impl UwUBot {
                 | "show me what you remember"
         ) {
             return Ok(Some(format!(
-                "here's the private local note i have for u:\n\n{}",
-                contact.profile_markdown()
+                "here's the private local note i have for u:\n\n{}{}",
+                contact.profile_markdown(),
+                self.coaching
+                    .as_ref()
+                    .map(|c| c.context(&contact.inbox_id))
+                    .transpose()?
+                    .unwrap_or_default()
             )));
         }
         if matches!(normalized.as_str(), "yes, forget me" | "yes forget me") {
+            if let Some(coaching) = &self.coaching {
+                coaching.handle(&contact.inbox_id, "forget my goal")?;
+            }
             self.contacts.delete(&contact.inbox_id)?;
             return Ok(Some(
                 "done. ur local contact note is gone; already-delivered XMTP messages live outside that note."
@@ -1664,7 +1708,9 @@ fn is_resource_provision_command(text: &str) -> bool {
     let name = command
         .split_once(char::is_whitespace)
         .map_or(command, |(name, _)| name);
-    name.eq_ignore_ascii_case("base-rpc-key") || name.eq_ignore_ascii_case("venice-key")
+    name.eq_ignore_ascii_case("base-rpc-key")
+        || name.eq_ignore_ascii_case("venice-key")
+        || name.eq_ignore_ascii_case("env")
 }
 
 fn is_natural_registry_status_request(text: &str) -> bool {
@@ -2082,6 +2128,23 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AcolyteBrandingControl for RecordingBrandingControl {
+        async fn growth_context(
+            &self,
+            _inbox: &str,
+            _address: &str,
+        ) -> Result<(crate::growth::GrowthContext, String, bool)> {
+            Ok((
+                crate::growth::GrowthContext {
+                    is_acolyte: false,
+                    immutable_referrer: None,
+                    referral_bounty_phase: None,
+                    shareable_referral_url: None,
+                },
+                "eligible".into(),
+                true,
+            ))
+        }
+
         async fn enqueue_default_offer(
             &self,
             _inbox_id: &str,
@@ -2433,7 +2496,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_acolyte_is_prompted_for_and_can_hot_load_a_missing_venice_key() {
+    async fn public_privacy_controls_include_and_delete_coaching_notes_without_model_use() {
+        let root = tempfile::tempdir().unwrap();
+        let model = Arc::new(RecordingModel {
+            messages: StdMutex::new(Vec::new()),
+        });
+        let tools = Arc::new(RecordingTools {
+            calls: StdMutex::new(Vec::new()),
+        });
+        let coaching = Arc::new(crate::coaching::Coaching::open(root.path()).unwrap());
+        let bot = default_nature_bot(
+            root.path(),
+            model.clone(),
+            OperatorStore::new(root.path(), "production").unwrap(),
+            tools,
+        )
+        .with_coaching(coaching.clone());
+        assert!(
+            send(&bot, 0, "aabbcc", "remember my goal: build a reading habit")
+                .await
+                .contains("saved ur goal")
+        );
+        assert!(
+            send(&bot, 1, "aabbcc", "show me my profile")
+                .await
+                .contains("reading habit")
+        );
+        assert!(
+            send(&bot, 2, "aabbcc", "yes, forget me")
+                .await
+                .contains("gone")
+        );
+        assert!(coaching.context("aabbcc").unwrap().is_empty());
+        assert!(model.messages.lock().unwrap().is_empty());
+        assert!(
+            ContactStore::new(root.path())
+                .unwrap()
+                .load("aabbcc")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn public_acolyte_can_use_selected_model_and_hot_load_a_missing_venice_key() {
         let root = tempfile::tempdir().unwrap();
         let model = Arc::new(RecordingModel {
             messages: StdMutex::new(Vec::new()),
@@ -2454,8 +2560,8 @@ mod tests {
         .with_model_control(control.clone());
 
         let asked = send(&bot, 0, "aabbcc", "hello").await;
-        assert!(asked.contains("/venice-key <api-key>"));
-        assert!(model.messages.lock().unwrap().is_empty());
+        assert!(asked.contains("answered: hello"));
+        assert_eq!(model.messages.lock().unwrap().as_slice(), ["hello"]);
 
         let loaded = send(&bot, 1, "aabbcc", "/venice-key secret-value").await;
         assert!(loaded.contains("key stored without echo"));
@@ -2467,7 +2573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_is_prompted_for_a_missing_venice_key_before_inference() {
+    async fn operator_can_use_selected_model_without_a_venice_key() {
         let root = tempfile::tempdir().unwrap();
         let model = Arc::new(RecordingModel {
             messages: StdMutex::new(Vec::new()),
@@ -2510,12 +2616,8 @@ mod tests {
         .with_model_control(control);
 
         let asked = send(&bot, 0, OPERATOR_ID, "hello").await;
-        assert!(asked.contains("/venice-key <api-key>"));
-        assert!(
-            asked
-                .to_ascii_uppercase()
-                .contains("HTTPS://VENICE.AI/SETTINGS/API")
-        );
+        assert!(asked.contains("THE LOCAL ORACLE IS NOT CONFIGURED"));
+        assert!(!asked.contains("NEEDS A VENICE KEY BEFORE"));
         assert!(model.messages.lock().unwrap().is_empty());
     }
 

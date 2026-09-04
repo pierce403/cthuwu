@@ -5,11 +5,13 @@ pub mod awakening;
 mod base_rpc;
 mod bot;
 mod branding;
+mod coaching;
 mod config;
 mod contact;
 mod deadline;
 mod dedupe;
 pub mod economics;
+mod environment;
 mod erc8004;
 pub mod evolution;
 pub mod evolution_runtime;
@@ -22,6 +24,7 @@ mod matching;
 mod model;
 mod names;
 mod operator;
+mod operator_tasks;
 pub mod personality;
 mod principal;
 mod repository_maintenance;
@@ -503,6 +506,8 @@ enum OperatorCommand {
         #[arg(long, default_value = "operator")]
         label: String,
     },
+    /// Atomically transfer this stopped node to a resolved operator.
+    Switch { identity: String },
     /// Revoke an operator inbox. Revocation remains as a blocking tombstone.
     #[command(visible_alias = "remove")]
     Revoke { inbox_id: String },
@@ -990,6 +995,7 @@ async fn main() -> Result<()> {
     let router = Arc::new(InferenceRouter::new(build_inference_config(&cli, search)?)?);
     let model: Arc<dyn Model> = router.clone();
     let operator_model: Arc<dyn OperatorModel> = router.clone();
+    let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
     let operator_context = AgentContext::new(&cli.data_dir, &operator_root)?;
     let operator_tools = Arc::new(
         LocalOperatorTools::new(
@@ -997,22 +1003,35 @@ async fn main() -> Result<()> {
             cli.qmd.clone(),
             cli.operator_tool_timeout_seconds,
         )?
-        .with_contacts(contacts.clone()),
+        .with_contacts(contacts.clone())
+        .with_environment(router.environment()),
     );
+    let tasks = Arc::new(operator_tasks::OperatorTasks::open(&cli.data_dir)?);
     let operator_harness = Arc::new(
         OperatorHarness::new(operator_model, operator_tools, operator_context)
+            .with_tasks(tasks.clone(), operators.clone())
+            .with_operator_transfer(
+                Arc::new(RuntimeOperatorResolver {
+                    node: cli.node.clone(),
+                    sidecar: cli.sidecar.clone(),
+                    environment: cli.xmtp_env.as_str().into(),
+                }),
+                operator_notice_tx.clone(),
+            )
             .with_model_control(router.clone())
             .with_base_rpc_control(base_rpc_control.clone())
             .with_registry_control(registry_control.clone()),
     );
+    let coaching = Arc::new(coaching::Coaching::open(&cli.data_dir)?.with_mission(&operator_root));
     let bot = UwUBot::new(
         contacts,
         processed,
         model,
         operators.clone(),
-        operator_harness,
+        operator_harness.clone(),
         evolution.clone(),
     )
+    .with_coaching(coaching.clone())
     .with_model_control(router.clone())
     .with_base_rpc_control(base_rpc_control)
     .with_venice_key_reward(cli.venice_key_reward_whole)
@@ -1033,8 +1052,6 @@ async fn main() -> Result<()> {
     }
 
     let (lifecycle_shutdown_tx, lifecycle_shutdown_rx) = watch::channel(false);
-    let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
-
     let (tentacle_id, nature, generation, is_dormant) = {
         let evolution_guard = evolution
             .lock()
@@ -1132,6 +1149,14 @@ async fn main() -> Result<()> {
         operators.clone(),
         operator_notice_tx.clone(),
     ));
+    let coaching_supervisor =
+        tokio::spawn(coaching::supervise(coaching, operator_notice_tx.clone()));
+    let task_supervisor = tokio::spawn(operator_tasks::supervise(
+        tasks,
+        operator_harness,
+        operators.clone(),
+        operator_notice_tx.clone(),
+    ));
     let branding_supervisor = tokio::spawn(run_branding_supervisor(
         branding_control,
         operators,
@@ -1157,6 +1182,8 @@ async fn main() -> Result<()> {
             wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();
+            task_supervisor.abort();
+            coaching_supervisor.abort();
             if *lifecycle_shutdown_tx.borrow() {
                 let shutdown_intent = supervisor
                     .await
@@ -1174,6 +1201,8 @@ async fn main() -> Result<()> {
             wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();
+            task_supervisor.abort();
+            coaching_supervisor.abort();
             let shutdown_intent = supervisor_result
                 .context("autonomous Evolution supervisor task failed")??;
             transport.await?;
@@ -1650,6 +1679,20 @@ async fn observe_node_economics(
     Ok(Some((snapshot, provenance)))
 }
 
+struct RuntimeOperatorResolver {
+    node: PathBuf,
+    sidecar: PathBuf,
+    environment: String,
+}
+#[async_trait::async_trait]
+impl operator::OperatorIdentityResolver for RuntimeOperatorResolver {
+    async fn resolve(&self, identity: &str) -> Result<(String, String)> {
+        let (address, inbox) =
+            resolve_operator_inbox(&self.node, &self.sidecar, identity, &self.environment).await?;
+        Ok((address.to_string(), inbox))
+    }
+}
+
 async fn run_registration_supervisor(
     registration: Arc<tokio::sync::Mutex<TentacleRegistration>>,
     operators: Arc<Mutex<OperatorStore>>,
@@ -1740,6 +1783,13 @@ async fn run_branding_supervisor(
         if let Some(delivery) = delivery {
             let inboxes = match &delivery.target {
                 BrandingDeliveryTarget::Inbox(inbox_id) => vec![inbox_id.clone()],
+                BrandingDeliveryTarget::ActiveOperator(expected) => {
+                    current_active_operator_inboxes(&operators)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|inbox| inbox == expected)
+                        .collect()
+                }
                 BrandingDeliveryTarget::Operators => {
                     match current_active_operator_inboxes(&operators) {
                         Ok(inboxes) => inboxes,
@@ -2256,6 +2306,15 @@ async fn run_management_command(
                 println!("generation: {}", authorized.generation);
                 println!(
                     "restart the Tentacle; newly authored messages from this inbox may use the operator harness"
+                );
+            }
+            OperatorCommand::Switch { identity } => {
+                let (address, inbox) =
+                    resolve_operator_inbox(&cli.node, &cli.sidecar, &identity, xmtp_environment)
+                        .await?;
+                operators.transfer(&inbox, &address.to_string())?;
+                println!(
+                    "operator transferred to {address}; restart the node without an outdated --operator flag"
                 );
             }
             OperatorCommand::Revoke { inbox_id } => {

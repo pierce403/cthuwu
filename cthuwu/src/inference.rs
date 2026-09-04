@@ -290,6 +290,7 @@ struct Candidate {
     provider: Provider,
     model: CandidateModel,
     generation: u64,
+    credential: Option<(String, String)>,
 }
 
 impl Candidate {
@@ -317,10 +318,12 @@ pub struct InferenceRouter {
     state: RwLock<RouterState>,
     store: InferenceStore,
     settings: ProviderSettings,
+    environment: Arc<crate::environment::Environment>,
 }
 
 impl InferenceRouter {
     pub fn new(config: InferenceConfig) -> Result<Self> {
+        let environment = Arc::new(crate::environment::Environment::open(&config.data_dir)?);
         let store = InferenceStore::new(&config.data_dir, &config.xmtp_environment)?;
         let defaults = StoredInferenceConfig::defaults(&config)?;
         let mut selection = store.load(defaults)?;
@@ -358,7 +361,12 @@ impl InferenceRouter {
             }),
             store,
             settings,
+            environment,
         })
+    }
+
+    pub fn environment(&self) -> Arc<crate::environment::Environment> {
+        self.environment.clone()
     }
 
     #[cfg(test)]
@@ -402,6 +410,34 @@ impl InferenceRouter {
             {
                 continue;
             }
+            let variable = match provider {
+                Provider::Venice => Some("VENICE_API_KEY"),
+                Provider::Openai => Some("UWUBOT_MODEL_API_KEY"),
+                _ => None,
+            };
+            if let Some(variable) = variable.filter(|v| self.environment.contains(v)) {
+                for entry in self.environment.candidates(variable)?.into_iter().take(3) {
+                    let mut settings = self.settings.clone();
+                    if provider == Provider::Venice {
+                        settings.venice_api_key = Some(entry.value);
+                    } else {
+                        settings.openai_api_key = Some(entry.value);
+                    }
+                    if let Some(model) = build_one_model(
+                        &settings,
+                        provider,
+                        state.selection.model(provider).unwrap(),
+                    )? {
+                        candidates.push(Candidate {
+                            provider,
+                            model: CandidateModel::Compatible(model),
+                            generation: state.generation,
+                            credential: Some((variable.into(), entry.name)),
+                        });
+                    }
+                }
+                continue;
+            }
             let model = match provider {
                 Provider::Venice => state
                     .models
@@ -421,6 +457,7 @@ impl InferenceRouter {
                     provider,
                     model,
                     generation: state.generation,
+                    credential: None,
                 });
             }
         }
@@ -429,6 +466,7 @@ impl InferenceRouter {
                 provider: Provider::Deterministic,
                 model: CandidateModel::Deterministic,
                 generation: state.generation,
+                credential: None,
             });
         }
         Ok(candidates)
@@ -473,12 +511,20 @@ impl InferenceRouter {
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
         let selected = state.selection.provider;
         let selected_model = state.selection.model(selected).unwrap_or("built-in");
-        let venice_configured = if state.venice_api_key.is_some() {
+        let venice_configured = if if self.environment.contains("VENICE_API_KEY") {
+            self.environment.configured("VENICE_API_KEY")?
+        } else {
+            state.venice_api_key.is_some()
+        } {
             "YES"
         } else {
             "NO"
         };
-        let openai_configured = if state.models.openai.is_some() {
+        let openai_configured = if if self.environment.contains("UWUBOT_MODEL_API_KEY") {
+            self.environment.configured("UWUBOT_MODEL_API_KEY")?
+        } else {
+            state.models.openai.is_some()
+        } {
             "YES"
         } else {
             "NO"
@@ -502,7 +548,13 @@ impl InferenceRouter {
             .state
             .write()
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
-        if provider == Provider::Openai && state.models.openai.is_none() {
+        if provider == Provider::Openai
+            && state.models.openai.is_none()
+            && self
+                .environment
+                .candidates("UWUBOT_MODEL_API_KEY")?
+                .is_empty()
+        {
             bail!("the OpenAI-compatible provider has no locally configured API key");
         }
         if state.selection.provider == provider {
@@ -643,6 +695,46 @@ impl InferenceRouter {
     }
 }
 
+fn credential_failure(error: &anyhow::Error) -> crate::environment::CredentialFailure {
+    use crate::environment::CredentialFailure;
+    match error
+        .chain()
+        .find_map(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .and_then(reqwest::Error::status)
+        })
+        .map(|status| status.as_u16())
+    {
+        Some(401 | 403) => CredentialFailure::Rejected,
+        Some(429) => CredentialFailure::RateLimited,
+        _ => CredentialFailure::Transient,
+    }
+}
+
+fn normalize_environment_arguments(arguments: &str) -> String {
+    let (operation, rest) = arguments
+        .trim()
+        .split_once(char::is_whitespace)
+        .unwrap_or((arguments.trim(), ""));
+    let (name, value) = rest
+        .trim_start()
+        .split_once(char::is_whitespace)
+        .unwrap_or((rest.trim_start(), ""));
+    let name = if name == "UWUBOT_VENICE_API_KEY" {
+        "VENICE_API_KEY"
+    } else {
+        name
+    };
+    if name.is_empty() {
+        operation.into()
+    } else if value.is_empty() {
+        format!("{operation} {name}")
+    } else {
+        format!("{operation} {name} {}", value.trim_start())
+    }
+}
+
 #[async_trait]
 impl ModelControl for InferenceRouter {
     fn provider_command(&self, arguments: &str) -> Result<ControlReply> {
@@ -682,7 +774,124 @@ impl ModelControl for InferenceRouter {
         self.switch_model(argument)
     }
 
+    async fn donate_venice_key(&self, inbox: &str, key: &str) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let inbox = crate::contact::normalize_inbox_id(inbox)?;
+        let donor = format!("donor-{:x}", Sha256::digest(inbox.as_bytes()));
+        let donor = &donor[..38];
+        let key = validate_venice_key(key)?;
+        let selection = self
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("inference lock"))?
+            .selection
+            .clone();
+        let mut settings = self.settings.clone();
+        settings.venice_api_key = Some(key.clone());
+        build_one_model(&settings, Provider::Venice, &selection.venice_model)?
+            .context("Venice model unavailable")?
+            .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
+            .await?;
+        if !self.environment.contains("VENICE_API_KEY") {
+            let primary = self
+                .state
+                .read()
+                .map_err(|_| anyhow::anyhow!("inference lock"))?
+                .venice_api_key
+                .clone();
+            if let Some(primary) = primary {
+                self.environment
+                    .command(&format!("set VENICE_API_KEY {primary}"))?;
+            }
+        }
+        self.environment
+            .command(&format!("add VENICE_API_KEY {donor} {key}"))?;
+        Ok("thank u, fwiend. the validated Venice credential is stored as a backup without replacing an existing slot. no reward is claimed. keys sent in chat remain in transport history; use a dedicated revocable key.".into())
+    }
+
+    async fn environment_command(&self, arguments: &str) -> Result<ControlReply> {
+        let arguments = normalize_environment_arguments(arguments);
+        if matches!(
+            arguments.as_str(),
+            "get UWUBOT_PROVIDER" | "get UWUBOT_MODEL"
+        ) {
+            return Ok(ControlReply {
+                response: self.status()?,
+                changed: false,
+            });
+        }
+        if arguments.is_empty() || arguments == "list" {
+            return Ok(ControlReply {
+                response: format!("{}\n{}", self.status()?, self.environment.command("list")?),
+                changed: false,
+            });
+        }
+        if let Some(value) = arguments.strip_prefix("set UWUBOT_PROVIDER ") {
+            return self.provider_command(value);
+        }
+        if let Some(value) = arguments.strip_prefix("set UWUBOT_MODEL ") {
+            return self.model_command(value);
+        }
+        let parts = arguments.splitn(4, ' ').collect::<Vec<_>>();
+        let variable = parts.get(1).copied().unwrap_or("");
+        if matches!(
+            variable,
+            "UWUBOT_PROVIDER" | "UWUBOT_MODEL" | "CTHUWU_RPC_ENDPOINT"
+        ) {
+            bail!(
+                "this runtime setting needs its supported set/get adapter; named backup slots are for model credentials and TOOL_* values"
+            );
+        }
+        if variable == "VENICE_API_KEY" && matches!(parts[0], "set" | "add") {
+            let key = if parts[0] == "set" {
+                arguments.splitn(3, ' ').nth(2).unwrap_or("")
+            } else {
+                parts.get(3).copied().unwrap_or("")
+            };
+            let mut settings = self.settings.clone();
+            settings.venice_api_key = Some(validate_venice_key(key)?);
+            let selection = self
+                .state
+                .read()
+                .map_err(|_| anyhow::anyhow!("inference lock"))?
+                .selection
+                .clone();
+            let model = build_one_model(&settings, Provider::Venice, &selection.venice_model)?
+                .context("Venice model unavailable")?;
+            model
+                .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Operator)?)
+                .await
+                .context("credential validation failed; existing keys were preserved")?;
+            if !self.environment.contains(variable) {
+                let primary = self
+                    .state
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("inference lock"))?
+                    .venice_api_key
+                    .clone();
+                if let Some(key) = primary {
+                    self.environment
+                        .command(&format!("set VENICE_API_KEY {key}"))?;
+                }
+            }
+        }
+        if variable == "VENICE_API_KEY" && parts[0] == "unset" {
+            self.clear_venice_key()?;
+        }
+        let response = self.environment.command(&arguments)?;
+        if let Ok(mut state) = self.state.write() {
+            state.unhealthy_until.clear();
+        }
+        Ok(ControlReply {
+            response,
+            changed: false,
+        })
+    }
+
     fn venice_key_configured(&self) -> Result<bool> {
+        if self.environment.contains("VENICE_API_KEY") {
+            return self.environment.configured("VENICE_API_KEY");
+        }
         Ok(self
             .state
             .read()
@@ -709,7 +918,9 @@ impl ModelControl for InferenceRouter {
             .state
             .write()
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
-        if state.venice_api_key.is_some() && !allow_replace {
+        if (state.venice_api_key.is_some() || self.environment.contains("VENICE_API_KEY"))
+            && !allow_replace
+        {
             return Ok(ControlReply {
                 response: "a Venice key is already loaded, fwiend. only an active operator may replace it."
                     .to_owned(),
@@ -720,6 +931,10 @@ impl ModelControl for InferenceRouter {
         settings.venice_api_key = Some(key.clone());
         let model = build_one_model(&settings, Provider::Venice, &state.selection.venice_model)?
             .context("a Venice credential did not produce a configured Venice model")?;
+        if self.environment.contains("VENICE_API_KEY") {
+            self.environment
+                .command(&format!("set VENICE_API_KEY {key}"))?;
+        }
         self.store.save_venice_key(&key)?;
         let mut next = state.selection.clone();
         next.provider = Provider::Venice;
@@ -792,14 +1007,29 @@ impl ModelControl for InferenceRouter {
         name: &str,
         custom_prompt: Option<&str>,
     ) -> Result<String> {
-        let venice_key = {
+        let venice_key = if self.environment.contains("VENICE_API_KEY") {
+            self.environment
+                .candidates("VENICE_API_KEY")?
+                .first()
+                .map(|entry| entry.value.clone())
+        } else {
             let state = self
                 .state
                 .read()
                 .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
             state.venice_api_key.clone()
         };
-        let openai_key = self.settings.openai_api_key.clone();
+        let openai_key =
+            if self.settings.openai_endpoint.trim_end_matches('/') != "https://api.openai.com/v1" {
+                None // A credential for a compatible endpoint must never be sent to a different service.
+            } else if self.environment.contains("UWUBOT_MODEL_API_KEY") {
+                self.environment
+                    .candidates("UWUBOT_MODEL_API_KEY")?
+                    .first()
+                    .map(|entry| entry.value.clone())
+            } else {
+                self.settings.openai_api_key.clone()
+            };
         let prompt = crate::image_gen::build_tentacle_avatar_prompt(seed, name, custom_prompt);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(
@@ -812,7 +1042,7 @@ impl ModelControl for InferenceRouter {
             crate::image_gen::generate_avatar_with_openai(&client, key, &prompt, None).await?
         } else {
             bail!(
-                "NO IMAGE GENERATION KEY IS LOADED. PLEASE SEND `/venice-key <api-key>` FIRST, OPERATOR."
+                "NO COMPATIBLE IMAGE GENERATION KEY IS LOADED. CHECK `/env list` AND CONFIGURE AN IMAGE-CAPABLE KEY, OPERATOR."
             );
         };
         let _ = crate::avatar::save_custom_avatar(&self.store.state_dir, &png_bytes)?;
@@ -871,7 +1101,11 @@ impl InferenceRouter {
         if available < MIN_PROVIDER_ATTEMPT {
             return Ok(None);
         }
-        let attempt_budget = available.min(provider_limit);
+        let compatible_backups = remaining_candidates
+            .iter()
+            .filter(|other| other.provider == candidate.provider && other.credential.is_some())
+            .count();
+        let attempt_budget = (available / (compatible_backups as u32 + 1)).min(provider_limit);
         Ok(Some((
             deadline.capped(attempt_budget)?,
             attempt_budget,
@@ -1039,6 +1273,10 @@ impl InferenceRouter {
                         remaining_ms = deadline.remaining().as_millis(),
                         "inference provider failed; trying the next local-safe fallback"
                     );
+                    if let Some((variable, slot)) = &candidate.credential {
+                        self.environment
+                            .failed(variable, slot, credential_failure(&error));
+                    }
                     self.record_failure(
                         candidate.provider,
                         InferenceLane::Public,
@@ -1103,8 +1341,9 @@ impl OperatorModel for InferenceRouter {
                     }
                 }
                 CandidateModel::Deterministic => Ok(RawAssistantMessage {
+                    runtime_fallback: true,
                     content: Some(
-                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE. SEND `/venice-key <api-key>` TO LOAD A VENICE KEY, OR USE `/exec` / DIRECT COMMANDS."
+                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE. CHECK `/env list`, CONFIGURE `/env set UWUBOT_PROVIDER <provider>`, OR USE `/exec` / DIRECT COMMANDS."
                             .to_owned(),
                     ),
                     tool_calls: Vec::new(),
@@ -1138,6 +1377,10 @@ impl OperatorModel for InferenceRouter {
                         remaining_ms = deadline.remaining().as_millis(),
                         "operator inference provider failed; trying the next local-safe fallback"
                     );
+                    if let Some((variable, slot)) = &candidate.credential {
+                        self.environment
+                            .failed(variable, slot, credential_failure(&error));
+                    }
                     self.record_failure(
                         candidate.provider,
                         InferenceLane::Operator,
@@ -1152,6 +1395,24 @@ impl OperatorModel for InferenceRouter {
 
     fn implementation_name(&self) -> &str {
         "runtime-selectable inference router"
+    }
+
+    fn session_scope(&self) -> String {
+        self.state
+            .read()
+            .map(|state| {
+                format!(
+                    "{}:{}:{}:{}",
+                    state.selection.provider.as_str(),
+                    state
+                        .selection
+                        .model(state.selection.provider)
+                        .unwrap_or("built-in"),
+                    self.settings.openai_endpoint,
+                    self.settings.ollama_endpoint
+                )
+            })
+            .unwrap_or_else(|_| "unavailable".into())
     }
 
     fn implementation_description(&self) -> String {
@@ -1318,6 +1579,131 @@ mod tests {
             openai_model: "gpt-5-mini".to_owned(),
             web_search: None,
         }
+    }
+
+    #[test]
+    fn credential_candidates_keep_the_selected_provider_and_skip_failed_slots() {
+        let root = tempfile::tempdir().unwrap();
+        let router = InferenceRouter::new(config(root.path())).unwrap();
+        router
+            .environment
+            .command("set VENICE_API_KEY primary-secret")
+            .unwrap();
+        router
+            .environment
+            .command("add VENICE_API_KEY backup backup-secret")
+            .unwrap();
+        let candidates = router.candidates(InferenceLane::Operator).unwrap();
+        assert_eq!(candidates[0].credential.as_ref().unwrap().1, "primary");
+        assert_eq!(candidates[1].credential.as_ref().unwrap().1, "backup");
+        router.environment.failed(
+            "VENICE_API_KEY",
+            "primary",
+            crate::environment::CredentialFailure::Transient,
+        );
+        let candidates = router.candidates(InferenceLane::Operator).unwrap();
+        assert_eq!(candidates[0].credential.as_ref().unwrap().1, "backup");
+        assert_eq!(candidates[0].provider, Provider::Venice);
+        router.switch_provider(Provider::Ollama).unwrap();
+        assert!(
+            router
+                .candidates(InferenceLane::Operator)
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate.credential.is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_primary_fails_over_to_a_compatible_backup_and_stays_redacted() {
+        let root = tempfile::tempdir().unwrap();
+        let (endpoint, requests, server) = http_server_with(2, |index, _| {
+            if index == 0 {
+                ("401 Unauthorized", "{}".into())
+            } else {
+                (
+                    "200 OK",
+                    r#"{"choices":[{"message":{"content":"The backup completed this request."}}]}"#
+                        .into(),
+                )
+            }
+        });
+        let mut settings = config(root.path());
+        settings.openai_endpoint = endpoint;
+        settings.startup_provider = Some(Provider::Openai);
+        let router = InferenceRouter::new(settings).unwrap();
+        router
+            .environment
+            .command("set UWUBOT_MODEL_API_KEY failed-key")
+            .unwrap();
+        router
+            .environment
+            .command("add UWUBOT_MODEL_API_KEY backup working-key")
+            .unwrap();
+        let reply = OperatorModel::complete(
+            &router,
+            &[serde_json::json!({"role":"user","content":"test request"})],
+            &[],
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert!(!reply.runtime_fallback);
+        assert!(reply.content.unwrap().contains("backup completed"));
+        let requests = requests.lock().unwrap();
+        assert!(requests[0].contains("Bearer failed-key"));
+        assert!(requests[1].contains("Bearer working-key"));
+        let status = router.environment.command("list").unwrap();
+        assert!(status.contains("credential rejected"));
+        assert!(!status.contains("failed-key") && !status.contains("working-key"));
+        assert_eq!(
+            router
+                .environment
+                .candidates("UWUBOT_MODEL_API_KEY")
+                .unwrap()[0]
+                .name,
+            "backup"
+        );
+        router
+            .environment
+            .command("unset UWUBOT_MODEL_API_KEY")
+            .unwrap();
+        assert!(
+            router
+                .candidates(InferenceLane::Operator)
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate.provider != Provider::Openai)
+        );
+    }
+
+    #[test]
+    fn legacy_key_pool_migration_and_alias_normalization_preserve_values() {
+        let root = tempfile::tempdir().unwrap();
+        let router = InferenceRouter::new(config(root.path())).unwrap();
+        router
+            .environment
+            .command("set VENICE_API_KEY pool-key")
+            .unwrap();
+        assert!(
+            !router
+                .venice_key_command("public-replacement", false)
+                .unwrap()
+                .changed
+        );
+        router
+            .venice_key_command("operator-replacement", true)
+            .unwrap();
+        assert_eq!(
+            router.environment.candidates("VENICE_API_KEY").unwrap()[0].value,
+            "operator-replacement"
+        );
+        assert_eq!(
+            normalize_environment_arguments(
+                "set UWUBOT_VENICE_API_KEY value-UWUBOT_VENICE_API_KEY"
+            ),
+            "set VENICE_API_KEY value-UWUBOT_VENICE_API_KEY"
+        );
     }
 
     #[test]

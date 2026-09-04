@@ -73,6 +73,16 @@ function bootstrap(): void {
     // URL fragments stay in the browser and are never included in the HTTP request.
     const link = parseOnboardingLink(location.hash);
     const referrer = pinReferrer(environment, identity.address, link.referrer);
+    if (link.tentacle || referrer) {
+      const welcome = document.createElement("section");
+      welcome.className = "operator-referral";
+      welcome.setAttribute("aria-label", "Your invitation");
+      const title = document.createElement("strong"); title.textContent = "Welcome — meet your Tentacle";
+      const message = document.createElement("p");
+      message.textContent = `This invitation${referrer ? ` names referrer ${referrer}` : ""}. We'll verify the requested Tentacle before connecting. If you already have an active Branding, your existing assignment takes precedence. Start with a goal or something you'd like help with; your referral is kept through setup.`;
+      welcome.append(title, message);
+      document.getElementById("chat")?.before(welcome);
+    }
     chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer }, identity);
   } catch (error) {
     fatalIdentity(error);

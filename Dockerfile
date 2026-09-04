@@ -8,19 +8,20 @@ COPY agent/tsconfig.json agent/tsconfig.build.json ./
 COPY agent/src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM rust:1.97-bookworm AS rust-build
+FROM rust:1.98-bookworm AS rust-build
 WORKDIR /build/cthuwu
 COPY repository-maintenance.json /build/repository-maintenance.json
 COPY cthuwu/Cargo.toml cthuwu/Cargo.lock ./
 COPY cthuwu/crates ./crates
 COPY cthuwu/agent-files ./agent-files
+COPY scripts/workspace.py /build/scripts/workspace.py
 COPY cthuwu/src ./src
 RUN cargo build --package cthuwu --locked --release
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /data
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ripgrep \
+    && apt-get install -y --no-install-recommends ripgrep python3 git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/cthuwu/agent /data /workspace \
     && chown -R node:node /opt/cthuwu /data /workspace

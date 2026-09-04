@@ -32,32 +32,39 @@
 
       <section class="operator-heading" aria-labelledby="operator-title">
         <div>
-          <p class="eyebrow">privileged only after local authorization</p>
+          <p class="eyebrow">your agents, one inbox</p>
           <h1 id="operator-title">Operator console</h1>
           <p>
-            A direct-only XMTP route to one explicit Tentacle wallet. This page cannot grant a role:
-            the Tentacle’s local full-inbox ACL and message timestamp remain the only authority.
+            Manage your Tentacles, review their work, and share an invite.
+            Each Tentacle checks your operator access.
           </p>
         </div>
         <aside class="operator-danger" role="note">
-          <strong>Remote-code-execution boundary</strong>
+          <strong>Operator access</strong>
           <span>An authorized operator inbox can run commands as the OS account hosting the Tentacle. Use an isolated, unprivileged service account.</span>
         </aside>
       </section>
 
       <section class="operator-grid">
         <aside class="operator-setup" aria-labelledby="operator-setup-title">
-          <h2 id="operator-setup-title">Bind this Acolyte</h2>
-          <p>
-            This page reuses the same Acolyte EOA and XMTP inbox as <a href="/">Chat</a>.
-            Operators using another XMTP client do not need to be Cthuwu Acolytes.
-          </p>
+          <h2 id="operator-setup-title">Your Tentacles</h2>
+          <p>Select a conversation or add a Tentacle below. New messages appear here as they arrive.</p>
+          <div id="operator-threads" class="operator-threads" aria-label="Tentacle conversations"></div>
+          <form id="operator-label-form" hidden>
+            <label for="operator-label">Name this Tentacle</label>
+            <input id="operator-label" maxlength="80" />
+            <button type="submit">save name</button>
+          </form>
           <form id="operator-target-form">
             <label for="operator-target">Tentacle wallet address</label>
             <input id="operator-target" name="tentacle" autocomplete="off" spellcheck="false" placeholder="0x…" required />
             <button type="submit">open direct route</button>
           </form>
           <p id="operator-target-status" class="status" role="status" aria-live="polite"></p>
+          <details class="operator-settings">
+          <summary>Your identity and node setup</summary>
+          <div class="operator-settings-content">
+          <p>This page uses the same identity as <a href="/">Chat</a>.</p>
           <dl class="operator-facts">
             <div><dt>Acolyte name</dt><dd id="operator-name">not loaded</dd></div>
             <div><dt>Acolyte public EOA</dt><dd id="operator-address">not loaded</dd></div>
@@ -94,12 +101,21 @@
           <p class="operator-fine-print">
             Both commands contain only the public EOA; the private key stays in this browser.
             Branding assignment is independent: an Acolyte claimed by one Tentacle may operate and
-            directly message another. This page sends no role claim, Branding lookup, rotation
-            request, group join, or automatic command.
+            directly message another. Opening a conversation grants no role. Each Tentacle verifies your operator authority independently.
           </p>
+          </div>
+          </details>
         </aside>
 
         <section id="chat" class="chat operator-direct-only" data-state="preparing" aria-label="Direct operator DM" hidden>
+          <section id="operator-referral" class="operator-referral" hidden>
+            <strong>Invite an acolyte to this Tentacle</strong>
+            <label for="operator-referral-link">Your referral link</label>
+            <input id="operator-referral-link" readonly aria-label="Referral link" />
+            <button id="operator-copy-referral" type="button">copy referral link</button>
+            <button id="operator-share-referral" type="button">share</button>
+            <p id="operator-referral-status" class="status" role="status"></p>
+          </section>
           <header class="chat-header">
             <div class="presence">
               <span class="presence-dot" aria-hidden="true"><span></span></span>

@@ -1,7 +1,9 @@
 # XMTP operator role
 
 This document is for people operating a Cthuwu Tentacle. It describes the intentionally privileged
-XMTP control path implemented by `uwubot`.
+XMTP control path implemented by `uwubot`. For the new Markdown workspace, background jobs,
+coaching, multi-Tentacle inbox, referrals, transfers, and `/env` commands, start with
+[the agent workspace guide](agent-workspace.md).
 
 > [!DANGER]
 > An active operator inbox can execute shell commands remotely as the OS account running `uwubot`.
@@ -20,7 +22,7 @@ The official Agent SDK decodes an incoming XMTP DM and supplies its authenticate
 `senderInboxId`. The Node sidecar forwards that value through a strict, role-blind JSONL frame. It
 cannot send a `role` field. Rust validates the metadata and classifies the full inbox ID before
 interpreting or dispatching message text, parsing any command, calling a model, or opening contact
-state. The role snapshot stays pinned while the request runs. An authenticated `sentAtNs` at or
+state. The admitted role is pinned, and active operator work rechecks the current authorization epoch before continuing after a transfer. An authenticated `sentAtNs` at or
 before that inbox's local authorization boundary is never granted active authority, even if
 delivered later.
 
@@ -54,7 +56,8 @@ operator is rejected. The console reports `Tentacle has imprinted on 0x...` afte
 
 ### Browser operator console
 
-`https://cthuwu.app/operator/#t=<tentacle-wallet>` is a separate direct-only XMTP console. It uses
+`https://cthuwu.app/operator/` is a separate direct-only XMTP console for multiple Tentacles.
+An optional `#t=<tentacle-wallet>` selects one conversation; incoming inactive/new DMs also appear. It uses
 the same local Acolyte EOA and XMTP inbox as public Chat. Operators using another XMTP client need
 not be Acolytes. The console does not consult Branding, rotate to another Tentacle, request group
 membership, send a role claim, or execute a command automatically. That deliberate separation lets
@@ -102,7 +105,8 @@ leaves a tombstone and never enables another automatic first-contact imprint.
 ### Offline management
 
 Use the same `UWUBOT_DATA_DIR` and XMTP environment as the Tentacle. The deployed website uses XMTP
-`production`. Operator ACL state is loaded at process start and is not hot-reloaded. Stop the
+`production`. Local CLI ACL edits are loaded at process start and are not hot-reloaded. The confirmed DM
+`/operator-switch` command updates the running shared ACL directly. Stop the
 Tentacle before changing it; the safe launcher also prevents concurrent mutation of a running data
 directory. Its intro node normally uses:
 
@@ -186,8 +190,8 @@ The operator prompt requires Cthuwu to:
 - expose `exec` throughout the authenticated operator lane so the model can choose and iterate the
   commands needed for the current request inside its isolated environment; and
 - expose create-only `create_skill` only when the current authenticated message explicitly asks for a
-  new reusable skill. General file mutation and every contact schema remain absent from model
-  inference.
+  new reusable skill. The Bash workspace CLI additionally supports skill refinement and retirement
+  during authorized work. Contact schemas remain absent from model inference.
 
 Direct commands produce structured receipts without relying on model judgment. Model-generated prose
 can still be mistaken; for high-impact work, inspect the receipt/output and verify resulting state.
@@ -230,10 +234,11 @@ agent state and contacts are outside the workspace and cannot be reached through
 This Markdown can shape personality and working conventions, but cannot change Rust's immutable
 authorization, lane isolation, path bounds, or tool-truth rules. Contact notes are not bulk-injected,
 and raw public DMs are not copied into instance memory. Ordinary-language dialogue keeps at most six
-recent user/assistant exchanges and 32 KiB in process, separately for each operator inbox. It is
-cleared on restart and is not a persistent transcript. Protected Markdown is edited deliberately on the host;
-this release does not provide a chat-driven persistent-memory mutation tool. Skill creation is a
-separate create-only workspace capability and cannot write those protected notes.
+recent user/assistant exchanges and 32 KiB, persisted privately with tool receipts for each operator
+inbox and model route. Restart retains those receipts; changing provider/model clears them.
+Background tasks pause after interruption. Protected Markdown is edited deliberately on the host.
+Workspace skills can be learned/refined/retired with the CLI; the legacy typed create helper remains
+create-only and cannot write protected notes. See the agent workspace guide for scoped coaching memory.
 
 ## Direct commands
 
@@ -241,6 +246,10 @@ An active operator can send:
 
 ```text
 /help
+/env list
+/task list
+/referrals weekly
+/operator-switch <address-or-ENS>
 /exec <shell command>
 /repo <typed-json>
 /files [subdirectory]

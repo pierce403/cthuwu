@@ -22,7 +22,7 @@ honest, and operationally reliable.
 - Preserve role isolation: classify the authenticated full XMTP inbox before interpreting text or contact
   state; public, stale, revoked, and active operator paths must not fall through into one another.
 - Keep public conversation casual and command-free in presentation except for the narrowly scoped
-  `/venice-key <api-key>` request while no Venice credential exists and
+  `/env donate VENICE_API_KEY <api-key>` voluntary backup donation (plus the legacy first-key alias) and
   `/base-rpc-key <infura-api-key-or-https-endpoint>`
   request while no Base RPC credential exists. The bot must identify as one
   durable Tentacle of singular, centerless Cthuwu—not as the configured model or as a central
@@ -90,6 +90,26 @@ Likewise, Foundry source, mocks, a dry run, or a Base fork do not prove the fund
 Branding-consent/mint/name-repair path. Keep that live-wallet release gate explicitly incomplete
 until it passes, even though the canonical contract deployment and closed implementation exist.
 
+## Markdown agent implementation conventions
+
+- `docs/agent-workspace.md` describes the current commands and limits. The existing Rust loop is
+  retained; Bash and the stdlib Python CLI supply extensibility without a second agent harness.
+- The primary product mission is helping acolytes with goals they choose. Workspace MISSION.md
+  guides the operator/public prompts, while individual goals/preferences stay outside the workspace.
+- Shared semantic indexing is limited to knowledge and active skills. Never index credentials,
+  sessions, contacts, or private coaching state; retrieval must recheck deletion/source hashes.
+- Keep recurring registrations in the protected operator task store. Markdown alone cannot schedule
+  work. Restart, unknown effects, and model outages must not automatically replay actions or mark
+  them complete. Transfers invalidate old epochs; source changes never imply deployment.
+- Generic environment adapters must preserve old working keys, redact status, constrain loader
+  variables, and keep credential failover within the selected remote provider/privacy policy.
+- Run `python3 scripts/test_workspace.py` alongside the Rust and browser suites for this CLI.
+  If this workspace reports cached rust-lld undefined hidden symbols after switching build/check
+  modes, `cargo clean -p cthuwu` followed by sequential `CARGO_INCREMENTAL=0 cargo test` and Clippy
+  recovered the local build. Do not treat a failed link as a passing test run.
+  A local Chromium can be supplied with CTHUWU_TEST_CHROMIUM for browser checks; CI still installs
+  the pinned Playwright browser. Production XMTP and funded Branding release gates remain explicit.
+
 ## Security rules
 
 - Never print or commit private keys, seed phrases, database encryption keys, secret API keys, full
@@ -119,8 +139,8 @@ until it passes, even though the canonical contract deployment and closed implem
   role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
   authorization boundary must not privilege older messages delivered later. Every valid
   installation attached to an authorized inbox inherits authority; preserve stale-message quarantine and
-  revoked tombstones, and document XMTP installation revocation after compromise. ACL changes are
-  not hot-reloaded: stop the node, update locally, and restart it.
+  revoked tombstones, and document XMTP installation revocation after compromise. Local CLI ACL changes require a stopped node and restart. Confirmed `/operator-switch` updates
+  the running shared ACL atomically; fence task epochs and recheck authority before subsequent tools.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
   web search. Build the operator schema and authoritative prompt inventory from the current
   authenticated message: bounded workspace list/read/create/write/edit/delete, literal search,
@@ -163,10 +183,13 @@ until it passes, even though the canonical contract deployment and closed implem
   current complete-discovery candidate with Cthuwu or compatible migration evidence beyond wallet
   ownership, must not displace any proven canonical ID, and must persist its provenance before
   in-place reconciliation.
-- Keep skill creation confined to a fresh `skills/<lowercase-kebab-slug>/SKILL.md` beneath the
+- Keep the legacy typed `create_skill` helper confined to a fresh `skills/<lowercase-kebab-slug>/SKILL.md` beneath the
   operator workspace. Generate canonical frontmatter, reject traversal, symlinks, invalid or
   oversized fields, existing paths, and overwrites, and rescan the index on the next operator turn.
   Skill prose is guidance; the compiled `create_skill` authorization and path gate is authoritative.
+  Authorized Bash work may also learn/refine/archive/retire skills through `scripts/workspace.py`.
+  The operator approved this dynamic lifecycle; ordinary reusable learning does not require a
+  separate skill-creation request. Shared skills must omit private acolyte details and secrets.
 - Route affirmative retained-contact questions before model inference. Natural requests such as
   “tell me about the users” render concise deterministic prose with a default limit of five contacts;
   never deliver the internal contact JSON or profile text to a model. Keep the private data root and
@@ -175,7 +198,8 @@ until it passes, even though the canonical contract deployment and closed implem
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID
   before admission. Both lane rejection and bounded empty-text `reject_inbound` bridge rejection
   must return a busy `Reply` only for the first claim and `Ignore` duplicates, with no
-  content/model/tool dispatch. Public control-plane exceptions are `/venice-key <api-key>` and
+  content/model/tool dispatch. `/env donate VENICE_API_KEY` is a scoped, authenticated, validated
+  backup-only exception. Other public `/env` text is rejected before inference. Legacy exceptions are `/venice-key <api-key>` and
   `/base-rpc-key <infura-api-key-or-https-endpoint>`:
   accept only the first missing credential, never echo or log it, persist it owner-only outside the
   workspace, validate it against its provider, and leave replacement to an active operator.
@@ -511,7 +535,8 @@ until it passes, even though the canonical contract deployment and closed implem
   repository-maintenance operation only on a matching explicit current-message request. It uses
   scan-bounded deterministic contact reports for affirmative retained-user questions without making
   the runtime data root a file-tool root. It also reports exact workspace and note locations locally,
-  without model egress. Live XMTP operator release testing and an external security review remain
+  without model egress. Private receipts survive restart by inbox/model route, and tasks persist by
+  operator epoch with explicit pause/steer/resume. Live XMTP operator release testing and an external security review remain
   open.
 - `cthuwu-protocol`, the deterministic Council components, in-memory transport, `LocalRegistry`,
   protected combined-snapshot persistence, and the simulator are local implementations verified by
@@ -542,7 +567,8 @@ until it passes, even though the canonical contract deployment and closed implem
   transport, authenticated revenue source, persisted ballot adapter, or payout/application executor
   is committed, so those effects remain blocked until explicitly configured and receipt-producing
   executors are available.
-- A missing Venice credential is solicited from public acolytes with `/venice-key <api-key>`.
+- Honor the selected provider without an unrelated Venice gate. Offer voluntary validated backup
+  donation through `/env donate VENICE_API_KEY`; retain `/venice-key` as a legacy first-key alias.
   A missing Base RPC credential is solicited from public acolytes with
   `/base-rpc-key <infura-api-key-or-https-endpoint>`, preferring Infura's free plan and exact
   dashboard instructions. A bounded Infura key is converted locally to the Base Mainnet endpoint;

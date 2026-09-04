@@ -238,3 +238,28 @@ test("serves an installable manifest, narrowly scoped worker, and cached offline
     await context.setOffline(false);
   }
 });
+
+test("operator setup and populated layout fit mobile and desktop without horizontal overflow", async ({ page }, testInfo) => {
+  await page.route(/^https:\/\//u, route => route.abort("blockedbyclient"));
+  await page.goto("/operator/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Operator console" })).toBeVisible();
+  await expect(page.getByLabel("Tentacle wallet address")).toBeVisible();
+  // Layout fixture only: transport routing and interactive state have separate component tests.
+  await page.evaluate(() => {
+    const route = document.querySelector(".operator-route")!; route.classList.add("is-console-active");
+    document.querySelector<HTMLElement>("#chat")!.hidden = false;
+    document.querySelector<HTMLElement>("#operator-referral")!.hidden = false;
+    const link = document.querySelector<HTMLInputElement>("#operator-referral-link")!;
+    link.value = `https://cthuwu.app/#t=0x${"1".repeat(40)}&r=0x${"2".repeat(40)}`;
+    document.querySelector("#operator-threads")!.replaceChildren(...["Morning companion", "Research Tentacle · 2 unread"].map(name => {
+      const button = document.createElement("button"); button.className = "operator-thread"; button.textContent = name; return button;
+    }));
+    document.querySelector("#messages")!.replaceChildren(...["Your upstream task is ready for review.", "The routine looks manageable. Let's start with ten minutes."].map(text => {
+      const article = document.createElement("article"); article.className = "message bot-message";
+      article.textContent = text; return article;
+    }));
+  });
+  await expect(page.getByRole("button", { name: "copy referral link", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("operator-layout.png"), fullPage: true });
+});

@@ -171,7 +171,7 @@ export async function ensureXmtpIdentityRegistration(
   }
 }
 
-async function openRegisteredClient(
+export async function openRegisteredClient(
   config: AppConfig,
   identity: StoredIdentity,
 ): Promise<{ client: XmtpClient; releaseDatabaseLease: () => Promise<void> }> {
@@ -1699,7 +1699,7 @@ function candidateFromVerified(
   };
 }
 
-async function verifyPeerInboxState(
+export async function verifyPeerInboxState(
   client: XmtpClient,
   inboxId: string,
   expectedWallet: string,
