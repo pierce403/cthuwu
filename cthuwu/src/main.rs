@@ -10,6 +10,7 @@ mod config;
 mod contact;
 mod deadline;
 mod dedupe;
+mod doctor;
 pub mod economics;
 mod environment;
 mod erc8004;

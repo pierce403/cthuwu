@@ -16,6 +16,14 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
+## Model-independent operator diagnostics
+
+- [x] `/doctor [check|fix]` bypasses inference; default repair is limited to verified credential/provider cooldowns and missing workspace-local directories.
+- [x] Probe the selected route and local fallback separately with synthetic input and a tool schema; fresh Venice catalog/TEE checks use the actual active credential pool.
+- [x] Explain that configured credentials are presence only; redact provider errors and distinguish access, credit, capacity, network, model and attestation failures.
+- [x] Preserve disabled/replaced credentials and changed routes; check mode does not repair. Report workspace tools/source presence and cached integration status with explicit limits.
+- [ ] Exercise `/doctor` on the deployed operator's exact Venice model/key and verify the next conversational response after repair; mock-provider tests do not establish live account health.
+
 ## Markdown agents and operator-led coaching
 
 Implementation was authorized by the operator and is now **in progress / pending live release

@@ -2,6 +2,11 @@
 
 Last reviewed: 2026-09-05
 
+- `/env list` credential presence does not establish inference health. `/doctor [check|fix]`
+  bypasses the model, probes the selected route separately from Ollama, and clears only verified
+  current cooldowns. Venice validation must use the environment override pool when present, not
+  a stale startup credential. A mock probe cannot establish a deployed account's health.
+
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
   Agent0 discovery plus same-block canonical ERC-8004 and XMTP endpoint verification; an existing

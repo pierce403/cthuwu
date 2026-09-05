@@ -137,6 +137,9 @@ pub struct ControlReply {
 
 #[async_trait]
 pub trait ModelControl: Send + Sync {
+    async fn doctor(&self, _repair: bool) -> Result<String> {
+        Ok("INFERENCE: diagnostic adapter unavailable in this runtime.".into())
+    }
     async fn donate_venice_key(&self, _inbox: &str, _key: &str) -> Result<String> {
         bail!("backup credential donation unavailable")
     }
@@ -491,6 +494,20 @@ impl OperatorHarness {
             return Ok("YOUR MESSAGE EXCEEDS THE OPERATOR INPUT LIMIT. EVEN I HAVE BOUNDARIES, APPARENTLY."
                 .to_owned());
         }
+        if [
+            "is your venice cred working",
+            "is your venice credential working",
+            "is your venice key working",
+        ]
+        .contains(
+            &text
+                .trim()
+                .trim_end_matches('?')
+                .to_ascii_lowercase()
+                .as_str(),
+        ) {
+            return self.run_direct_command("doctor", "check").await;
+        }
         if let Some((name, arguments)) = direct_command(text) {
             return match self.run_direct_command(name, arguments).await {
                 Ok(response) => Ok(response),
@@ -539,7 +556,7 @@ impl OperatorHarness {
             .join(",");
 
         let mut runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh,erc8004_republish expose sanitized state only; endpoints, API keys, and private keys remain secret\nOPERATOR_SHELL_CAPABILITY=exec is always available in this authenticated operator lane; choose and run the shell commands needed for the current request, inspect receipts, and iterate within runtime limits\nCONDITIONAL_MODEL_CAPABILITIES=create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/env,/task,/update,/operator,/operator-switch,/referrals,/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/growth,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh,erc8004_republish expose sanitized state only; endpoints, API keys, and private keys remain secret\nOPERATOR_SHELL_CAPABILITY=exec is always available in this authenticated operator lane; choose and run the shell commands needed for the current request, inspect receipts, and iterate within runtime limits\nCONDITIONAL_MODEL_CAPABILITIES=create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/doctor,/env,/task,/update,/operator,/operator-switch,/referrals,/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/growth,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -924,6 +941,44 @@ impl OperatorHarness {
     }
 
     async fn run_direct_command(&self, name: &str, arguments: &str) -> Result<String> {
+        if name == "doctor" {
+            let repair = match arguments.trim() {
+                "" | "fix" => true,
+                "check" => false,
+                _ => bail!("usage: /doctor [check|fix]"),
+            };
+            let local = crate::doctor::workspace(self.context.workspace_root(), repair);
+            let inference = match &self.model_control {
+                Some(control) => control.doctor(repair).await.unwrap_or_else(|_| {
+                    "INFERENCE: diagnostic could not complete; no successful repair claimed.".into()
+                }),
+                None => "INFERENCE: runtime control is unavailable.".into(),
+            };
+            let mut integrations = Vec::new();
+            for name in ["base_rpc_status", "erc8004_status"] {
+                let status = match timeout(
+                    Duration::from_secs(5),
+                    self.execute_model_tool(name, "{}"),
+                )
+                .await
+                {
+                    Ok(receipt) if receipt.ok => receipt.output,
+                    _ => "unavailable; inspect runtime configuration".into(),
+                };
+                integrations.push(format!(
+                    "{name} (configuration/cached status, not a live chain probe): {status}"
+                ));
+            }
+            let integrations = integrations.join("\n");
+            return Ok(format!(
+                "DOCTOR — {}\nStored credentials are not proof of working inference. Probes use a synthetic message, never conversation history.\n\n{inference}\n\n{local}\n\n{integrations}\n\nXMTP: this request reached the authenticated operator dispatcher; full delivery and device health require a live round trip.\nRepairs are limited to verified cooldown recovery and missing workspace directories. Keys, models, privacy policy, identity, source and system packages are preserved.",
+                if repair {
+                    "CHECK AND SAFE REPAIR"
+                } else {
+                    "CHECK ONLY"
+                }
+            ));
+        }
         if name == "help" {
             return Ok(operator_help());
         }
@@ -1226,6 +1281,7 @@ fn operator_help() -> String {
         "`/env set NAME value`, `/env add NAME slot value`, `/env list|get|unset|remove|enable|disable` — REDACTED CONFIGURATION AND BACKUP KEYS. USE VENICE_API_KEY, UWUBOT_MODEL_API_KEY, UWUBOT_PROVIDER, UWUBOT_MODEL, CTHUWU_RPC_ENDPOINT, OR TOOL_*.",
         "`/operator <address-or-ENS>` — VERIFY AN EXISTING XMTP INBOX AND PREPARE TRANSFER; `/operator confirm <token>` RECHECKS ITS BINDING AND CHANGES THE OPERATOR. `/operator-switch` REMAINS AN ALIAS.",
         "`/update [requested functionality or commit]` — REVIEW THE PRIME TENTACLE, ADOPT USEFUL UPDATES, AND PREPARE A LOCAL RELEASE; REPORTS DIVERGENCE AND RESTART REQUIREMENTS.",
+        "`/doctor [check|fix]` — DIRECT MODEL-INDEPENDENT DIAGNOSTICS; DEFAULT SAFELY REPAIRS VERIFIED COOLDOWNS AND MISSING WORKSPACE DIRECTORIES.",
         "`/task run <request>` — START DURABLE BACKGROUND WORK; `/task add <seconds> <request>` REPEATS IT. `/task list|pause|resume|remove` MANAGES WORK; `/task steer <id> <request>` UPDATES IT.",
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
         "`/model [list|<model-id>]` — SHOW CONFIGURED MODEL SLOTS OR SWITCH THE SELECTED PROVIDER'S MODEL.",
@@ -4404,6 +4460,29 @@ mod tests {
             fake,
             AgentContext::new(root, root).unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn doctor_and_credential_question_work_without_model_control() {
+        let root = tempfile::tempdir().unwrap();
+        let harness = harness(
+            root.path(),
+            Arc::new(FakeTools {
+                calls: Mutex::new(Vec::new()),
+            }),
+        );
+        for input in ["/doctor check", "is your venice cred working?"] {
+            let report = harness.respond(TEST_OPERATOR_ID, input).await.unwrap();
+            assert!(report.contains("DOCTOR"), "{report}");
+            assert!(report.contains("CHECK ONLY"), "{report}");
+            assert!(!report.contains("DETERMINISTIC LOCAL VOICE"));
+        }
+        assert!(
+            harness
+                .run_direct_command("doctor", "anything")
+                .await
+                .is_err()
+        );
     }
 
     struct TransferResolver {

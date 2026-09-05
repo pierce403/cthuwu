@@ -535,7 +535,7 @@ impl InferenceRouter {
             .unwrap_or("NOT USED YET");
         let last_failure = state.last_failure.map(Provider::as_str).unwrap_or("NONE");
         Ok(format!(
-            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nVENICE PRIVACY MODE: TEE-ONLY WITH BASELINE NONCE ATTESTATION; FULL E2EE: NO\nVENICE DEADLINE POLICY: PUBLIC CHAT <= {}S; OPERATOR <= {}S; BOTH ARE CLAMPED TO THE REMAINING AUTHENTICATED DEADLINE\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT WITH EXPLICIT TIME RESERVED BEFORE REMOTE INFERENCE\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
+            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nCREDENTIAL STATUS IS PRESENCE ONLY; RUN /doctor TO TEST INFERENCE.\nVENICE PRIVACY MODE: TEE-ONLY WITH BASELINE NONCE ATTESTATION; FULL E2EE: NO\nVENICE DEADLINE POLICY: PUBLIC CHAT <= {}S; OPERATOR <= {}S; BOTH ARE CLAMPED TO THE REMAINING AUTHENTICATED DEADLINE\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT WITH EXPLICIT TIME RESERVED BEFORE REMOTE INFERENCE\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
             selected.as_str(),
             PUBLIC_REMOTE_ATTEMPT_LIMIT.as_secs(),
             self.settings.venice_timeout.as_secs(),
@@ -737,6 +737,152 @@ fn normalize_environment_arguments(arguments: &str) -> String {
 
 #[async_trait]
 impl ModelControl for InferenceRouter {
+    async fn doctor(&self, repair: bool) -> Result<String> {
+        let (selection, generation, legacy) = {
+            let state = self
+                .state
+                .read()
+                .map_err(|_| anyhow::anyhow!("inference lock"))?;
+            (
+                state.selection.clone(),
+                state.generation,
+                state.venice_api_key.clone(),
+            )
+        };
+        let deadline = InferenceDeadline::current(InferenceLane::Operator)?
+            .capped(Duration::from_secs(150))?;
+        let mut providers = vec![selection.provider];
+        if selection.provider != Provider::Ollama {
+            providers.push(Provider::Ollama);
+        }
+        let mut lines = vec![format!(
+            "INFERENCE: selected `{}`; per-probe 30s, total 150s. Tiny synthetic probes may incur provider usage.",
+            selection.provider.as_str()
+        )];
+        for provider in providers {
+            if provider == Provider::Deterministic {
+                lines.push("INFO: deterministic voice selected; it is not an LLM. Remote providers were not contacted.".into());
+                continue;
+            }
+            let variable = match provider {
+                Provider::Venice => Some("VENICE_API_KEY"),
+                Provider::Openai => Some("UWUBOT_MODEL_API_KEY"),
+                _ => None,
+            };
+            let pooled = variable.is_some_and(|v| self.environment.contains(v));
+            let slots = if let Some(variable) = variable.filter(|_| pooled) {
+                let enabled = self.environment.diagnostic_candidates(variable)?;
+                if enabled.len() > 3 {
+                    lines.push(format!("INFO: {} additional enabled credential slots not tested (three-slot probe budget).", enabled.len()-3));
+                }
+                enabled.into_iter().take(3).map(Some).collect::<Vec<_>>()
+            } else {
+                vec![None]
+            };
+            if slots.is_empty() {
+                lines.push(format!("ACTION: {} has no enabled credential slots; inspect /env list. Disabled slots are preserved.", provider.as_str()));
+            }
+            for slot in slots {
+                if deadline.remaining() <= Duration::from_secs(2) {
+                    lines.push("SKIPPED: remaining probes exceed diagnostic deadline; rerun /doctor check.".into());
+                    break;
+                }
+                let mut settings = self.settings.clone();
+                settings.venice_api_key = legacy.clone();
+                if let Some(entry) = &slot {
+                    if provider == Provider::Venice {
+                        settings.venice_api_key = Some(entry.value.clone());
+                    } else {
+                        settings.openai_api_key = Some(entry.value.clone());
+                    }
+                }
+                let label = format!(
+                    "{} / {} / {}",
+                    provider.as_str(),
+                    selection.model(provider).unwrap_or("built-in"),
+                    slot.as_ref()
+                        .map_or("runtime credential", |entry| entry.name.as_str())
+                );
+                let Some(model) =
+                    build_one_model(&settings, provider, selection.model(provider).unwrap())?
+                else {
+                    lines.push(format!(
+                        "ACTION: {label}: no credential configured. Use /env set {} <key>.",
+                        variable.unwrap_or("NAME")
+                    ));
+                    continue;
+                };
+                let probe = deadline.capped(Duration::from_secs(30))?;
+                let messages = [
+                    serde_json::json!({"role":"user", "content":"Diagnostic probe. Reply briefly with OK. No external actions."}),
+                ];
+                let tools = [
+                    serde_json::json!({"type":"function","function":{"name":"doctor_echo","description":"Diagnostic schema only; no function is executed.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
+                ];
+                let result = timeout(
+                    probe.remaining(),
+                    model.raw_completion_with_deadline(&messages, &tools, 128, 0.1, probe),
+                )
+                .await;
+                let result = match result {
+                    Ok(result) => result.and_then(|response| {
+                        if response
+                            .content
+                            .as_ref()
+                            .is_some_and(|c| !c.trim().is_empty())
+                            || !response.tool_calls.is_empty()
+                        {
+                            Ok(())
+                        } else {
+                            bail!("diagnostic completion contained no output")
+                        }
+                    }),
+                    Err(_) => Err(anyhow::anyhow!("diagnostic timed out")),
+                };
+                match result {
+                    Ok(()) => {
+                        lines.push(format!(
+                            "PASS: {label}: live completion with tool schema succeeded{}.",
+                            if provider == Provider::Venice {
+                                "; fresh TEE checks passed"
+                            } else {
+                                ""
+                            }
+                        ));
+                        if repair {
+                            let mut state = self
+                                .state
+                                .write()
+                                .map_err(|_| anyhow::anyhow!("inference lock"))?;
+                            if state.generation != generation {
+                                lines.push(
+                                    "SKIPPED REPAIR: model route changed during diagnosis.".into(),
+                                );
+                                continue;
+                            }
+                            if let (Some(variable), Some(entry)) = (variable, &slot)
+                                && !self.environment.verified(variable, entry)?
+                            {
+                                lines.push(
+                                    "SKIPPED REPAIR: credential changed during diagnosis.".into(),
+                                );
+                                continue;
+                            }
+                            state.unhealthy_until.retain(|(p, _), _| *p != provider);
+                            lines.push(format!("REPAIRED: {} verified cooldowns cleared; next conversation can retry this route.", provider.as_str()));
+                        }
+                    }
+                    Err(error) => lines.push(format!(
+                        "FAIL: {label}: {}. No successful repair claimed.",
+                        crate::doctor::inference_error(&error)
+                    )),
+                }
+            }
+        }
+        lines.push("No fallback was counted as a successful selected-provider probe. Failed probes do not erase or replace credentials.".into());
+        Ok(lines.join("\n"))
+    }
+
     fn provider_command(&self, arguments: &str) -> Result<ControlReply> {
         let argument = arguments.trim();
         if argument.is_empty()
@@ -968,15 +1114,24 @@ impl ModelControl for InferenceRouter {
     }
 
     async fn validate_venice_key(&self) -> Result<()> {
-        let model = self
-            .state
-            .read()
-            .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?
-            .models
-            .venice
-            .clone()
-            .context("no Venice credential is loaded")?;
-        model
+        let (selection, legacy) = {
+            let state = self
+                .state
+                .read()
+                .map_err(|_| anyhow::anyhow!("inference lock"))?;
+            (state.selection.clone(), state.venice_api_key.clone())
+        };
+        let mut settings = self.settings.clone();
+        settings.venice_api_key = if self.environment.contains("VENICE_API_KEY") {
+            self.environment
+                .candidates("VENICE_API_KEY")?
+                .first()
+                .map(|entry| entry.value.clone())
+        } else {
+            legacy
+        };
+        build_one_model(&settings, Provider::Venice, &selection.venice_model)?
+            .context("no available Venice credential; run /doctor")?
             .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
             .await
     }
@@ -1343,7 +1498,7 @@ impl OperatorModel for InferenceRouter {
                 CandidateModel::Deterministic => Ok(RawAssistantMessage {
                     runtime_fallback: true,
                     content: Some(
-                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE. CHECK `/env list`, CONFIGURE `/env set UWUBOT_PROVIDER <provider>`, OR USE `/exec` / DIRECT COMMANDS."
+                        "HEWWO, OPERATOR. I AM ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, UWU. THE CONFIGURED ORACLES FAILED OR WERE NOT AVAILABLE, SO I FELL BACK TO MY DETERMINISTIC LOCAL VOICE. RUN `/doctor` FOR DIRECT DIAGNOSTICS, CHECK `/env list`, CONFIGURE `/env set UWUBOT_PROVIDER <provider>`, OR USE `/exec` / DIRECT COMMANDS."
                             .to_owned(),
                     ),
                     tool_calls: Vec::new(),
@@ -1578,6 +1733,94 @@ mod tests {
             openai_api_key: None,
             openai_model: "gpt-5-mini".to_owned(),
             web_search: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn doctor_does_not_hide_rejected_venice_behind_healthy_ollama() {
+        let root = tempfile::tempdir().unwrap();
+        let (remote, _, remote_server) =
+            http_server(1, "401 Unauthorized", "secret-provider-detail");
+        let (local, _, local_server) =
+            http_server(1, "200 OK", r#"{"choices":[{"message":{"content":"OK"}}]}"#);
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("private-key".into());
+        settings.ollama_endpoint = local;
+        let mut router = InferenceRouter::new(settings).unwrap();
+        router.set_venice_endpoint_for_test(remote).unwrap();
+        let report = router.doctor(true).await.unwrap();
+        remote_server.join().unwrap();
+        local_server.join().unwrap();
+        assert!(report.contains("FAIL: venice"), "{report}");
+        assert!(report.contains("PASS: ollama"), "{report}");
+        assert!(!report.contains("REPAIRED: venice"));
+        assert!(!report.contains("private-key"));
+        assert!(!report.contains("secret-provider-detail"));
+    }
+
+    #[tokio::test]
+    async fn doctor_tests_current_pool_and_only_repairs_after_success() {
+        let root = tempfile::tempdir().unwrap();
+        let (remote, requests, remote_server) = http_server_with(8, |index, request| {
+            let body = match index % 3 {
+                0 => serde_json::json!({"data":[{"id":DEFAULT_VENICE_MODEL,"type":"text",
+                    "model_spec":{"capabilities":{"supportsTeeAttestation":true,"supportsFunctionCalling":true}}}]}),
+                1 => {
+                    serde_json::json!({"verified":true,"nonce":request_query_parameter(request,"nonce").unwrap(),
+                    "model":DEFAULT_VENICE_MODEL,"tee_provider":"intel-tdx","signing_address":"0x1234","debug_mode":false})
+                }
+                _ => serde_json::json!({"choices":[{"message":{"content":"OK"}}]}),
+            };
+            ("200 OK", body.to_string())
+        });
+        let (local, _, local_server) =
+            http_server(2, "200 OK", r#"{"choices":[{"message":{"content":"OK"}}]}"#);
+        let mut settings = config(root.path());
+        settings.venice_api_key = Some("obsolete-key".into());
+        settings.ollama_endpoint = local;
+        let mut router = InferenceRouter::new(settings).unwrap();
+        router.set_venice_endpoint_for_test(remote).unwrap();
+        router
+            .environment
+            .command("set VENICE_API_KEY active-key")
+            .unwrap();
+        router.environment.failed(
+            "VENICE_API_KEY",
+            "primary",
+            crate::environment::CredentialFailure::Transient,
+        );
+        assert!(
+            router
+                .environment
+                .candidates("VENICE_API_KEY")
+                .unwrap()
+                .is_empty()
+        );
+        let report = router.doctor(false).await.unwrap();
+        assert!(report.contains("PASS: venice"), "{report}");
+        assert!(
+            router
+                .environment
+                .candidates("VENICE_API_KEY")
+                .unwrap()
+                .is_empty()
+        );
+        let report = router.doctor(true).await.unwrap();
+        assert!(report.contains("REPAIRED: venice"), "{report}");
+        assert_eq!(
+            router
+                .environment
+                .candidates("VENICE_API_KEY")
+                .unwrap()
+                .len(),
+            1
+        );
+        router.validate_venice_key().await.unwrap();
+        remote_server.join().unwrap();
+        local_server.join().unwrap();
+        for request in requests.lock().unwrap().iter() {
+            assert!(request.contains("Bearer active-key"));
+            assert!(!request.contains("obsolete-key"));
         }
     }
 

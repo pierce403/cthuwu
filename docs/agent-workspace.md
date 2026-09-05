@@ -350,3 +350,31 @@ onboarding through a funded Branding mint, or retrieval quality with a real embe
 Those release gates remain open in `FEATURES.md`. The current implementation also keeps public
 personal-note retrieval separate from the operator's semantic corpus and does not install pi,
 Hermes, remote tool adapters, or an embedding model automatically.
+
+## Diagnose a tentacle without a working model
+
+Use `/doctor` (or `/doctor fix`) for fixed diagnostics and safe repairs; `/doctor check`
+reports without repairing. The exact question “is your venice cred working?” also runs
+check mode directly. These commands require the authenticated operator lane and do not
+rely on an LLM choosing tools.
+
+A configured credential only means a key is stored. Doctor probes the selected provider and
+local Ollama separately, using a tiny synthetic completion with a tool schema, never private
+conversation history. Venice probes use the current credential pool and fresh catalog/TEE
+checks. Failures distinguish authentication/access, credit, rate limits, connectivity, model
+compatibility, and attestation problems without printing keys or raw provider errors. Up to
+three enabled credential slots are tested, including cooling-down slots; disabled slots stay
+disabled. Each probe has a 30-second cap within a 150-second inference budget and the incoming
+request deadline. Probes can incur small provider charges. A successful fallback is never
+reported as proof that Venice works.
+
+Safe repair clears cooldowns only for successfully tested, still-current credentials/routes
+and creates missing workspace-local temporary/cache/tool directories. It does not replace keys,
+switch models, weaken privacy checks, install packages, or restart the node. Doctor checks
+workspace/source helper presence and tool availability; versions/build integrity still require
+`/update`. Base RPC and ERC-8004 reports are configuration/cached status, not live chain proofs.
+XMTP round-trip delivery still needs a live exercise. A rejected key, depleted account, absent
+model, missing executable, or failed attestation remains an actionable finding, not a claimed fix.
+
+After deploying this code, restart through `./uwu.sh` using the existing data directory, then run
+`/doctor`. No running node is upgraded merely by pushing GitHub main.

@@ -82,6 +82,40 @@ impl Environment {
             .collect())
     }
 
+    /// Explicit diagnostics may probe enabled slots during cooldown, never disabled slots.
+    pub fn diagnostic_candidates(&self, name: &str) -> Result<Vec<Entry>> {
+        Ok(self
+            .entries
+            .lock()
+            .map_err(|_| anyhow::anyhow!("environment lock"))?
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.enabled)
+            .collect())
+    }
+
+    pub fn verified(&self, variable: &str, tested: &Entry) -> Result<bool> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| anyhow::anyhow!("environment lock"))?;
+        let mut next = entries.clone();
+        let Some(entry) = next.get_mut(variable).and_then(|slots| {
+            slots
+                .iter_mut()
+                .find(|e| e.name == tested.name && e.value == tested.value && e.enabled)
+        }) else {
+            return Ok(false);
+        };
+        entry.cooldown = 0;
+        entry.failure = None;
+        self.save(&next)?;
+        *entries = next;
+        Ok(true)
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         // A damaged override store must not silently revive a legacy startup credential.
         self.entries.lock().map_or(true, |e| e.contains_key(name))
@@ -160,7 +194,7 @@ impl Environment {
                                     Some(CredentialFailure::Rejected) => "credential rejected; replace or explicitly enable to retry",
                                     Some(CredentialFailure::RateLimited) if entry.cooldown > now() => "rate limited; five-minute cooldown",
                                     Some(CredentialFailure::Transient) if entry.cooldown > now() => "temporary failure; one-minute cooldown",
-                                    _ => "available; health verified on use",
+                                    _ => "enabled; inference health is checked on use or with /doctor",
                                 }
                             ))
                             .collect::<Vec<_>>()
@@ -296,6 +330,41 @@ fn validate_entry(slot: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_recovery_preserves_disabled_and_changed_slots() {
+        let root = tempfile::tempdir().unwrap();
+        let env = Environment::open(root.path()).unwrap();
+        env.command("set VENICE_API_KEY original").unwrap();
+        let tested = env
+            .diagnostic_candidates("VENICE_API_KEY")
+            .unwrap()
+            .remove(0);
+        env.failed("VENICE_API_KEY", "primary", CredentialFailure::Rejected);
+        assert!(
+            env.diagnostic_candidates("VENICE_API_KEY")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!env.verified("VENICE_API_KEY", &tested).unwrap());
+        env.command("set VENICE_API_KEY replacement").unwrap();
+        env.failed("VENICE_API_KEY", "primary", CredentialFailure::Transient);
+        assert!(!env.verified("VENICE_API_KEY", &tested).unwrap());
+        assert!(env.candidates("VENICE_API_KEY").unwrap().is_empty());
+        let tested = env
+            .diagnostic_candidates("VENICE_API_KEY")
+            .unwrap()
+            .remove(0);
+        assert!(env.verified("VENICE_API_KEY", &tested).unwrap());
+        assert_eq!(
+            Environment::open(root.path())
+                .unwrap()
+                .candidates("VENICE_API_KEY")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn redaction_failover_and_loader_rejection() {
         let root = tempfile::tempdir().unwrap();
