@@ -260,6 +260,16 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
   - [x] A transport fixture tests stream/catch-up overlap, automatic reconnect, unread deduplication,
     and preservation of another conversation’s draft. Live background/suspended delivery remains unverified.
 
+### Branding diagnostics and stream recovery
+
+- [x] Persist the last public Branding attempt outcome and expose it with supervisor phase counts
+  to the authenticated operator; report queued, delivered, and minted as distinct stages.
+- [x] `/branding-status` checks the live quote without inference and distinguishes missing observer,
+  wallet binding, clock, RPC failure, empty treasury, and invalid quote. No consent or mint bypass.
+- [x] Automatically retry a dropped XMTP stream up to three times with backoff, sync history and
+  recheck XMTP identity/retention, independently of a pending or failed Base verification.
+- [ ] Verify the complete funded live acolyte consent/mint flow after runtime rollout.
+
 ### Visible referral sharing and coherent referral onboarding
 
 - Direct XMTP now opens immediately to the requested, retained, or default contact while Base

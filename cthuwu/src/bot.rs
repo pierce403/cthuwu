@@ -11,7 +11,7 @@ use crate::{
     evolution_runtime::{
         ConversationObservation, EvolutionRuntime, PublicTurnStart, PublicTurnToken,
     },
-    growth::REFERRAL_CONTROL_PREFIX,
+    growth::{BrandingAttemptOutcome, REFERRAL_CONTROL_PREFIX},
     matching::suggest_matches,
     model::{Model, ModelPolicy, ModelRequest},
     operator::{ModelControl, OperatorHarness},
@@ -408,6 +408,9 @@ impl UwUBot {
                             role,
                         )));
                     }
+                }
+                if is_branding_status_request(message.text) {
+                    return Ok(Some(limit_response(format!("{}\n\n{}", self.branding_readiness().await, growth_runtime_facts), role)));
                 }
                 if is_natural_identity_or_purpose_request(message.text) {
                     let public_name = match &self.registry_control {
@@ -870,20 +873,30 @@ impl UwUBot {
                     "\n\ni saved what u shared, but XMTP did not provide a currently authenticated EVM address, so no Branding invitation was created. send a fresh wallet-authenticated Direct message to retry, uwu.",
                 ),
                 (Some(control), Some(address)) => match self.branding_offer_quote().await {
-                    None => response.push_str(
-                        "\n\ni saved what u shared, but i could not verify a positive fresh UWU treasury quote, so no Branding invitation was created. my operator must restore Base RPC access or fund this Tentacle's UWU treasury before i can retry, uwu.",
-                    ),
-                    Some(offer) => match control
+                    Err(reason) => {
+                        if let Err(error) = control.record_branding_attempt(reason).await {
+                            warn!(%error, "could not persist Branding attempt status");
+                        }
+                        response.push_str(&format!("\n\nno Branding invitation was created: {}. my operator can check Branding status, uwu.", reason.explanation()));
+                    }
+                    Ok(offer) => match control
                         .enqueue_default_offer(inbox_id, address, offer)
                         .await
                     {
-                        Ok(true) => response.push_str(
+                        Ok(true) => {
+                            let _ = control.record_branding_attempt(BrandingAttemptOutcome::Queued).await;
+                            response.push_str(
                             "\n\ni'm checking a precise Acolyte Branding invitation against canonical Base state too. the separate review will explain what it does, its exact UWU price and upkeep, and the immutable referrer before asking for EIP-712 consent, uwu.",
-                        ),
-                        Ok(false) => response.push_str(
+                        );
+                        }
+                        Ok(false) => {
+                            let _ = control.record_branding_attempt(BrandingAttemptOutcome::AlreadyQueued).await;
+                            response.push_str(
                             "\n\nan exact Acolyte Branding invitation is already queued for this conversation, fwiend.",
-                        ),
+                        );
+                        }
                         Err(error) => {
+                            let _ = control.record_branding_attempt(BrandingAttemptOutcome::QueueFailed).await;
                             warn!(%error, "could not queue an Acolyte Branding offer");
                             response.push_str(
                                 "\n\ni saved what u shared, but the Branding supervisor could not queue an invitation. it will need its registration or local state repaired before a fresh retry, uwu.",
@@ -1001,12 +1014,48 @@ impl UwUBot {
         Some(whole_tokens)
     }
 
-    async fn branding_offer_quote(&self) -> Option<crate::branding::BrandingQuote> {
-        let observer = self.token_eye.as_ref()?;
-        let treasury = self.blockchain.xmtp_wallet?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-        let observation = observer.observe_fresh_required(treasury, now).await.ok()?;
-        quote_initial_branding(observation.balance, DEFAULT_INITIAL_PRICE_BASIS_POINTS).ok()
+    async fn branding_offer_quote(
+        &self,
+    ) -> std::result::Result<crate::branding::BrandingQuote, BrandingAttemptOutcome> {
+        let observer = self
+            .token_eye
+            .as_ref()
+            .ok_or(BrandingAttemptOutcome::ObserverUnavailable)?;
+        let treasury = self
+            .blockchain
+            .xmtp_wallet
+            .ok_or(BrandingAttemptOutcome::WalletUnavailable)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| BrandingAttemptOutcome::ClockUnavailable)?
+            .as_secs();
+        let observation = observer
+            .observe_fresh_required(treasury, now)
+            .await
+            .map_err(|_| BrandingAttemptOutcome::RpcUnavailable)?;
+        if observation.balance.is_zero() {
+            return Err(BrandingAttemptOutcome::EmptyTreasury);
+        }
+        quote_initial_branding(observation.balance, DEFAULT_INITIAL_PRICE_BASIS_POINTS)
+            .map_err(|_| BrandingAttemptOutcome::QuoteInvalid)
+    }
+
+    async fn branding_readiness(&self) -> String {
+        if self.branding_control.is_none() {
+            return "BRANDING STATUS: BLOCKED — BRANDING SUPERVISOR IS NOT CONFIGURED.".to_owned();
+        }
+        let treasury = self
+            .blockchain
+            .xmtp_wallet
+            .map(|wallet| wallet.to_string())
+            .unwrap_or_else(|| "unbound".to_owned());
+        let result = match self.branding_offer_quote().await {
+            Ok(_) => "CURRENT TREASURY QUOTE: READY. THIS DOES NOT PROVE DELIVERY OR MINT READINESS; CANONICAL REGISTRATION, GAS, ACOLYTE CONSENT, AND A CONFIRMED MINT ARE STILL REQUIRED.".to_owned(),
+            Err(reason) => format!("CURRENT TREASURY QUOTE: BLOCKED — {}.", reason.explanation().to_ascii_uppercase()),
+        };
+        format!(
+            "BRANDING STATUS\nTENTACLE TREASURY: {treasury}\n{result}\nTHE PUBLIC RUNTIME QUEUES INVITATIONS IN ACTIVE ACOLYTE CONVERSATIONS; THE OPERATOR MODEL DOES NOT NEED AN OUTBOUND DM TOOL FOR THAT. NO MESSAGE OR MINT WAS SENT BY THIS CHECK."
+        )
     }
 
     async fn observe_authenticated_wallet(
@@ -1370,6 +1419,15 @@ fn is_invite_request(text: &str) -> bool {
         ]
         .iter()
         .any(|phrase| normalized.contains(phrase))
+}
+
+fn is_branding_status_request(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    normalized == "/branding-status"
+        || (normalized.contains("branding")
+            && ["status", "ready", "need", "why", "working"]
+                .iter()
+                .any(|word| normalized.contains(word)))
 }
 
 fn is_growth_status_request(text: &str) -> bool {
@@ -2802,6 +2860,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operator_branding_question_returns_runtime_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        let bot = public_bot(root.path())
+            .with_branding_control(Arc::new(RecordingBrandingControl::default()));
+        let response = bot
+            .receive_authenticated_claimed_with_address(
+                "operator-branding-status",
+                "aabbcc",
+                Some("0x1111111111111111111111111111111111111111"),
+                "1750000000000000000",
+                "do you have everything you need to send out branding?",
+                PrincipalRole::Operator,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.contains("BRANDING STATUS"));
+        assert!(response.contains("UWU OBSERVATION IS DISABLED"));
+        assert!(response.contains("OPERATOR MODEL DOES NOT NEED AN OUTBOUND DM TOOL"));
+    }
+
+    #[tokio::test]
+    async fn branding_readiness_distinguishes_missing_observer_from_empty_funds() {
+        let root = tempfile::tempdir().unwrap();
+        let bot = public_bot(root.path())
+            .with_branding_control(Arc::new(RecordingBrandingControl::default()));
+        assert_eq!(
+            bot.branding_offer_quote().await.unwrap_err(),
+            BrandingAttemptOutcome::ObserverUnavailable
+        );
+        let report = bot.branding_readiness().await;
+        assert!(report.contains("UWU OBSERVATION IS DISABLED"));
+        assert!(!report.contains("TREASURY IS EMPTY"));
+        assert!(is_branding_status_request(
+            "do you have everything you need to send out branding?"
+        ));
+        assert!(is_branding_status_request("/branding-status"));
+        assert!(!is_branding_status_request("brand me"));
+    }
+
+    #[tokio::test]
     async fn a_missing_positive_treasury_quote_is_visible_to_the_acolyte() {
         let root = tempfile::tempdir().unwrap();
         let control = Arc::new(RecordingBrandingControl::default());
@@ -2834,8 +2933,17 @@ mod tests {
             .unwrap();
 
         assert!(response.contains("no Branding invitation was created"));
-        assert!(response.contains("restore Base RPC access or fund"));
+        assert!(response.contains("verified Tentacle UWU treasury is empty"));
         assert_eq!(control.offers.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            bot.branding_offer_quote().await.unwrap_err(),
+            BrandingAttemptOutcome::EmptyTreasury
+        );
+        assert!(
+            bot.branding_readiness()
+                .await
+                .contains("VERIFIED TENTACLE UWU TREASURY IS EMPTY")
+        );
     }
 
     #[test]

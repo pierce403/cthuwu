@@ -2,6 +2,19 @@
 
 Last reviewed: 2026-09-05
 
+- If the cached rust-lld missing-symbol failure survives `cargo clean -p cthuwu`, a test rebuild
+  with `CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_CODEGEN_UNITS=1` recovered all workspace tests.
+  This is a local validation workaround, not a committed production compiler setting.
+
+- An acolyte's “no Branding invitation” treasury message previously collapsed missing observation,
+  missing wallet, RPC failure, and zero funds into one result. Typed outcomes now persist in growth
+  state and appear in operator facts alongside supervisor phase counts; `/branding-status` probes
+  the current quote without inference. A successful browser XMTP connection does not fix node RPC.
+  No outbound model DM tool is needed for the public supervisor's invitation delivery. `/user`
+  accepts a full XMTP inbox ID, not an Ethereum address; raw DM history is still not exposed.
+- Browser XMTP stream recovery retries independently of Base, with bounded backoff and fresh XMTP
+  checks before restoring writes. An open but Base-unverified Direct chat can recover its stream.
+
 - Updated operator-requested browser policy: Direct connects immediately to the link/retained/default
   address with XMTP wallet binding, consent, and retention checks. Base runs in the background;
   outages or invalid registrations warn separately and do not disable Direct. Unverified targets

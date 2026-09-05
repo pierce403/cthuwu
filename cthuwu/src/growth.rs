@@ -51,6 +51,52 @@ const MAX_UINT256_DECIMAL: &str =
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum BrandingAttemptOutcome {
+    ObserverUnavailable,
+    WalletUnavailable,
+    ClockUnavailable,
+    RpcUnavailable,
+    EmptyTreasury,
+    QuoteInvalid,
+    Queued,
+    AlreadyQueued,
+    QueueFailed,
+}
+
+impl BrandingAttemptOutcome {
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::ObserverUnavailable => {
+                "UWU observation is disabled or not configured; enable token observation on the host"
+            }
+            Self::WalletUnavailable => {
+                "the runtime has no bound XMTP treasury wallet; repair the node identity binding"
+            }
+            Self::ClockUnavailable => "the host clock is unavailable; repair the host clock",
+            Self::RpcUnavailable => {
+                "the fresh Base UWU balance read failed; restore the node's Base RPC access (a browser connection does not repair the node RPC)"
+            }
+            Self::EmptyTreasury => {
+                "the verified Tentacle UWU treasury is empty; fund this Tentacle's UWU wallet"
+            }
+            Self::QuoteInvalid => {
+                "the treasury balance cannot produce a valid positive Branding quote"
+            }
+            Self::Queued => {
+                "a Branding invitation was queued; delivery, acolyte consent, and a confirmed mint are still required"
+            }
+            Self::AlreadyQueued => {
+                "a Branding invitation is already queued; queued is not delivered or minted"
+            }
+            Self::QueueFailed => {
+                "the Branding supervisor could not queue the invitation; inspect registration and supervisor state"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReferralRewardPhase {
     NewContact,
     Direct,
@@ -150,6 +196,8 @@ struct GrowthSnapshot {
     operator_quiet_hours: Option<(u8, u8)>,
     last_operator_prompt_unix: Option<u64>,
     pending_operator_prompt: Option<PendingDelivery>,
+    #[serde(default)]
+    last_branding_attempt: Option<(BrandingAttemptOutcome, u64)>,
     updated_at_unix: u64,
 }
 
@@ -270,6 +318,7 @@ impl GrowthStore {
                     operator_snooze_until: 0,
                     operator_quiet_hours: None,
                     last_operator_prompt_unix: Some(now),
+                    last_branding_attempt: None,
                     pending_operator_prompt: None,
                     updated_at_unix: now,
                 };
@@ -827,6 +876,19 @@ impl GrowthRuntime {
         ))
     }
 
+    pub(crate) fn record_branding_attempt(
+        &mut self,
+        outcome: BrandingAttemptOutcome,
+        now: u64,
+    ) -> Result<()> {
+        let previous = self.state.last_branding_attempt.replace((outcome, now));
+        if let Err(error) = self.persist(now) {
+            self.state.last_branding_attempt = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(crate) fn operator_runtime_facts(
         &self,
         operator_address: Address,
@@ -834,8 +896,11 @@ impl GrowthRuntime {
         now: u64,
     ) -> String {
         let stats = self.stats(branded, now);
+        let last_attempt = self.state.last_branding_attempt.map(|(outcome, at)|
+            format!("growth.last_branding_attempt={outcome:?}\ngrowth.last_branding_attempt_unix={at}\ngrowth.last_branding_attempt_detail={}", outcome.explanation())
+        ).unwrap_or_else(|| "growth.last_branding_attempt=not_recorded".to_owned());
         format!(
-            "growth.total_acolytes={}\ngrowth.branded={}\ngrowth.unbranded={}\ngrowth.recently_onboarded_7d={}\ngrowth.referral_links_sent={}\ngrowth.successful_referrals={}\ngrowth.referral_uwu_paid_base_units={}\ngrowth.referral_bounty_amount_base_units={}\ngrowth.operator_recruitment_url={}",
+            "{last_attempt}\ngrowth.total_acolytes={}\ngrowth.branded={}\ngrowth.unbranded={}\ngrowth.recently_onboarded_7d={}\ngrowth.referral_links_sent={}\ngrowth.successful_referrals={}\ngrowth.referral_uwu_paid_base_units={}\ngrowth.referral_bounty_amount_base_units={}\ngrowth.operator_recruitment_url={}",
             stats.total_acolytes,
             stats.branded,
             stats.unbranded,
@@ -1986,6 +2051,43 @@ mod tests {
             .handle_control(INBOX_B, Some(&address(3).to_string()), &marker, 3)
             .unwrap();
         runtime
+    }
+
+    #[test]
+    fn branding_attempt_status_survives_restart_and_reports_current_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(RecordingGateway::default());
+        let mut runtime = GrowthRuntime::open(
+            root.path(),
+            address(1),
+            DEFAULT_REFERRAL_BOUNTY_BASE_UNITS,
+            DEFAULT_PUBLIC_ORIGIN,
+            gateway.clone(),
+            1,
+        )
+        .unwrap();
+        runtime
+            .record_branding_attempt(BrandingAttemptOutcome::RpcUnavailable, 2)
+            .unwrap();
+        drop(runtime);
+        let mut recovered = GrowthRuntime::open(
+            root.path(),
+            address(1),
+            DEFAULT_REFERRAL_BOUNTY_BASE_UNITS,
+            DEFAULT_PUBLIC_ORIGIN,
+            gateway,
+            3,
+        )
+        .unwrap();
+        let facts = recovered.operator_runtime_facts(address(4), 0, 3);
+        assert!(facts.contains("growth.last_branding_attempt=RpcUnavailable"));
+        assert!(facts.contains("growth.last_branding_attempt_unix=2"));
+        recovered
+            .record_branding_attempt(BrandingAttemptOutcome::Queued, 4)
+            .unwrap();
+        let facts = recovered.operator_runtime_facts(address(4), 0, 4);
+        assert!(facts.contains("growth.last_branding_attempt=Queued"));
+        assert!(!facts.contains("growth.last_branding_attempt=RpcUnavailable"));
     }
 
     #[test]

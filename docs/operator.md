@@ -275,6 +275,7 @@ An active operator can send:
 /users [limit]
 /users {"limit":20,"cursor":20}
 /user <full-xmtp-inbox-id>
+/branding-status
 ```
 
 `/write` takes the path on the command's first line and file content on following lines. `/edit`
@@ -570,3 +571,12 @@ Venice privacy can now be explicitly changed over authenticated XMTP with
 `/env set UWUBOT_VENICE_PRIVACY standard` or restored with `tee`. This applies to public and operator
 inference and never changes implicitly during failover. See [workspace recovery commands](agent-workspace.md)
 for the GLM 5.3 Flash sequence and model-independent `/force-update` installation.
+
+### Branding diagnostics
+
+`/branding-status` runs without inference and checks the current UWU treasury quote. It distinguishes
+an unavailable observer, missing XMTP wallet binding, failed Base RPC read, empty treasury, and
+invalid price quote. A positive quote does not prove gas funding, registry eligibility, consent, or
+mint completion. The operator also receives durable last-attempt status and counts of supervisor
+queue phases on ordinary turns. These are operational facts, not access to acolyte DM transcripts.
+`/user` takes a full XMTP inbox ID; an Ethereum address is not an inbox ID.

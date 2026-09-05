@@ -2067,6 +2067,13 @@ pub trait AcolyteBrandingControl: Send + Sync {
         Ok("GROWTH STATUS IS UNAVAILABLE IN THIS RUNTIME.".to_owned())
     }
 
+    async fn record_branding_attempt(
+        &self,
+        _outcome: crate::growth::BrandingAttemptOutcome,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn operator_growth_facts(&self, _authenticated_sender_address: &str) -> Result<String> {
         Ok("growth.runtime=unavailable".to_owned())
     }
@@ -2296,15 +2303,30 @@ impl AcolyteBrandingControl for SharedBrandingControl {
             .operator_status(address, branded, unix_seconds()?)
     }
 
+    async fn record_branding_attempt(
+        &self,
+        outcome: crate::growth::BrandingAttemptOutcome,
+    ) -> Result<()> {
+        self.growth
+            .lock()
+            .await
+            .record_branding_attempt(outcome, unix_seconds()?)
+    }
+
     async fn operator_growth_facts(&self, authenticated_sender_address: &str) -> Result<String> {
         let address =
             parse_nonzero_address(authenticated_sender_address, "authenticated operator")?;
-        let branded = self.growth.lock().await.branded_count();
-        Ok(self
-            .growth
-            .lock()
-            .await
-            .operator_runtime_facts(address, branded, unix_seconds()?))
+        let mut phases = std::collections::BTreeMap::<String, usize>::new();
+        for action in &self.runtime.lock().await.state.actions {
+            *phases.entry(format!("{:?}", action.phase)).or_default() += 1;
+        }
+        let growth = self.growth.lock().await;
+        let mut facts =
+            growth.operator_runtime_facts(address, growth.branded_count(), unix_seconds()?);
+        facts.push_str("\nbranding.queue_phases=");
+        facts.push_str(&serde_json::to_string(&phases)?);
+        facts.push_str("\nbranding.delivery_authority=public_runtime_supervisor; model outbound DM tools are not required to deliver an admitted offer\nbranding.status_command=/branding-status\nbranding.history_access=none; operational status is not a DM transcript");
+        Ok(facts)
     }
 }
 

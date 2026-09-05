@@ -1110,6 +1110,23 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
+  it("automatically recovers a failed XMTP stream without waiting for pending Base", async () => {
+    const value = fixture();
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: () => new Promise<TentacleAssignment>(() => undefined),
+    });
+    await workspace.start();
+    value.allMessageOptions()?.onFail?.();
+    expect(workspace.snapshot().connected).toBe(false);
+    await vi.waitFor(() => {
+      expect(workspace.snapshot().connected).toBe(true);
+      expect(workspace.snapshot().channels.direct.status).toMatch(/^(empty|ready)$/u);
+    }, { timeout: 3_000 });
+    await workspace.send("direct", "reconnected without Base");
+    expect(value.direct.sendText).toHaveBeenCalledWith("reconnected without Base");
+    await workspace.close();
+  });
+
   it("starts and sends while Base is pending, then keeps Direct usable after RPC failure", async () => {
     const value = fixture();
     let rejectCheck!: (error: Error) => void;

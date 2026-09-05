@@ -308,6 +308,8 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private trustedGroupAssignment?: AssignmentControl;
   private revalidation?: Promise<void>;
   private refreshTimer?: ReturnType<typeof setInterval>;
+  private streamRecoveryTimer?: ReturnType<typeof setTimeout>;
+  private streamRecoveryAttempts = 0;
   private restartingStreams?: Promise<void>;
   private needsStreamRestart = false;
   private streamGeneration = 0;
@@ -490,6 +492,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.connected = false;
     this.streamGeneration += 1;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    if (this.streamRecoveryTimer) clearTimeout(this.streamRecoveryTimer);
     for (const channelId of CHAT_CHANNELS) this.clearTyping(channelId, false);
     await Promise.all(this.streams.splice(0).map((stream) => stream.return().then(() => undefined)));
     this.client.close();
@@ -1120,7 +1123,9 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.streamGeneration += 1;
       await Promise.all(this.streams.splice(0).map((stream) => stream.return().then(() => undefined)));
       await this.startStreams();
+      if (this.closed) return;
       await this.client.conversations.sync();
+      if (this.closed) return;
       await this.sendReferralAttributionIfNeeded(true);
       this.needsStreamRestart = false;
       this.connected = true;
@@ -1594,6 +1599,40 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     this.connected = false;
     for (const channelId of CHAT_CHANNELS) this.blockChannel(channelId, message);
     this.emit();
+    this.scheduleStreamRecovery();
+  }
+
+  private scheduleStreamRecovery(): void {
+    if (this.closed || this.streamRecoveryTimer || this.streamRecoveryAttempts >= 3) return;
+    this.streamRecoveryTimer = setTimeout(() => {
+      this.streamRecoveryTimer = undefined;
+      if (this.closed || !this.needsStreamRestart) return;
+      this.streamRecoveryAttempts += 1;
+      void (async () => {
+        try {
+          await this.restartStreams();
+          if (this.closed) return;
+          if (this.currentAssignment) await this.verifyCurrentDirect(this.currentAssignment);
+          await this.revalidateBoundGroupsIndependently();
+          if (this.closed) return;
+          for (const id of CHAT_CHANNELS) {
+            if (this.channels[id].retentionVerified && this.channels[id].readConversationIds.length) {
+              await this.loadHistory(id, false);
+            }
+          }
+          if (this.closed) return;
+          this.restoreVerifiedChannels();
+          this.streamRecoveryAttempts = 0;
+          this.emit();
+        } catch {
+          if (this.closed) return;
+          this.connected = false;
+          this.needsStreamRestart = true;
+          this.emit();
+          this.scheduleStreamRecovery();
+        }
+      })();
+    }, 1_000 * 2 ** this.streamRecoveryAttempts);
   }
 
   private emit(): void {
