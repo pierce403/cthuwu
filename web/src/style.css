@@ -510,6 +510,37 @@ h1 .uwu {
     inset 0 1px #fff1;
 }
 
+.chat.has-invitation {
+  align-self: start;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.referral-welcome {
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  background: #a5efd00a;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.referral-welcome details {
+  margin-top: 0.35rem;
+}
+
+.referral-welcome summary {
+  color: var(--mint);
+  cursor: pointer;
+}
+
+.referral-welcome strong {
+  color: var(--mint);
+}
+
+.referral-welcome p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
 .channel-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

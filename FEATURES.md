@@ -262,6 +262,9 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
 
 ### Visible referral sharing and coherent referral onboarding
 
+- Referral landing layout repaired: compact invitation inside chat keeps the conversation and
+  composer in view on desktop and mobile; attribution and verification remain unchanged.
+
 - **Stability**: in-progress
 - **Description**: Make each operated Tentacle's referral code/link easy to copy and make the recipient's
   journey from that link through chat and Branding understandable and complete.

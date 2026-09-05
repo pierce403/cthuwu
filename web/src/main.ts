@@ -75,13 +75,23 @@ function bootstrap(): void {
     const referrer = pinReferrer(environment, identity.address, link.referrer);
     if (link.tentacle || referrer) {
       const welcome = document.createElement("section");
-      welcome.className = "operator-referral";
+      welcome.className = "referral-welcome";
       welcome.setAttribute("aria-label", "Your invitation");
-      const title = document.createElement("strong"); title.textContent = "Welcome — meet your Tentacle";
+      const title = document.createElement("strong");
+      title.textContent = "Welcome — meet your Tentacle";
       const message = document.createElement("p");
-      message.textContent = `This invitation${referrer ? ` names referrer ${referrer}` : ""}. We'll verify the requested Tentacle before connecting. If you already have an active Branding, your existing assignment takes precedence. Start with a goal or something you'd like help with; your referral is kept through setup.`;
+      message.textContent = "Start with a goal or something you’d like help with. We’ll check your connection first.";
       welcome.append(title, message);
-      document.getElementById("chat")?.before(welcome);
+      if (referrer) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = `Invited by ${referrer.slice(0, 8)}…${referrer.slice(-6)}`;
+        details.append(summary, requireElement<HTMLElement>("referral-status"));
+        welcome.append(details);
+      }
+      const chat = requireElement<HTMLElement>("chat");
+      chat.classList.add("has-invitation");
+      chat.querySelector(".chat-header")?.after(welcome);
     }
     chatController = initializeChatController({ ...parseConfig(), tentacleAnchor: link.tentacle, referrer }, identity);
   } catch (error) {

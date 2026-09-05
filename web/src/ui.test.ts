@@ -40,9 +40,22 @@ describe("application shell", () => {
     chat.initialize.mockReturnValue(chat);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     localStorage.clear();
+    history.replaceState(null, "", "/");
     mountMarkup();
     const dialog = document.querySelector<HTMLDialogElement>("#identity-dialog");
     if (dialog) dialog.showModal = vi.fn(() => dialog.setAttribute("open", ""));
+  });
+
+  it.each(["r", "t"])("keeps a %s invitation inside chat and preserves its routing hint", async (parameter) => {
+    const address = "0x2222222222222222222222222222222222222222";
+    history.replaceState(null, "", `/#${parameter}=${address}`);
+    await import("./main");
+    expect(document.querySelector("#chat .referral-welcome")?.textContent).toContain("Start with a goal");
+    expect(document.querySelectorAll(".shell > section")).toHaveLength(2);
+    expect(chat.initialize).toHaveBeenCalledWith(
+      expect.objectContaining(parameter === "r" ? { referrer: address } : { tentacleAnchor: address }),
+      expect.anything(),
+    );
   });
 
   it("loads a same-block Base balance snapshot only when identity settings open", async () => {

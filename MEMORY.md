@@ -2,6 +2,9 @@
 
 Last reviewed: 2026-09-05
 
+- Referral welcome belongs inside the chat card, with its own grid row and styles. Inserting it
+  before chat adds a third shell grid item and pushes chat below the mascot on desktop.
+
 - Inference timeout increases must update both the Node bridge default/max and Rust's deadline
   validator; otherwise the shorter outer envelope still cancels the request. Defaults now allow
   600s XMTP, 300s Venice operator, 120s public remote, and 90s local phases. Explicit environment
