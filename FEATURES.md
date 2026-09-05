@@ -16,6 +16,14 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
+## Operator-readable acolyte conversations
+
+- [x] Persist private incoming acolyte text and generated replies with authenticated inbox/address and local receipt time.
+- [x] Provide native `/history <address|inbox> [page]` and natural conversation questions with an explicit identifier in the authenticated active operator lane.
+- [x] Bound retention to 14 days, 1,000 exchanges / 8 MiB per Tentacle; paginate Unicode safely and label replies as delivery-unconfirmed.
+- [x] Exclude credential commands and strict controls; disclose operator access and erase transcripts on confirmed forgetting.
+- [ ] Verify a newly captured acolyte conversation through the live operator XMTP route after runtime upgrade; historical messages are not backfilled.
+
 ## Longer inference budgets and concise replies
 
 - [x] Align the default 600-second XMTP envelope with a 300-second Venice operator cap, 120-second public remote cap, 90-second local phases, and retained fallback/completion reserves.

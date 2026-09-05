@@ -60,6 +60,7 @@ pub struct UwUBot {
     operators: Arc<Mutex<OperatorStore>>,
     operator_harness: Arc<OperatorHarness>,
     coaching: Option<Arc<crate::coaching::Coaching>>,
+    conversation_history: Option<Arc<crate::conversation_history::ConversationHistory>>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
     token_eye: Option<Arc<TokenEye>>,
     blockchain: BlockchainConfig,
@@ -115,6 +116,7 @@ impl UwUBot {
     ) -> Self {
         Self {
             coaching: None,
+            conversation_history: None,
             contacts,
             processed,
             model,
@@ -138,6 +140,14 @@ impl UwUBot {
     ) -> Self {
         self.token_eye = token_eye;
         self.blockchain = blockchain;
+        self
+    }
+
+    pub fn with_conversation_history(
+        mut self,
+        history: Arc<crate::conversation_history::ConversationHistory>,
+    ) -> Self {
+        self.conversation_history = Some(history);
         self
     }
 
@@ -386,6 +396,12 @@ impl UwUBot {
 
         let response = match role {
             PrincipalRole::Operator => {
+                if let Some((target, page)) = crate::conversation_history::request(message.text) {
+                    return Ok(Some(match &self.conversation_history {
+                        Some(history) => history.report(&target, page)?,
+                        None => "Conversation logging is not enabled in this runtime.".into(),
+                    }));
+                }
                 let mut growth_runtime_facts = String::new();
                 if let (Some(control), Some(address)) =
                     (&self.branding_control, message.sender_address)
@@ -489,6 +505,14 @@ impl UwUBot {
                 "THIS OPERATOR ROLE IS REVOKED. I WILL EXECUTE NOTHING FOR THIS INBOX.".to_owned()
             }
             PrincipalRole::User => {
+                let log = !is_resource_provision_command(message.text) && !is_local_data_control(message.text);
+                let mut first_logged = false;
+                if log && let Some(history) = &self.conversation_history {
+                    match history.record(message.inbox_id, message.sender_address, message.message_id, message.text, None) {
+                        Ok(first) => first_logged = first,
+                        Err(error) => warn!(%error, "could not retain incoming conversation"),
+                    }
+                }
                 let mut response = self.receive_user(
                     message.message_id,
                     message.inbox_id,
@@ -502,6 +526,14 @@ impl UwUBot {
                 {
                     response.push_str("\n\n");
                     response.push_str(&plea);
+                }
+                if first_logged {
+                    response.insert_str(0, "privacy note: this Tentacle keeps a limited local chat log for up to 14 days, readable by its operator. say “forget me” to delete it.\n\n");
+                }
+                response = limit_response(response, role);
+                if log && let Some(history) = &self.conversation_history
+                    && let Err(error) = history.record(message.inbox_id, message.sender_address, message.message_id, message.text, Some(&response)) {
+                    warn!(%error, "could not retain generated reply");
                 }
                 response
             }
@@ -1160,11 +1192,14 @@ impl UwUBot {
                 if let Some(coaching) = &self.coaching {
                     coaching.handle(&contact.inbox_id, "forget my goal")?;
                 }
+                if let Some(history) = &self.conversation_history {
+                    history.forget(&contact.inbox_id)?;
+                }
                 self.contacts.delete(&contact.inbox_id)?;
-                "forgotten. ur local contact note is gone. copies of messages already delivered over XMTP are outside this local deletion."
+                "forgotten. ur local contact note and retained conversation log are gone. copies of messages already delivered over XMTP are outside this local deletion."
                     .into()
             }
-            "forget" => "that would delete ur local contact note. say “yes, forget me” in ordinary words if that's truly what u want."
+            "forget" => "that would delete ur local contact note and retained conversation log. say “yes, forget me” in ordinary words if that's truly what u want."
                 .into(),
             "" => natural_help(),
             _ => return Ok(None),
@@ -1205,15 +1240,18 @@ impl UwUBot {
             if let Some(coaching) = &self.coaching {
                 coaching.handle(&contact.inbox_id, "forget my goal")?;
             }
+            if let Some(history) = &self.conversation_history {
+                history.forget(&contact.inbox_id)?;
+            }
             self.contacts.delete(&contact.inbox_id)?;
             return Ok(Some(
-                "done. ur local contact note is gone; already-delivered XMTP messages live outside that note."
+                "done. ur local contact note and retained conversation log are gone; already-delivered XMTP messages live outside that note."
                     .into(),
             ));
         }
         if matches!(normalized.as_str(), "forget me" | "delete my profile") {
             return Ok(Some(
-                "i can erase the local note, lil star. say “yes, forget me” to confirm.".into(),
+                "i can erase the local note and retained conversation log, lil star. say “yes, forget me” to confirm.".into(),
             ));
         }
         if matches!(
@@ -3281,6 +3319,82 @@ mod tests {
             .unwrap();
         assert!(response.is_some());
         assert_eq!(tools.calls.lock().unwrap().as_slice(), ["exec"]);
+    }
+
+    #[tokio::test]
+    async fn retained_history_is_operator_only_and_forget_removes_it() {
+        let root = tempfile::tempdir().unwrap();
+        let history =
+            Arc::new(crate::conversation_history::ConversationHistory::open(root.path()).unwrap());
+        let bot = public_bot(root.path()).with_conversation_history(history.clone());
+        let inbox = "b".repeat(64);
+        let wallet = format!("0x{}", "c".repeat(40));
+        let reply = bot
+            .receive_authenticated_claimed_with_address(
+                "history-user",
+                &inbox,
+                Some(&wallet),
+                "101",
+                "my unique meadow story",
+                PrincipalRole::User,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(reply.contains("readable by its operator"));
+        for (i, role) in [
+            PrincipalRole::Operator,
+            PrincipalRole::User,
+            PrincipalRole::StaleOperator,
+            PrincipalRole::RevokedOperator,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let result = bot
+                .receive_authenticated_claimed_with_address(
+                    &format!("history-query-{i}"),
+                    OPERATOR_ID,
+                    None,
+                    "102",
+                    &format!("/history {wallet}"),
+                    role,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                result.contains("Acolyte: my unique meadow story"),
+                role == PrincipalRole::Operator
+            );
+        }
+        bot.receive_authenticated_claimed_with_address(
+            "history-key",
+            &inbox,
+            Some(&wallet),
+            "103",
+            "/env donate VENICE_API_KEY example-not-a-real-key",
+            PrincipalRole::User,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !history
+                .report(&wallet, 1)
+                .unwrap()
+                .contains("example-not-a-real-key")
+        );
+        bot.receive_authenticated_claimed_with_address(
+            "history-forget",
+            &inbox,
+            Some(&wallet),
+            "104",
+            "yes, forget me",
+            PrincipalRole::User,
+        )
+        .await
+        .unwrap();
+        assert!(history.report(&wallet, 1).unwrap().contains("No retained"));
     }
 
     #[tokio::test]

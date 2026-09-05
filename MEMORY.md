@@ -2,6 +2,14 @@
 
 Last reviewed: 2026-09-05
 
+- Operator-authorized acolyte transcripts start with the conversation-history runtime upgrade.
+  They live privately under `state/conversations`, outside workspace Git/RAG. Native `/history`
+  and natural questions with an explicit wallet/inbox return terminal data only to the active
+  operator. Do not claim pre-upgrade coverage or confirmed delivery of generated replies.
+  Limits: 14 days, 1,000 exchanges / 8 MiB across the Tentacle; deletion follows confirmed forgetting.
+  Recognized credential commands and strict controls are excluded; ordinary chat is sensitive.
+
+
 - If the cached rust-lld missing-symbol failure survives `cargo clean -p cthuwu`, a test rebuild
   with `CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_CODEGEN_UNITS=1` recovered all workspace tests.
   This is a local validation workaround, not a committed production compiler setting.
@@ -11,7 +19,7 @@ Last reviewed: 2026-09-05
   state and appear in operator facts alongside supervisor phase counts; `/branding-status` probes
   the current quote without inference. A successful browser XMTP connection does not fix node RPC.
   No outbound model DM tool is needed for the public supervisor's invitation delivery. `/user`
-  accepts a full XMTP inbox ID, not an Ethereum address; raw DM history is still not exposed.
+  accepts a full XMTP inbox ID, not an Ethereum address; private conversation history now has a separate `/history <wallet|inbox> [page]` operator route.
 - Browser XMTP stream recovery retries independently of Base, with bounded backoff and fresh XMTP
   checks before restoring writes. An open but Base-unverified Direct chat can recover its stream.
 

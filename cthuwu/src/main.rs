@@ -8,6 +8,7 @@ mod branding;
 mod coaching;
 mod config;
 mod contact;
+mod conversation_history;
 mod deadline;
 mod dedupe;
 mod doctor;
@@ -1029,6 +1030,19 @@ async fn main() -> Result<()> {
             .with_registry_control(registry_control.clone()),
     );
     let coaching = Arc::new(coaching::Coaching::open(&cli.data_dir)?.with_mission(&operator_root));
+    let history = Arc::new(conversation_history::ConversationHistory::open(
+        &cli.data_dir,
+    )?);
+    let cleanup_history = history.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if let Err(error) = cleanup_history.prune() {
+                tracing::warn!(%error, "conversation retention cleanup failed");
+            }
+        }
+    });
     let bot = UwUBot::new(
         contacts,
         processed,
@@ -1037,6 +1051,7 @@ async fn main() -> Result<()> {
         operator_harness.clone(),
         evolution.clone(),
     )
+    .with_conversation_history(history)
     .with_coaching(coaching.clone())
     .with_model_control(router.clone())
     .with_base_rpc_control(base_rpc_control)

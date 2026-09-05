@@ -551,7 +551,8 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
   contact, and tool text cannot grant operator authority. General write/edit remains direct-only.
 - Contact reports describe retained local notes rather than every historical sender. Inbox IDs are
   redacted by default, cursor-paginated, scan-bounded, and explicit about incomplete counts or fields.
-  Profile claims are labeled unverified self-report; raw DMs and message counts are not exposed.
+  Profile claims are labeled unverified self-report; these note reports do not include transcripts.
+  The separate operator-only `/history` route returns private retained conversation data.
   Natural profile questions default to five records and return deterministic prose, never raw JSON.
 - Values returned by the dedicated contact tools are terminal data: they are never returned to a
   model, so note text cannot trigger `exec`, file mutation, or another tool call.
@@ -580,3 +581,25 @@ invalid price quote. A positive quote does not prove gas funding, registry eligi
 mint completion. The operator also receives durable last-attempt status and counts of supervisor
 queue phases on ordinary turns. These are operational facts, not access to acolyte DM transcripts.
 `/user` takes a full XMTP inbox ID; an Ethereum address is not an inbox ID.
+
+## Acolyte conversation history
+
+Use `/history <Ethereum address or full XMTP inbox ID> [page]`, or ask “can you see your
+conversation with 0x…?” with the complete address. This native runtime route works without
+inference and only for the currently authenticated operator. Wallet lookup uses transport-verified
+sender addresses, never an address claimed in message text. Results identify each inbox and show
+local receipt time, incoming text, and generated replies; generation is not a delivery receipt.
+
+Capture starts after installing this version and restarting. No older XMTP messages are backfilled.
+The private owner-only `state/conversations/history.json` is outside workspace Git and RAG.
+Retention is at most 14 days when read, capped at 1,000 exchanges or 8 MiB total per Tentacle;
+oldest entries are evicted first. Expired bytes are removed at startup, on access, and hourly while
+running. Requests for deleted/expired/unrecorded history explicitly report no retained conversation.
+Credential donation/environment commands, local privacy controls, strict protocol messages, and
+operator conversations are excluded. Ordinary conversation may itself contain sensitive content;
+do not publish these files. Read reports are terminal data, not model/tool instructions.
+
+The first logged reply and browser composer disclose operator access. “Forget me” followed by
+“yes, forget me” (or `/forget confirm`) erases that inbox’s retained transcript and contact note.
+This does not recall copies already delivered over XMTP or in backups. New conversation starts a
+new log. Logging errors warn locally and do not block chat; a stored reply does not prove delivery.
