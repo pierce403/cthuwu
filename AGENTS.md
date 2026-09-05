@@ -114,6 +114,13 @@ until it passes, even though the canonical contract deployment and closed implem
   reasons. `/update` authorizes queued review and installation: fast-forward a clean nondiverged
   branch, otherwise adopt reviewed useful changes while preserving intentional local work. Follow
   an operator override of a deferred feature; characterful reluctance never justifies refusing it.
+- `/force-update` is an explicit model-independent exception to selective review: fetch the
+  configured prime URL's main, build/test the exact tip, and install its paired release. Preserve
+  dirty/divergent source without including it in the release. Use the embedded recovery helper,
+  epoch-bound one-shot tasks, workspace-local storage, and deliberate restart semantics.
+- Venice remains TEE by default. Only the authenticated operator's explicit
+  `/env set UWUBOT_VENICE_PRIVACY standard` disables attestation; keep catalog authentication and
+  model/tool capability validation, report the policy accurately, and never downgrade on failure.
 - Keep source, installed release, and running binary receipts distinct. Releases pair the Rust
   binary and Node sidecar and select the next start through validated `releases/active.json`.
   Deliberate restart through the launcher/entrypoint activates that pair; installation is not a
@@ -604,7 +611,7 @@ until it passes, even though the canonical contract deployment and closed implem
   `/base-rpc-key <infura-api-key-or-https-endpoint>`, preferring Infura's free plan and exact
   dashboard instructions. A bounded Infura key is converted locally to the Base Mainnet endpoint;
   never send the candidate to unrelated providers to guess its origin.
-  Candidates persist owner-only, must pass live catalog authentication and fresh TEE attestation,
+  Candidates persist owner-only, must pass live catalog authentication and the operator-selected privacy checks (fresh attestation by default),
   and invalid candidates are removed. A valid first Venice candidate selects Venice and can enqueue
   the configured authenticated acolyte UWU reward through the lifecycle executor. A valid first Base
   RPC candidate must validate as Base mainnet chain 8453, persist owner-only, and hot-load for token

@@ -426,6 +426,38 @@ impl OperatorHarness {
         Ok((text, completed))
     }
 
+    pub async fn force_update_scheduled(
+        &self,
+        inbox: &str,
+        generation: u64,
+    ) -> Result<(String, bool)> {
+        if self.operator_generation(inbox)? != generation {
+            bail!("operator authority changed before force-update");
+        }
+        let _execution = self.execution.lock().await;
+        if self.operator_generation(inbox)? != generation {
+            bail!("operator authority changed while waiting");
+        }
+        self.checkpoint(
+            inbox,
+            "Starting fixed force-update; inspect CODE.md and release receipts if interrupted.",
+            &[],
+        )?;
+        let receipt = self.tools.execute("force_update", "{}").await;
+        let response = format!(
+            "FORCE-UPDATE {}.\n{}\n{}\nINSTALLATION DOES NOT REPLACE THE RUNNING PROCESS; RESTART THROUGH THE LAUNCHER AFTER A SUCCESSFUL INSTALL.",
+            if receipt.ok {
+                "COMPLETED"
+            } else {
+                "FAILED OR INCOMPLETE"
+            },
+            receipt.summary,
+            receipt.output
+        );
+        self.checkpoint(inbox, &response, std::slice::from_ref(&receipt))?;
+        Ok((response, receipt.ok))
+    }
+
     async fn respond_tracked(
         &self,
         operator_inbox_id: &str,
@@ -443,6 +475,16 @@ impl OperatorHarness {
         }
         let operator_inbox_id = normalize_inbox_id(operator_inbox_id)?;
         let generation = self.operator_generation(&operator_inbox_id)?;
+        if let Some(("force-update", arguments)) = direct_command(text) {
+            if !arguments.trim().is_empty() {
+                bail!("usage: /force-update");
+            }
+            return self
+                .tasks
+                .as_ref()
+                .context("task scheduler is not configured")?
+                .queue_force_update(&operator_inbox_id, generation);
+        }
         let update_arguments = direct_command(text)
             .filter(|(name, _)| *name == "update")
             .map(|(_, arguments)| arguments)
@@ -556,7 +598,7 @@ impl OperatorHarness {
             .join(",");
 
         let mut runtime_facts = format!(
-            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh,erc8004_republish expose sanitized state only; endpoints, API keys, and private keys remain secret\nOPERATOR_SHELL_CAPABILITY=exec is always available in this authenticated operator lane; choose and run the shell commands needed for the current request, inspect receipts, and iterate within runtime limits\nCONDITIONAL_MODEL_CAPABILITIES=create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/doctor,/env,/task,/update,/operator,/operator-switch,/referrals,/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/growth,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
+            "RUNTIME FACTS (AUTHORITATIVE APPLICATION DATA):\nAGENT_IDENTITY=DURABLE_TENTACLE\nCOLLECTIVE_IDENTITY=SINGULAR_CENTERLESS_CTHUWU\nAGENT_ROLE=LOCAL_XMTP_TENTACLE\nUNDERLYING_MODEL_IMPLEMENTATION={}\nUNDERLYING_MODEL_IS_AGENT_IDENTITY=FALSE\nOPERATOR_WORKSPACE_ROOT={}\nWORKSPACE_SKILLS_ROOT={}\nACTIVE_MODEL_TOOLS={}\nALWAYS_AVAILABLE_PRIVATE_RUNTIME_TOOLS=base_rpc_status,erc8004_status,erc8004_refresh,erc8004_republish expose sanitized state only; endpoints, API keys, and private keys remain secret\nOPERATOR_SHELL_CAPABILITY=exec is always available in this authenticated operator lane; choose and run the shell commands needed for the current request, inspect receipts, and iterate within runtime limits\nCONDITIONAL_MODEL_CAPABILITIES=create_skill is activated for one create-only call only when the current message explicitly requests a new skill; repository_maintenance is activated only for current-message repository diagnosis/update/fork/validation/commit/push/PR intent and accepts a closed typed operation, never a shell string\nDIRECT_COMMANDS=/force-update,/doctor,/env,/task,/update,/operator,/operator-switch,/referrals,/files,/read,/search,/qmd,/write,/edit,/exec,/repo,/users,/user,/provider,/model,/venice-key,/base-rpc-key,/nature,/adjust,/lineage,/metrics,/judgment,/spawn,/gossip-status,/share-skill,/request-skill,/growth,/registry-status,/registry-refresh,/registry-candidates,/registry-adopt,/registry-register,/registry-allegiance,/registry-republish,/registry-pending,/registry-retry,/registry-recover\nTOOL_OUTPUT_LIMIT_BYTES={}\nCONTACT_MEMORY=RETAINED_LOCAL_CONTACT_NOTES_ONLY\nCONTACT_REPORTS=STRICT_RUNTIME_ROUTE_OR_DIRECT_COMMAND_ONLY\nPROTECTED_NOTE_LOCATIONS=ASK WHERE THE NOTES ARE FOR A LOCAL RUNTIME REPORT\nRAW_DM_HISTORY_ACCESS=NONE\nTHE XMTP SIDECAR AND NORMAL USER MODEL DO NOT HAVE THESE TOOLS.",
             self.model.implementation_description(),
             self.context.workspace_root().display(),
             self.context.workspace_root().join("skills").display(),
@@ -1281,6 +1323,7 @@ fn operator_help() -> String {
         "`/env set NAME value`, `/env add NAME slot value`, `/env list|get|unset|remove|enable|disable` — REDACTED CONFIGURATION AND BACKUP KEYS. USE VENICE_API_KEY, UWUBOT_MODEL_API_KEY, UWUBOT_PROVIDER, UWUBOT_MODEL, CTHUWU_RPC_ENDPOINT, OR TOOL_*.",
         "`/operator <address-or-ENS>` — VERIFY AN EXISTING XMTP INBOX AND PREPARE TRANSFER; `/operator confirm <token>` RECHECKS ITS BINDING AND CHANGES THE OPERATOR. `/operator-switch` REMAINS AN ALIAS.",
         "`/update [requested functionality or commit]` — REVIEW THE PRIME TENTACLE, ADOPT USEFUL UPDATES, AND PREPARE A LOCAL RELEASE; REPORTS DIVERGENCE AND RESTART REQUIREMENTS.",
+        "`/force-update` — FETCH PRIME main, BUILD AND INSTALL WITHOUT INFERENCE; PRESERVE LOCAL SOURCE; RESTART REQUIRED.",
         "`/doctor [check|fix]` — DIRECT MODEL-INDEPENDENT DIAGNOSTICS; DEFAULT SAFELY REPAIRS VERIFIED COOLDOWNS AND MISSING WORKSPACE DIRECTORIES.",
         "`/task run <request>` — START DURABLE BACKGROUND WORK; `/task add <seconds> <request>` REPEATS IT. `/task list|pause|resume|remove` MANAGES WORK; `/task steer <id> <request>` UPDATES IT.",
         "`/provider [venice|ollama|openai|deterministic]` — SHOW OR SWITCH THE NODE-WIDE INFERENCE PROVIDER.",
@@ -1771,6 +1814,33 @@ impl LocalOperatorTools {
         })
     }
 
+    async fn force_update(&self, arguments: &str) -> Result<ToolReceipt> {
+        if arguments != "{}" {
+            bail!("force_update accepts no arguments");
+        }
+        let env = crate::workspace_runtime::environment_for(&self.workspace_root)?;
+        // Use the compiled recovery helper even if the workspace's editable copy is stale.
+        let mut helper = tempfile::Builder::new()
+            .prefix("force-update-")
+            .suffix(".py")
+            .tempfile_in(self.workspace_root.join("tmp"))?;
+        std::io::Write::write_all(&mut helper, include_bytes!("../../scripts/code.py"))?;
+        run_process_with_environment(
+            "force_update",
+            Path::new("python3"),
+            &[
+                helper.path().to_string_lossy().into_owned(),
+                "--root".into(),
+                self.workspace_root.to_string_lossy().into_owned(),
+                "force-update".into(),
+            ],
+            &self.workspace_root,
+            Duration::from_secs(840),
+            &env,
+        )
+        .await
+    }
+
     async fn exec(&self, arguments: &str) -> Result<ToolReceipt> {
         let args: ExecArguments = parse_arguments(arguments)?;
         if args.command.trim().is_empty() || args.command.len() > MAX_TOOL_ARGUMENT_BYTES {
@@ -2081,6 +2151,7 @@ impl OperatorToolRuntime for LocalOperatorTools {
             "list_users" => self.list_users(arguments),
             "get_user" => self.get_user(arguments),
             "exec" => self.exec(arguments).await,
+            "force_update" => self.force_update(arguments).await,
             _ => {
                 return ToolReceipt::error(name, "unsupported operator tool; nothing was executed");
             }
@@ -5280,6 +5351,54 @@ mod tests {
                 .contains("adopt calendar support")
         );
         assert!(h.respond(&"b".repeat(64), "/update").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn force_update_queues_and_runs_without_inference_but_requires_current_epoch() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = Arc::new(FakeTools {
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut operators =
+            crate::principal::OperatorStore::new(root.path(), "production").unwrap();
+        let generation = operators
+            .add(TEST_OPERATOR_ID, "operator")
+            .unwrap()
+            .generation;
+        let tasks = Arc::new(crate::operator_tasks::OperatorTasks::open(root.path()).unwrap());
+        let h =
+            harness(root.path(), tools.clone()).with_tasks(tasks, Arc::new(Mutex::new(operators)));
+        let busy = h.execution.lock().await;
+        let queued = tokio::time::timeout(
+            Duration::from_millis(100),
+            h.respond(TEST_OPERATOR_ID, "/force-update"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(queued.contains("WITHOUT INFERENCE"));
+        assert!(tools.calls.lock().unwrap().is_empty());
+        drop(busy);
+        assert!(
+            h.force_update_scheduled(TEST_OPERATOR_ID, generation + 1)
+                .await
+                .is_err()
+        );
+        let (response, complete) = h
+            .force_update_scheduled(TEST_OPERATOR_ID, generation)
+            .await
+            .unwrap();
+        assert!(complete, "{response}");
+        assert_eq!(
+            *tools.calls.lock().unwrap(),
+            vec![("force_update".into(), "{}".into())]
+        );
+        assert!(h.respond(&"b".repeat(64), "/force-update").await.is_err());
+        assert!(
+            h.respond(TEST_OPERATOR_ID, "/force-update arbitrary-command")
+                .await
+                .is_err()
+        );
     }
 
     #[test]

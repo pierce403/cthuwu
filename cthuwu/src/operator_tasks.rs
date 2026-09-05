@@ -43,6 +43,8 @@ pub struct Task {
     pub interval: u64,
     pub next: u64,
     pub prompt: String,
+    #[serde(default)]
+    pub force_update: bool,
     pub state: String,
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,6 +104,13 @@ impl OperatorTasks {
                     .is_some_and(|result| result.chars().count() > 8000)
             {
                 bail!("invalid task registration");
+            }
+            if task.force_update
+                && (task.interval != 0
+                    || task.builtin.is_some()
+                    || task.prompt != "Install prime main without inference")
+            {
+                bail!("invalid force-update registration");
             }
             if let Some(builtin) = &task.builtin {
                 if builtin != DAILY_REVIEW
@@ -178,6 +187,7 @@ impl OperatorTasks {
             interval: DAILY_REVIEW_INTERVAL,
             next: timestamp.saturating_add(DAILY_REVIEW_INTERVAL),
             prompt: DAILY_REVIEW_PROMPT.into(),
+            force_update: false,
             state: "ready".into(),
             result: None,
             builtin: Some(DAILY_REVIEW.into()),
@@ -185,6 +195,44 @@ impl OperatorTasks {
         self.save(&next)?;
         *tasks = next;
         Ok(())
+    }
+
+    pub fn queue_force_update(&self, inbox: &str, generation: u64) -> Result<String> {
+        normalize_inbox_id(inbox)?;
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("task lock"))?;
+        if generation == 0 || tasks.len() >= 100 {
+            bail!("force-update needs an active operator and space in the task store");
+        }
+        if tasks.iter().any(|t| {
+            t.force_update
+                && t.inbox == inbox
+                && t.generation == generation
+                && matches!(t.state.as_str(), "ready" | "running")
+        }) {
+            bail!("force-update already queued or running; inspect /task list");
+        }
+        let id = task_id()?;
+        let mut next = tasks.clone();
+        next.push(Task {
+            id: id.clone(),
+            inbox: inbox.into(),
+            generation,
+            interval: 0,
+            next: now(),
+            prompt: "Install prime main without inference".into(),
+            force_update: true,
+            state: "ready".into(),
+            result: None,
+            builtin: None,
+        });
+        self.save(&next)?;
+        *tasks = next;
+        Ok(format!(
+            "FORCE-UPDATE TASK {id} QUEUED WITHOUT INFERENCE. FETCHING CODE.md'S PRIME main, BUILDING AND INSTALLING THE EXACT COMMIT. LOCAL-ONLY SOURCE CHANGES ARE PRESERVED BUT EXCLUDED FROM THE RELEASE. RESULTS FOLLOW HERE; /task pause {id} CANCELS. RESTART IS REQUIRED AFTER INSTALLATION."
+        ))
     }
 
     pub fn command(&self, inbox: &str, generation: u64, text: &str) -> Result<String> {
@@ -247,6 +295,7 @@ impl OperatorTasks {
                     interval,
                     next: now(),
                     prompt: prompt.to_owned(),
+                    force_update: false,
                     state: "ready".into(),
                     result: None,
                     builtin: None,
@@ -267,6 +316,9 @@ impl OperatorTasks {
                     .iter_mut()
                     .find(|t| t.id == id && t.inbox == inbox && t.generation == generation)
                     .context("task not found")?;
+                if task.force_update {
+                    bail!("force-update is a fixed operation; pause/remove it instead of steering");
+                }
                 task.prompt = prompt.into();
                 task.state = "ready".into();
                 task.next = now();
@@ -286,6 +338,9 @@ impl OperatorTasks {
                     .iter_mut()
                     .find(|t| t.id == id && t.inbox == inbox && t.generation == generation)
                     .context("task not found for this operator authorization")?;
+                if task.force_update {
+                    bail!("force-update cannot recur");
+                }
                 task.interval = interval;
                 task.next = now().saturating_add(interval);
                 format!(
@@ -445,7 +500,7 @@ pub async fn supervise(
                 }
             };
             let result = tokio::select! {
-                result = tokio::time::timeout(Duration::from_secs(900), crate::deadline::scope_authenticated_deadline(crate::deadline::InferenceLane::Operator, Duration::from_secs(900), harness.respond_scheduled(&task.inbox, &task.prompt))) => match result {
+                result = tokio::time::timeout(Duration::from_secs(900), crate::deadline::scope_authenticated_deadline(crate::deadline::InferenceLane::Operator, Duration::from_secs(900), async { if task.force_update { harness.force_update_scheduled(&task.inbox, task.generation).await } else { harness.respond_scheduled(&task.inbox, &task.prompt).await } })) => match result {
                     Ok(Ok(Ok(outcome))) => outcome,
                     _ => ("Task interrupted or failed. Inspect the private session receipts before resuming; effects may have completed.".into(), false),
                 },
@@ -486,6 +541,38 @@ mod tests {
             assert!(result.starts_with(retained));
             assert!(!retained.is_empty());
         }
+    }
+
+    #[test]
+    fn force_update_is_fixed_one_shot_and_interrupted_runs_pause() {
+        let root = tempfile::tempdir().unwrap();
+        let mut operators = OperatorStore::new(root.path(), "production").unwrap();
+        let inbox = "a".repeat(64);
+        let auth = operators.add(&inbox, "test").unwrap();
+        let tasks = OperatorTasks::open(root.path()).unwrap();
+        tasks.queue_force_update(&inbox, auth.generation).unwrap();
+        assert!(tasks.queue_force_update(&inbox, auth.generation).is_err());
+        let task = tasks.claim(&operators).unwrap().unwrap();
+        assert!(task.force_update);
+        assert!(
+            tasks
+                .command(
+                    &inbox,
+                    auth.generation,
+                    &format!("steer {} execute something else", task.id)
+                )
+                .is_err()
+        );
+        assert!(
+            tasks
+                .command(&inbox, auth.generation, &format!("interval {} 60", task.id))
+                .is_err()
+        );
+        let reopened = OperatorTasks::open(root.path()).unwrap();
+        let saved = reopened.tasks.lock().unwrap();
+        let task = saved.iter().find(|t| t.force_update).unwrap();
+        assert_eq!(task.state, "paused");
+        assert_eq!(task.interval, 0);
     }
 
     #[test]

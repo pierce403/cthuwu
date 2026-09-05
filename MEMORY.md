@@ -2,6 +2,12 @@
 
 Last reviewed: 2026-09-05
 
+- Venice defaults to TEE, but explicit `/env set UWUBOT_VENICE_PRIVACY standard` now persists a
+  non-attested TLS route; use `z-ai-glm-5-3-flash` for GLM 5.3 Flash. Privacy/model switches need
+  no working LLM. `/force-update` is a fixed one-shot task using the embedded helper to install
+  CODE.md's prime main; it preserves divergent source and activates only a validated binary/sidecar
+  pair for the next deliberate restart. Old binaries need a host update before recognizing it.
+
 - `/env list` credential presence does not establish inference health. `/doctor [check|fix]`
   bypasses the model, probes the selected route separately from Ollama, and clears only verified
   current cooldowns. Venice validation must use the environment override pool when present, not

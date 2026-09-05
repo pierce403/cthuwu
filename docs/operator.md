@@ -296,7 +296,7 @@ remote route.
 
 When no key exists, an ordinary authenticated acolyte may also send `/venice-key <api-key>`. Public
 provisioning is first-key-only: it cannot replace an existing credential. The candidate must
-authenticate against Venice's live model catalog and pass a fresh TEE attestation before it is
+authenticate against Venice's live model catalog and, in the default TEE mode, pass a fresh attestation before it is
 accepted for reward. The secret remains in the XMTP conversation history even though Cthuwu never
 echoes or logs it, so use a dedicated revocable Venice key. If the freshly observed treasury can
 cover the configured reward, Rust queues an exact transfer to the SDK-authenticated sender address;
@@ -566,3 +566,8 @@ incompatible, failed, timed-out, or overlong output is returned as a failed/trun
 These invariants are covered by local unit and protocol tests. A complete live-XMTP authorization,
 execution, revocation, installation-compromise, and OS-containment release exercise remains required
 before treating the feature as production-hardened.
+
+Venice privacy can now be explicitly changed over authenticated XMTP with
+`/env set UWUBOT_VENICE_PRIVACY standard` or restored with `tee`. This applies to public and operator
+inference and never changes implicitly during failover. See [workspace recovery commands](agent-workspace.md)
+for the GLM 5.3 Flash sequence and model-independent `/force-update` installation.

@@ -178,6 +178,7 @@ pub struct OpenAiCompatibleModel {
 }
 
 struct VeniceTeeMode {
+    require_attestation: bool,
     validation: Mutex<VeniceValidationState>,
 }
 
@@ -251,15 +252,25 @@ impl OpenAiCompatibleModel {
     /// Venice attestation before initial chat content is sent, then caches their
     /// success on independent bounded intervals. It deliberately does not enable
     /// or claim end-to-end encryption.
-    pub fn with_venice_tee(mut self) -> Result<Self> {
+    pub fn with_venice_tee(self) -> Result<Self> {
+        self.with_venice_privacy(true)
+    }
+
+    /// Explicit operator opt-out: catalog validation and TLS remain; no TEE claim.
+    pub fn with_venice_standard(self) -> Result<Self> {
+        self.with_venice_privacy(false)
+    }
+
+    fn with_venice_privacy(mut self, require_attestation: bool) -> Result<Self> {
         if self
             .api_key
             .as_deref()
             .is_none_or(|api_key| api_key.trim().is_empty())
         {
-            bail!("Venice TEE mode requires a nonempty API key");
+            bail!("Venice mode requires a nonempty API key");
         }
         self.venice_tee = Some(VeniceTeeMode {
+            require_attestation,
             validation: Mutex::new(VeniceValidationState::default()),
         });
         Ok(self)
@@ -387,6 +398,9 @@ impl OpenAiCompatibleModel {
             self.validate_venice_model_capabilities(deadline).await?;
             validation.catalog_validated_at = Some(Instant::now());
         }
+        if !mode.require_attestation {
+            return Ok(());
+        }
         let now = Instant::now();
         if validation.attested_at.is_none_or(|attested_at| {
             now.saturating_duration_since(attested_at) >= VENICE_TEE_ATTESTATION_TTL
@@ -432,10 +446,14 @@ impl OpenAiCompatibleModel {
         let capabilities = selected
             .pointer("/model_spec/capabilities")
             .context("Venice model entry omitted its capabilities")?;
-        if capabilities
-            .get("supportsTeeAttestation")
-            .and_then(Value::as_bool)
-            != Some(true)
+        if self
+            .venice_tee
+            .as_ref()
+            .is_some_and(|mode| mode.require_attestation)
+            && capabilities
+                .get("supportsTeeAttestation")
+                .and_then(Value::as_bool)
+                != Some(true)
         {
             bail!("configured Venice model does not advertise TEE attestation support");
         }

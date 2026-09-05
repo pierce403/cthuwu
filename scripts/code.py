@@ -351,7 +351,7 @@ class CodeWorkspace:
                  f"+refs/heads/{self.branch}:refs/remotes/prime/review")
         return self.git("rev-parse", "refs/remotes/prime/review")
 
-    def init(self):
+    def init(self, branch=None):
         self.configuration()
         if not self.repo.exists():
             temporary = Path(tempfile.mkdtemp(prefix="code-clone-", dir=contained(self.root, "tmp")))
@@ -359,7 +359,7 @@ class CodeWorkspace:
                 self.git("init", "--initial-branch=tentacle", str(temporary), cwd=self.root)
                 self.git("remote", "add", "origin", self.upstream, cwd=temporary)
                 self.git("fetch", "--no-tags", "--no-recurse-submodules", self.upstream,
-                         f"+refs/heads/{self.branch}:refs/remotes/prime/review", cwd=temporary)
+                         f"+refs/heads/{branch or self.branch}:refs/remotes/prime/review", cwd=temporary)
                 self.git("checkout", "--no-recurse-submodules", "-B", "tentacle", "refs/remotes/prime/review", cwd=temporary)
                 os.rename(temporary, self.repo)
             finally:
@@ -525,6 +525,45 @@ class CodeWorkspace:
         return {**self.status(), "action": "installed", "using": tip, "not_using": [],
                 "note": "Installation is ready for a deliberate restart; the running process was not replaced."}
 
+    def force_update(self):
+        """Install exact upstream main without inference or destructive source replacement."""
+        self.init(branch="main")
+        configuration = (self.upstream, self.branch)
+        self.validate_repo(clean=False)
+        previous = self.git("rev-parse", "HEAD")
+        self.git("fetch", "--no-tags", "--no-recurse-submodules", self.upstream,
+                 "+refs/heads/main:refs/remotes/prime/force-main")
+        tip = self.git("rev-parse", "refs/remotes/prime/force-main")
+        release = self.build_release(tip)
+        self.check_configuration(configuration)
+        self.validate_repo(clean=False)
+        if self.git("rev-parse", "HEAD") != previous:
+            raise ValueError("source changed during force-update; activation was cancelled")
+        clean = not self.git("status", "--porcelain=v1", "--untracked-files=all")
+        fast_forward = False
+        if clean:
+            try:
+                self.git("merge-base", "--is-ancestor", previous, tip)
+                fast_forward = True
+            except ValueError:
+                pass
+        state = self.state()
+        reason = "Explicit operator /force-update: install exact prime main without inference; preserve local source when dirty or divergent."
+        self.intent(state, "force-update main", previous, tip, [tip], reason)
+        if fast_forward and previous != tip:
+            self.git("merge", "--ff-only", tip)
+        self.activate(release)
+        head = self.git("rev-parse", "HEAD")
+        state.update(head=head, installed=tip,
+                     divergence=("Source matches installed prime main." if head == tip and clean else
+                                 "Installed prime main; local source changes remain preserved in code/ and are NOT in the installed release."))
+        self.record(state, "force-installed main", tip, reason)
+        state.pop("pending", None)
+        self.save(state)
+        return {**self.status(), "action": "force_installed", "installed_branch": "main",
+                "using": tip, "local_changes_in_release": False,
+                "note": "Exact prime main installed. Local-only changes are not included. Restart deliberately to run the installed binary/sidecar pair."}
+
     def active(self):
         path = contained(self.root, "releases/active.json")
         if not path.exists():
@@ -684,7 +723,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "status", "review", "update", "install"):
+    for name in ("init", "status", "review", "update", "install", "force-update"):
         sub.add_parser(name)
     for name in ("accept", "defer"):
         selection = sub.add_parser(name)
@@ -694,7 +733,7 @@ def main():
     try:
         workspace = CodeWorkspace(arguments.root)
         with workspace.locked():
-            method = getattr(workspace, arguments.command)
+            method = getattr(workspace, arguments.command.replace("-", "_"))
             result = method(arguments.commits, arguments.reason) if arguments.command in ("accept", "defer") else method()
         print(json.dumps(result, ensure_ascii=False))
         return 0

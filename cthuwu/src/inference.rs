@@ -97,8 +97,14 @@ struct StoredInferenceConfig {
     xmtp_environment: String,
     provider: Provider,
     venice_model: String,
+    #[serde(default = "default_venice_tee")]
+    venice_require_tee: bool,
     ollama_model: String,
     openai_model: String,
+}
+
+fn default_venice_tee() -> bool {
+    true
 }
 
 impl StoredInferenceConfig {
@@ -108,6 +114,7 @@ impl StoredInferenceConfig {
             xmtp_environment: config.xmtp_environment.clone(),
             provider: config.startup_provider.unwrap_or(Provider::Venice),
             venice_model: validate_model_id(&config.venice_model)?,
+            venice_require_tee: true,
             ollama_model: validate_model_id(&config.ollama_model)?,
             openai_model: validate_model_id(&config.openai_model)?,
         })
@@ -427,6 +434,7 @@ impl InferenceRouter {
                         &settings,
                         provider,
                         state.selection.model(provider).unwrap(),
+                        state.selection.venice_require_tee,
                     )? {
                         candidates.push(Candidate {
                             provider,
@@ -534,8 +542,13 @@ impl InferenceRouter {
             .map(Provider::as_str)
             .unwrap_or("NOT USED YET");
         let last_failure = state.last_failure.map(Provider::as_str).unwrap_or("NONE");
+        let privacy = if state.selection.venice_require_tee {
+            "TEE-ONLY WITH BASELINE NONCE ATTESTATION"
+        } else {
+            "STANDARD TLS; TEE ATTESTATION DISABLED BY OPERATOR"
+        };
         Ok(format!(
-            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nCREDENTIAL STATUS IS PRESENCE ONLY; RUN /doctor TO TEST INFERENCE.\nVENICE PRIVACY MODE: TEE-ONLY WITH BASELINE NONCE ATTESTATION; FULL E2EE: NO\nVENICE DEADLINE POLICY: PUBLIC CHAT <= {}S; OPERATOR <= {}S; BOTH ARE CLAMPED TO THE REMAINING AUTHENTICATED DEADLINE\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT WITH EXPLICIT TIME RESERVED BEFORE REMOTE INFERENCE\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
+            "SELECTED PROVIDER: `{}`\nSELECTED MODEL: `{selected_model}`\nVENICE CREDENTIAL CONFIGURED: {venice_configured}\nCREDENTIAL STATUS IS PRESENCE ONLY; RUN /doctor TO TEST INFERENCE.\nVENICE PRIVACY MODE: {privacy}; FULL E2EE: NO\nVENICE DEADLINE POLICY: PUBLIC CHAT <= {}S; OPERATOR <= {}S; BOTH ARE CLAMPED TO THE REMAINING AUTHENTICATED DEADLINE\nOLLAMA FALLBACK: `{}` AT A LOOPBACK ENDPOINT WITH EXPLICIT TIME RESERVED BEFORE REMOTE INFERENCE\nOPENAI-COMPATIBLE PROVIDER CONFIGURED: {openai_configured}\nLAST EFFECTIVE PROVIDER: `{last_effective}`\nLAST FAILED PROVIDER: `{last_failure}`\nFALLBACK POLICY: REMOTE SELECTION -> LOCAL OLLAMA -> DETERMINISTIC; LOCAL SELECTION NEVER FALLS FORWARD TO A REMOTE PROVIDER.",
             selected.as_str(),
             PUBLIC_REMOTE_ATTEMPT_LIMIT.as_secs(),
             self.settings.venice_timeout.as_secs(),
@@ -622,7 +635,12 @@ impl InferenceRouter {
         }
         let mut settings = self.settings.clone();
         settings.venice_api_key = state.venice_api_key.clone();
-        let replacement = build_one_model(&settings, provider, &model)?;
+        let replacement = build_one_model(
+            &settings,
+            provider,
+            &model,
+            state.selection.venice_require_tee,
+        )?;
         let mut next = state.selection.clone();
         next.set_model(provider, model.clone())?;
         self.store.save(&next)?;
@@ -649,7 +667,7 @@ impl InferenceRouter {
             response: format!(
                 "I CONFIGURED `{}` TO REQUEST MODEL `{model}`, OPERATOR, UWU. THE PROVIDER WILL VERIFY THAT MODEL ON THE NEXT INFERENCE REQUEST, AND THE LOCAL FALLBACK REMAINS ARMED. THE NEW ROUTE APPLIES TO PUBLIC AND OPERATOR INFERENCE.{}",
                 provider.as_str(),
-                if provider == Provider::Venice {
+                if provider == Provider::Venice && state.selection.venice_require_tee {
                     " VENICE WILL REQUIRE TEE CAPABILITY AND A FRESH BASELINE ATTESTATION BEFORE PROMPT EGRESS."
                 } else {
                     ""
@@ -677,7 +695,7 @@ impl InferenceRouter {
             .read()
             .map_err(|_| anyhow::anyhow!("inference router lock is poisoned"))?;
         Ok(format!(
-            "CONFIGURED MODEL SLOTS:\n- VENICE TEE: `{}`{}\n- OLLAMA LOCAL: `{}`\n- OPENAI-COMPATIBLE: `{}`{}\n- DETERMINISTIC: BUILT IN\n\nSWITCH PROVIDERS WITH `/provider <name>`, THEN SET THAT PROVIDER'S MODEL WITH `/model <model-id>`.",
+            "CONFIGURED MODEL SLOTS:\n- VENICE (SEE /env list FOR PRIVACY): `{}`{}\n- OLLAMA LOCAL: `{}`\n- OPENAI-COMPATIBLE: `{}`{}\n- DETERMINISTIC: BUILT IN\n\nSWITCH PROVIDERS WITH `/provider <name>`, THEN SET THAT PROVIDER'S MODEL WITH `/model <model-id>`.",
             state.selection.venice_model,
             if state.venice_api_key.is_some() {
                 ""
@@ -803,8 +821,12 @@ impl ModelControl for InferenceRouter {
                     slot.as_ref()
                         .map_or("runtime credential", |entry| entry.name.as_str())
                 );
-                let Some(model) =
-                    build_one_model(&settings, provider, selection.model(provider).unwrap())?
+                let Some(model) = build_one_model(
+                    &settings,
+                    provider,
+                    selection.model(provider).unwrap(),
+                    selection.venice_require_tee,
+                )?
                 else {
                     lines.push(format!(
                         "ACTION: {label}: no credential configured. Use /env set {} <key>.",
@@ -843,7 +865,7 @@ impl ModelControl for InferenceRouter {
                     Ok(()) => {
                         lines.push(format!(
                             "PASS: {label}: live completion with tool schema succeeded{}.",
-                            if provider == Provider::Venice {
+                            if provider == Provider::Venice && selection.venice_require_tee {
                                 "; fresh TEE checks passed"
                             } else {
                                 ""
@@ -934,10 +956,15 @@ impl ModelControl for InferenceRouter {
             .clone();
         let mut settings = self.settings.clone();
         settings.venice_api_key = Some(key.clone());
-        build_one_model(&settings, Provider::Venice, &selection.venice_model)?
-            .context("Venice model unavailable")?
-            .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
-            .await?;
+        build_one_model(
+            &settings,
+            Provider::Venice,
+            &selection.venice_model,
+            selection.venice_require_tee,
+        )?
+        .context("Venice model unavailable")?
+        .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
+        .await?;
         if !self.environment.contains("VENICE_API_KEY") {
             let primary = self
                 .state
@@ -957,6 +984,51 @@ impl ModelControl for InferenceRouter {
 
     async fn environment_command(&self, arguments: &str) -> Result<ControlReply> {
         let arguments = normalize_environment_arguments(arguments);
+        if arguments == "get UWUBOT_VENICE_PRIVACY" {
+            return Ok(ControlReply {
+                response: self.status()?,
+                changed: false,
+            });
+        }
+        if let Some(value) = arguments.strip_prefix("set UWUBOT_VENICE_PRIVACY ") {
+            let require_tee = match value.trim() {
+                "tee" => true,
+                "standard" => false,
+                _ => bail!("usage: /env set UWUBOT_VENICE_PRIVACY <tee|standard>"),
+            };
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| anyhow::anyhow!("inference lock"))?;
+            let mut next = state.selection.clone();
+            next.venice_require_tee = require_tee;
+            let mut settings = self.settings.clone();
+            settings.venice_api_key = state.venice_api_key.clone();
+            let models = build_models(&settings, &next)?;
+            let generation = state
+                .generation
+                .checked_add(1)
+                .context("inference route generation exhausted")?;
+            self.store.save(&next)?;
+            state.selection = next;
+            state.models = models;
+            state.generation = generation;
+            state.unhealthy_until.clear();
+            state.last_failure = None;
+            state.last_effective = None;
+            return Ok(ControlReply {
+                response: format!(
+                    "VENICE PRIVACY SET TO {} FOR PUBLIC AND OPERATOR INFERENCE. MODEL AND KEYS PRESERVED. FULL E2EE: NO. RUN /doctor check AFTER CHOOSING YOUR MODEL.",
+                    if require_tee {
+                        "TEE; ATTESTATION REQUIRED"
+                    } else {
+                        "STANDARD TLS; NO TEE ATTESTATION"
+                    }
+                ),
+                changed: true,
+            });
+        }
+
         if matches!(
             arguments.as_str(),
             "get UWUBOT_PROVIDER" | "get UWUBOT_MODEL"
@@ -1002,8 +1074,13 @@ impl ModelControl for InferenceRouter {
                 .map_err(|_| anyhow::anyhow!("inference lock"))?
                 .selection
                 .clone();
-            let model = build_one_model(&settings, Provider::Venice, &selection.venice_model)?
-                .context("Venice model unavailable")?;
+            let model = build_one_model(
+                &settings,
+                Provider::Venice,
+                &selection.venice_model,
+                selection.venice_require_tee,
+            )?
+            .context("Venice model unavailable")?;
             model
                 .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Operator)?)
                 .await
@@ -1075,8 +1152,13 @@ impl ModelControl for InferenceRouter {
         }
         let mut settings = self.settings.clone();
         settings.venice_api_key = Some(key.clone());
-        let model = build_one_model(&settings, Provider::Venice, &state.selection.venice_model)?
-            .context("a Venice credential did not produce a configured Venice model")?;
+        let model = build_one_model(
+            &settings,
+            Provider::Venice,
+            &state.selection.venice_model,
+            state.selection.venice_require_tee,
+        )?
+        .context("a Venice credential did not produce a configured Venice model")?;
         if self.environment.contains("VENICE_API_KEY") {
             self.environment
                 .command(&format!("set VENICE_API_KEY {key}"))?;
@@ -1130,10 +1212,15 @@ impl ModelControl for InferenceRouter {
         } else {
             legacy
         };
-        build_one_model(&settings, Provider::Venice, &selection.venice_model)?
-            .context("no available Venice credential; run /doctor")?
-            .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
-            .await
+        build_one_model(
+            &settings,
+            Provider::Venice,
+            &selection.venice_model,
+            selection.venice_require_tee,
+        )?
+        .context("no available Venice credential; run /doctor")?
+        .ensure_venice_tee(InferenceDeadline::current(InferenceLane::Public)?)
+        .await
     }
 
     fn clear_venice_key(&self) -> Result<()> {
@@ -1557,14 +1644,19 @@ impl OperatorModel for InferenceRouter {
             .read()
             .map(|state| {
                 format!(
-                    "{}:{}:{}:{}",
+                    "{}:{}:{}:{}:{}",
                     state.selection.provider.as_str(),
                     state
                         .selection
                         .model(state.selection.provider)
                         .unwrap_or("built-in"),
                     self.settings.openai_endpoint,
-                    self.settings.ollama_endpoint
+                    self.settings.ollama_endpoint,
+                    if state.selection.venice_require_tee {
+                        "tee"
+                    } else {
+                        "standard"
+                    }
                 )
             })
             .unwrap_or_else(|_| "unavailable".into())
@@ -1587,10 +1679,25 @@ fn build_models(
     selection: &StoredInferenceConfig,
 ) -> Result<ProviderModels> {
     Ok(ProviderModels {
-        venice: build_one_model(settings, Provider::Venice, &selection.venice_model)?,
-        ollama: build_one_model(settings, Provider::Ollama, &selection.ollama_model)?
-            .context("the loopback Ollama provider must always be constructible")?,
-        openai: build_one_model(settings, Provider::Openai, &selection.openai_model)?,
+        venice: build_one_model(
+            settings,
+            Provider::Venice,
+            &selection.venice_model,
+            selection.venice_require_tee,
+        )?,
+        ollama: build_one_model(
+            settings,
+            Provider::Ollama,
+            &selection.ollama_model,
+            selection.venice_require_tee,
+        )?
+        .context("the loopback Ollama provider must always be constructible")?,
+        openai: build_one_model(
+            settings,
+            Provider::Openai,
+            &selection.openai_model,
+            selection.venice_require_tee,
+        )?,
     })
 }
 
@@ -1598,6 +1705,7 @@ fn build_one_model(
     settings: &ProviderSettings,
     provider: Provider,
     model: &str,
+    require_tee: bool,
 ) -> Result<Option<Arc<OpenAiCompatibleModel>>> {
     let model = validate_model_id(model)?;
     let configured = match provider {
@@ -1605,9 +1713,14 @@ fn build_one_model(
             let Some(api_key) = settings.venice_api_key.clone() else {
                 return Ok(None);
             };
-            OpenAiCompatibleModel::new(&settings.venice_endpoint, Some(api_key), model)?
-                .with_timeout(settings.venice_timeout)?
-                .with_venice_tee()?
+            let configured =
+                OpenAiCompatibleModel::new(&settings.venice_endpoint, Some(api_key), model)?
+                    .with_timeout(settings.venice_timeout)?;
+            if require_tee {
+                configured.with_venice_tee()?
+            } else {
+                configured.with_venice_standard()?
+            }
         }
         Provider::Ollama => OpenAiCompatibleModel::new(&settings.ollama_endpoint, None, model)?
             .with_timeout(settings.ollama_timeout)?
@@ -1822,6 +1935,87 @@ mod tests {
             assert!(request.contains("Bearer active-key"));
             assert!(!request.contains("obsolete-key"));
         }
+    }
+
+    #[tokio::test]
+    async fn standard_venice_persists_and_validates_catalog_without_attestation() {
+        let root = tempfile::tempdir().unwrap();
+        let (endpoint, requests, server) = http_server_with(2, |index, _| {
+            (
+                "200 OK",
+                if index == 0 {
+                    serde_json::json!({"data":[{"id":"z-ai-glm-5-3-flash", "type":"text",
+                    "model_spec":{"capabilities":{"supportsTeeAttestation":false,"supportsFunctionCalling":true}}}]}).to_string()
+                } else {
+                    r#"{"choices":[{"message":{"content":"OK"}}]}"#.into()
+                },
+            )
+        });
+        let router = InferenceRouter::new(config(root.path())).unwrap();
+        assert!(router.status().unwrap().contains("TEE-ONLY"));
+        let tee_scope = router.session_scope();
+        router
+            .environment_command("set UWUBOT_VENICE_PRIVACY standard")
+            .await
+            .unwrap();
+        assert_ne!(tee_scope, router.session_scope());
+        router
+            .environment_command("set UWUBOT_MODEL z-ai-glm-5-3-flash")
+            .await
+            .unwrap();
+        assert!(
+            router
+                .environment_command("set UWUBOT_VENICE_PRIVACY auto")
+                .await
+                .is_err()
+        );
+        let mut router = InferenceRouter::new(config(root.path())).unwrap();
+        assert!(router.status().unwrap().contains("STANDARD TLS"));
+        router.set_venice_endpoint_for_test(endpoint).unwrap();
+        router
+            .environment
+            .command("set VENICE_API_KEY current-key")
+            .unwrap();
+        let candidates = router.candidates(InferenceLane::Operator).unwrap();
+        let CandidateModel::Compatible(model) = &candidates[0].model else {
+            panic!("missing model")
+        };
+        model
+            .raw_completion_with_deadline(
+                &[serde_json::json!({"role":"user","content":"probe"})],
+                &[],
+                128,
+                0.1,
+                InferenceDeadline::current(InferenceLane::Operator).unwrap(),
+            )
+            .await
+            .unwrap();
+        server.join().unwrap();
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[0].contains("/models?"));
+            assert!(requests[1].contains("/chat/completions"));
+            assert!(!requests.iter().any(|r| r.contains("/tee/attestation")));
+        }
+        router
+            .environment_command("set UWUBOT_VENICE_PRIVACY tee")
+            .await
+            .unwrap();
+        assert!(router.status().unwrap().contains("TEE-ONLY"));
+    }
+
+    #[test]
+    fn legacy_selection_without_privacy_field_defaults_to_tee() {
+        let root = tempfile::tempdir().unwrap();
+        let selection = StoredInferenceConfig::defaults(&config(root.path())).unwrap();
+        let mut json = serde_json::to_value(selection).unwrap();
+        json.as_object_mut().unwrap().remove("venice_require_tee");
+        assert!(
+            serde_json::from_value::<StoredInferenceConfig>(json)
+                .unwrap()
+                .venice_require_tee
+        );
     }
 
     #[test]

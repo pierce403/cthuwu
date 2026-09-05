@@ -16,6 +16,13 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
+## Inference outage recovery
+
+- [x] Explicit `/env set UWUBOT_VENICE_PRIVACY <tee|standard>` hot-applies and persists; legacy/default mode remains TEE. Standard mode validates the credential and exact text/tool model without attestation. No automatic privacy downgrade.
+- [x] `/force-update` queues a fixed model-independent job: fetch configured prime `main`, build/test, install the exact paired release, report results over XMTP, and retain source/release/restart distinctions.
+- [x] Preserve dirty/divergent source and previous active release on build failure. Use workspace-local storage and a compiled-in recovery helper. Epoch-bound cancellation and interrupted-task pause remain enforced.
+- [ ] Live XMTP GLM 5.3 Flash inference, outage recovery installation, cancellation, and subsequent deliberate restart on the operator's node.
+
 ## Model-independent operator diagnostics
 
 - [x] `/doctor [check|fix]` bypasses inference; default repair is limited to verified credential/provider cooldowns and missing workspace-local directories.
@@ -883,7 +890,7 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     credential is the explicit opt-in that permits remote prompt egress.
   - If inference is unavailable, public conversation may explain voluntary `/env donate VENICE_API_KEY`
     provisioning. The legacy `/venice-key <api-key>` first-key flow remains compatible. The first candidate persists in owner-only `state/venice.key`, is never
-    echoed or logged, and is removed if live catalog authentication or fresh TEE attestation fails.
+    echoed or logged, and is removed if live catalog authentication or the configured privacy validation fails.
     Public senders cannot replace an existing key; an active operator can.
   - A successfully validated first acolyte key selects Venice and, when the freshly observed
     Tentacle treasury holds enough UWU, creates one durable reward transfer bound to the XMTP

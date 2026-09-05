@@ -328,7 +328,7 @@ already-configured OpenAI-compatible endpoint, not arbitrary provider changes. `
 primary slot; `add` appends without replacement, up to eight slots. Legacy key commands/stores
 remain compatible. Venice aliases normalize the variable name without changing the value.
 
-Venice candidates must authenticate and pass the TEE check before acceptance. Other compatible
+Venice candidates must authenticate and pass the configured privacy checks before acceptance; TEE is the default. Other compatible
 model keys are checked on first use. At most three compatible keys are tried per request; their
 budgets preserve local fallback time. HTTP 401/403 disables the rejected slot, 429 cools it for
 five minutes, and other failures cool it for one minute. Re-enable explicitly after correcting
@@ -360,8 +360,7 @@ rely on an LLM choosing tools.
 
 A configured credential only means a key is stored. Doctor probes the selected provider and
 local Ollama separately, using a tiny synthetic completion with a tool schema, never private
-conversation history. Venice probes use the current credential pool and fresh catalog/TEE
-checks. Failures distinguish authentication/access, credit, rate limits, connectivity, model
+conversation history. Venice probes use the current credential pool and fresh catalog checks, plus attestation when TEE mode is selected. Failures distinguish authentication/access, credit, rate limits, connectivity, model
 compatibility, and attestation problems without printing keys or raw provider errors. Up to
 three enabled credential slots are tested, including cooling-down slots; disabled slots stay
 disabled. Each probe has a 30-second cap within a 150-second inference budget and the incoming
@@ -378,3 +377,44 @@ model, missing executable, or failed attestation remains an actionable finding, 
 
 After deploying this code, restart through `./uwu.sh` using the existing data directory, then run
 `/doctor`. No running node is upgraded merely by pushing GitHub main.
+
+## Explicit Venice privacy selection
+
+`/env set UWUBOT_VENICE_PRIVACY standard` disables TEE attestation for both public and operator
+inference. TLS, authenticated exact-model catalog validation, and function-calling capability checks
+remain. This is an explicit operator choice, never an automatic fallback. It persists across restart;
+legacy configurations still default to `tee`. Model and credential slots are preserved. Switching
+privacy creates a separate operator session route so prior dialogue is not silently replayed.
+
+To use Venice GLM 5.3 Flash, send each command as a separate operator XMTP message:
+
+```text
+/env set UWUBOT_VENICE_PRIVACY standard
+/env set UWUBOT_PROVIDER venice
+/env set UWUBOT_MODEL z-ai-glm-5-3-flash
+/doctor check
+```
+
+The [Venice catalog](https://docs.venice.ai/models/text) lists that exact model ID. Standard mode
+makes no TEE or E2EE claim. Restore attestation with `/env set UWUBOT_VENICE_PRIVACY tee`, then
+select a TEE-capable model. `/env list` reports the active privacy policy.
+
+## Recovery when inference is unavailable
+
+`/force-update` queues a fixed one-shot job without any model call. It uses the compiled-in Python
+helper, fetches the **main** branch of the prime URL in `CODE.md` (ignoring its ordinary review branch),
+and builds/tests a paired Rust binary and Node sidecar under workspace-local directories. Only a
+validated release becomes active for the next start. Local source fast-forwards when clean and
+compatible; otherwise dirty files and divergent commits remain intact in `code/`, excluded from
+the installed upstream release. It never resets local work or publishes a fork.
+
+The task sends a starting notice and a result to the authorizing operator. Use `/task list` or
+`/task pause <id>` during execution. Failed/interrupted runs pause; restart never silently repeats
+them. They cannot be steered into arbitrary commands or made recurring. Builds still need Git,
+Python, Rust, Node, npm, network access, disk space, and the existing bounded build budget; no system
+packages are installed. Failed builds preserve the previous active release. `CODE.md` records the
+installed commit, source divergence, and why main was selected; workspace changes are checkpointed.
+
+Installation does not restart the live process. Restart through `./uwu.sh` (or the container's
+entrypoint) with the same protected data and workspace to activate the release. **Older binaries
+cannot recognize this new command:** update and restart the host checkout once to bootstrap it.

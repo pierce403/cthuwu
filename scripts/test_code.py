@@ -118,6 +118,36 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(self.workspace.status()["source_commit"], self.initial)
         self.assertEqual((self.workspace.root / "releases/active.json").read_bytes(), active)
 
+    def test_force_update_installs_main_and_preserves_dirty_divergent_source(self):
+        self.workspace.init()
+        local = self.commit("local.md", "tailored coaching\n", "Local improvement", cwd=self.workspace.repo)
+        (self.workspace.repo / "notes.md").write_text("unsaved local work\n")
+        tip = self.commit("tips.md", "main improvement\n", "Main update")
+        self.workspace.code_path.write_text(self.workspace.code_path.read_text().replace("branch: main", "branch: missing-branch"))
+        result = self.workspace.force_update()
+        self.assertEqual(result["installed_commit"], tip)
+        self.assertEqual(result["source_commit"], local)
+        self.assertEqual((self.workspace.repo / "notes.md").read_text(), "unsaved local work\n")
+        self.assertTrue(result["restart_required"])
+        self.assertIn("NOT in the installed release", result["divergence"])
+        self.assertIn("force-installed main", self.workspace.code_path.read_text())
+
+    def test_force_update_fresh_workspace_uses_main_and_failed_build_preserves_release(self):
+        self.workspace.code_path.write_text(code.DEFAULT_CODE.replace("branch: main", "branch: missing-branch"))
+        result = self.workspace.force_update()
+        self.assertEqual(result["installed_commit"], self.initial)
+        active = (self.workspace.root / "releases/active.json").read_bytes()
+        tip = self.commit("tips.md", "new\n", "Main update")
+        self.workspace.fail_build = True
+        with self.assertRaisesRegex(ValueError, "fixture build failed"):
+            self.workspace.force_update()
+        self.assertEqual(self.workspace.status()["source_commit"], self.initial)
+        self.assertEqual((self.workspace.root / "releases/active.json").read_bytes(), active)
+        self.workspace.fail_build = False
+        result = self.workspace.force_update()
+        self.assertEqual(result["installed_commit"], tip)
+        self.assertEqual(result["source_commit"], tip)
+
     def test_dirty_checkout_and_executable_git_config_are_refused(self):
         self.workspace.init()
         (self.workspace.repo / "notes.md").write_text("unsaved idea\n")
