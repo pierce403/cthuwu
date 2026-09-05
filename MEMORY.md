@@ -3,7 +3,9 @@
 Last reviewed: 2026-09-05
 
 - Referral welcome belongs inside the chat card, with its own grid row and styles. Inserting it
-  before chat adds a third shell grid item and pushes chat below the mascot on desktop.
+  before chat adds a third shell grid item and pushes chat below the mascot on desktop. Center
+  the shell’s content as a unit and top-align its columns; centering only the mascot while pinning
+  chat to the top creates a large offset on tall desktops. Check tall and short viewports.
 
 - Inference timeout increases must update both the Node bridge default/max and Rust's deadline
   validator; otherwise the shorter outer envelope still cancels the request. Defaults now allow

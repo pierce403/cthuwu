@@ -193,7 +193,8 @@ svg {
   min-height: 100dvh;
   margin: 0 auto;
   padding: max(1.5rem, env(safe-area-inset-top)) 0 max(1.5rem, env(safe-area-inset-bottom));
-  align-items: center;
+  align-items: start;
+  align-content: center;
 }
 
 .buddy {
@@ -511,7 +512,6 @@ h1 .uwu {
 }
 
 .chat.has-invitation {
-  align-self: start;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
 }
 

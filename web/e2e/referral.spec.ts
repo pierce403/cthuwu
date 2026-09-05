@@ -14,3 +14,18 @@ test("referral welcome keeps chat and composer in the first viewport", async ({ 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("referral.png"), fullPage: true });
 });
+
+for (const viewport of [{ width: 1876, height: 1344 }, { width: 1536, height: 1100 }]) {
+  test(`aligns the invitation and mascot at ${viewport.width}×${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.route(/^https:\/\//u, (route) => route.abort("blockedbyclient"));
+    await page.goto("/#r=0x2222222222222222222222222222222222222222", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("region", { name: "Your invitation" })).toBeVisible();
+    const buddy = (await page.locator(".buddy").boundingBox())!;
+    const chat = (await page.locator("#chat").boundingBox())!;
+    expect(Math.abs(chat.y - buddy.y)).toBeLessThan(2);
+    const bottom = Math.max(chat.y + chat.height, buddy.y + buddy.height);
+    expect(Math.abs(chat.y - (viewport.height - bottom))).toBeLessThan(3);
+    await page.screenshot({ path: testInfo.outputPath("referral-large.png"), fullPage: true });
+  });
+}
