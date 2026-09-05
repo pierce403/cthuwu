@@ -6,6 +6,7 @@ import { GroupPermissionsOptions, contentTypeText } from "@xmtp/node-sdk";
 import { getAddress, stringToHex } from "viem";
 import {
   ASSIGNMENT_CONTENT_TYPE,
+  isGroupMemoryText,
   AssignmentCodec,
   CANONICAL_BRANDING_CONTRACT,
   CanonicalAssignmentResolver,
@@ -1352,4 +1353,11 @@ describe("Global bootstrap", () => {
     ).resolves.toMatchObject({ groupId: GLOBAL, created: true, recovered: false });
     expect(ignored.createCount).toBe(1);
   });
+});
+
+it("group observation accepts text but excludes controls and credential commands", () => {
+  expect(isGroupMemoryText(contentTypeText(), "hello group")).toBe(true);
+  expect(isGroupMemoryText(TYPING_CONTENT_TYPE, "hello")).toBe(false);
+  expect(isGroupMemoryText(contentTypeText(), "/env set KEY synthetic")).toBe(false);
+  expect(isGroupMemoryText(contentTypeText(), "[[cthuwu:branding-consent:payload]]")).toBe(false);
 });

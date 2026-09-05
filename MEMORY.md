@@ -2,6 +2,23 @@
 
 Last reviewed: 2026-09-05
 
+- The operator explicitly rejected command-centered history access and authorized a continuing mind.
+  `mind.rs` joins private episodic evidence, SOUL, editable Markdown memories, automatic audience-scoped
+  recall, discretionary operator memory_search, and durable background reflection. Current model memory
+  supersedes older “no raw DM context to models” notes; private data still cannot reach other acolytes,
+  groups, shared indexes, Council, or Git by default. Operator reflection may cross-reference private
+  scopes; derived operator notes track those participants for forgetting.
+- Plain group text now enters group_text/group_observation, never the DM/imprinting dispatcher. Replay
+  observes silently; live addressed messages may get group-scoped replies. Protocol and credentials
+  remain excluded. Background Branding retries the same verified runtime path without needing a new DM.
+- The private QMD path uses keyword search in disposable collections and reloads current sources;
+  absence/no matches uses lexical fallback. Do not claim private vector retrieval or a tested live QMD
+  binary. Heartbeat defaults to 15 minutes; operator need notices have a six-hour cooldown.
+- Confirmed forgetting invalidates private notes, related group/operator summaries, operator dialogue
+  cache generations, and concurrent reflections. Raw evidence is 14 days / 1,000 exchanges / 8 MiB;
+  derived notes have independent durable retention. Existing SOUL files are preserved on upgrade.
+
+
 - Operator-authorized acolyte transcripts start with the conversation-history runtime upgrade.
   They live privately under `state/conversations`, outside workspace Git/RAG. Native `/history`
   and natural questions with an explicit wallet/inbox return terminal data only to the active

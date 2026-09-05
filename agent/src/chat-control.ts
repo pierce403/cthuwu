@@ -2394,3 +2394,10 @@ export async function bootstrapGlobalGroup(options: {
     recovered: false,
   };
 }
+
+/** Only human group text enters the separate observation lane, never Council/control payloads. */
+export function isGroupMemoryText(contentType: ContentTypeId, text: unknown): text is string {
+  return contentTypeEquals(contentType, contentTypeText()) && typeof text === "string"
+    && !text.trimStart().startsWith("/") && !text.startsWith("CTHUWU_") && !text.toLowerCase().includes("[[cthuwu:")
+    && Buffer.byteLength(text, "utf8") <= 16 * 1024;
+}

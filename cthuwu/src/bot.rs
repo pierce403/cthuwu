@@ -61,6 +61,7 @@ pub struct UwUBot {
     operator_harness: Arc<OperatorHarness>,
     coaching: Option<Arc<crate::coaching::Coaching>>,
     conversation_history: Option<Arc<crate::conversation_history::ConversationHistory>>,
+    mind: Option<Arc<crate::mind::Mind>>,
     evolution: Arc<Mutex<EvolutionRuntime>>,
     token_eye: Option<Arc<TokenEye>>,
     blockchain: BlockchainConfig,
@@ -117,6 +118,7 @@ impl UwUBot {
         Self {
             coaching: None,
             conversation_history: None,
+            mind: None,
             contacts,
             processed,
             model,
@@ -141,6 +143,134 @@ impl UwUBot {
         self.token_eye = token_eye;
         self.blockchain = blockchain;
         self
+    }
+
+    pub fn with_mind(mut self, mind: Arc<crate::mind::Mind>) -> Self {
+        self.mind = Some(mind);
+        self
+    }
+
+    /// Revisit a known willing DM contact without waiting for another incoming message.
+    /// Existing growth/Branding state remains the consent, refusal, cooldown, and mint authority.
+    pub async fn resume_branding(&self) -> Result<String> {
+        let (Some(mind), Some(control)) = (&self.mind, &self.branding_control) else {
+            return Ok("Branding follow-up runtime unavailable".into());
+        };
+        if !mind.claim_branding_cycle()? {
+            return Ok(String::new());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in mind.history.entries()?.into_iter().rev() {
+            if entry.operator || entry.group.is_some() || !seen.insert(entry.inbox.clone()) {
+                continue;
+            }
+            let Some(address) = entry.address else {
+                continue;
+            };
+            if self.contacts.load(&entry.inbox)?.is_none() {
+                continue;
+            }
+            let (_, _, should_offer) = control.growth_context(&entry.inbox, &address).await?;
+            if !should_offer {
+                continue;
+            }
+            let quote = match self.branding_offer_quote().await {
+                Ok(quote) => quote,
+                Err(reason) => {
+                    control.record_branding_attempt(reason).await?;
+                    return Ok(format!(
+                        "Branding follow-up blocked: {}. Restore that prerequisite; done when a fresh positive quote is verified and an offer is queued.",
+                        reason.explanation()
+                    ));
+                }
+            };
+            // Forgetting while the quote was in flight must cancel this follow-up.
+            if self.contacts.load(&entry.inbox)?.is_none()
+                || !mind
+                    .history
+                    .entries()?
+                    .iter()
+                    .any(|e| e.id == entry.id && e.inbox == entry.inbox)
+            {
+                return Ok("Branding follow-up canceled after forgetting.".into());
+            }
+            let queued = control
+                .enqueue_default_offer(&entry.inbox, &address, quote)
+                .await?;
+            control
+                .record_branding_attempt(if queued {
+                    BrandingAttemptOutcome::Queued
+                } else {
+                    BrandingAttemptOutcome::AlreadyQueued
+                })
+                .await?;
+            return Ok(if queued { "A pending Branding invitation was queued by the background runtime; consent and mint confirmation are still required." } else { "Existing Branding state already handles this contact." }.into());
+        }
+        Ok("No eligible Branding follow-up is due in retained DM evidence; refusals and confirmed Branding remain respected.".into())
+    }
+
+    /// Group text is observation/conversation only, even when its sender is the operator.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn receive_group(
+        &self,
+        id: &str,
+        inbox: &str,
+        address: Option<&str>,
+        group: &str,
+        text: &str,
+        observe_only: bool,
+    ) -> Result<Option<String>> {
+        if text.len() > MAX_MESSAGE_BYTES
+            || is_resource_provision_command(text)
+            || text.trim_start().starts_with('/')
+            || (text.starts_with("CTHUWU_") || text.to_lowercase().contains("[[cthuwu:"))
+        {
+            return Ok(None);
+        }
+        let Some(mind) = &self.mind else {
+            return Ok(None);
+        };
+        mind.history
+            .record_group(inbox, address, id, text, None, group)?;
+        if observe_only {
+            return Ok(None);
+        }
+        let disclose = mind.group_disclosure_due(group)?;
+        let notice = "privacy note: this Tentacle remembers group conversations and builds longer-lived notes. its operator and configured model can use them. DM me ‘forget me’ to delete ur local memory.";
+        // Listen quietly; join when addressed. Announce memory once in each observed group.
+        let lower = text.to_lowercase();
+        if !["tentacle", "cthuwu", "uwubot"]
+            .iter()
+            .any(|n| lower.contains(n))
+        {
+            if disclose {
+                mind.history
+                    .record_group(inbox, address, id, text, Some(notice), group)?;
+            }
+            return Ok(disclose.then(|| notice.to_owned()));
+        }
+        let context = format!(
+            "{}\nGROUP CONVERSATION: use only this group's recalled context. Never bring private DM or operator facts into this reply. You may say [SILENCE] if no reply is useful.\n{}",
+            mind.soul()?,
+            mind.context(text, crate::mind::Audience::Group(group))?
+        );
+        let mut response = limit_response(
+            self.model_reply(&context, text, &ModelPolicy::default())
+                .await,
+            PrincipalRole::User,
+        );
+        if response.trim() == "[SILENCE]" {
+            if !disclose {
+                return Ok(None);
+            }
+            response = notice.into();
+        } else if disclose {
+            response.insert_str(0, &format!("{notice}\n\n"));
+        }
+        response = limit_response(response, PrincipalRole::User);
+        mind.history
+            .record_group(inbox, address, id, text, Some(&response), group)?;
+        Ok(Some(response))
     }
 
     pub fn with_conversation_history(
@@ -396,7 +526,12 @@ impl UwUBot {
 
         let response = match role {
             PrincipalRole::Operator => {
-                if let Some((target, page)) = crate::conversation_history::request(message.text) {
+                if !message.text.trim_start().starts_with('/') && let Some(mind) = &self.mind
+                    && let Err(error) = mind.history.record_operator(message.inbox_id, message.message_id, message.text, None) {
+                    warn!(%error, "could not retain operator intention");
+                }
+                if let Some((target, page)) = crate::conversation_history::request(message.text)
+                    && (self.mind.is_none() || message.text.trim_start().starts_with("/history")) {
                     return Ok(Some(match &self.conversation_history {
                         Some(history) => history.report(&target, page)?,
                         None => "Conversation logging is not enabled in this runtime.".into(),
@@ -528,7 +663,7 @@ impl UwUBot {
                     response.push_str(&plea);
                 }
                 if first_logged {
-                    response.insert_str(0, "privacy note: this Tentacle keeps a limited local chat log for up to 14 days, readable by its operator. say “forget me” to delete it.\n\n");
+                    response.insert_str(0, "privacy note: i keep recent chats and longer-lived notes to remember u across conversations. my operator and configured model can use them. say “forget me” to delete ur local memory.\n\n");
                 }
                 response = limit_response(response, role);
                 if log && let Some(history) = &self.conversation_history
@@ -538,6 +673,17 @@ impl UwUBot {
                 response
             }
         };
+        if role == PrincipalRole::Operator
+            && !message.text.trim_start().starts_with('/')
+            && let Some(mind) = &self.mind
+        {
+            let _ = mind.history.record_operator(
+                message.inbox_id,
+                message.message_id,
+                message.text,
+                Some(&limit_response(response.clone(), role)),
+            );
+        }
         Ok(Some(limit_response(response, role)))
     }
 
@@ -855,6 +1001,15 @@ impl UwUBot {
                 let mut profile = contact.model_profile_markdown();
                 if let Some(coaching) = &self.coaching {
                     profile.push_str(&coaching.context(inbox_id)?);
+                }
+                if let Some(mind) = &self.mind {
+                    match mind.context(text, crate::mind::Audience::Acolyte(inbox_id)) {
+                        Ok(memory) => profile
+                            .push_str(&format!("\n{}\n{memory}", mind.soul().unwrap_or_default())),
+                        Err(error) => {
+                            warn!(%error, "private recall unavailable; continuing conversation")
+                        }
+                    }
                 }
                 if let (Some(control), Some(address)) =
                     (&self.branding_control, authenticated_sender_address)
@@ -1192,14 +1347,15 @@ impl UwUBot {
                 if let Some(coaching) = &self.coaching {
                     coaching.handle(&contact.inbox_id, "forget my goal")?;
                 }
+                if let Some(mind) = &self.mind { mind.forget(&contact.inbox_id)?; }
                 if let Some(history) = &self.conversation_history {
                     history.forget(&contact.inbox_id)?;
                 }
                 self.contacts.delete(&contact.inbox_id)?;
-                "forgotten. ur local contact note and retained conversation log are gone. copies of messages already delivered over XMTP are outside this local deletion."
+                "forgotten. ur local contact note and retained conversation log and derived memories are gone. copies of messages already delivered over XMTP are outside this local deletion."
                     .into()
             }
-            "forget" => "that would delete ur local contact note and retained conversation log. say “yes, forget me” in ordinary words if that's truly what u want."
+            "forget" => "that would delete ur local contact note and retained conversation log and derived memories. say “yes, forget me” in ordinary words if that's truly what u want."
                 .into(),
             "" => natural_help(),
             _ => return Ok(None),
@@ -1240,18 +1396,21 @@ impl UwUBot {
             if let Some(coaching) = &self.coaching {
                 coaching.handle(&contact.inbox_id, "forget my goal")?;
             }
+            if let Some(mind) = &self.mind {
+                mind.forget(&contact.inbox_id)?;
+            }
             if let Some(history) = &self.conversation_history {
                 history.forget(&contact.inbox_id)?;
             }
             self.contacts.delete(&contact.inbox_id)?;
             return Ok(Some(
-                "done. ur local contact note and retained conversation log are gone; already-delivered XMTP messages live outside that note."
+                "done. ur local contact note and retained conversation log and derived memories are gone; already-delivered XMTP messages live outside that note."
                     .into(),
             ));
         }
         if matches!(normalized.as_str(), "forget me" | "delete my profile") {
             return Ok(Some(
-                "i can erase the local note and retained conversation log, lil star. say “yes, forget me” to confirm.".into(),
+                "i can erase the local note and retained conversation log and derived memories, lil star. say “yes, forget me” to confirm.".into(),
             ));
         }
         if matches!(
@@ -2791,6 +2950,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_branding_uses_retained_dm_evidence_and_fresh_quote() {
+        let root = tempfile::tempdir().unwrap();
+        let history =
+            Arc::new(crate::conversation_history::ConversationHistory::open(root.path()).unwrap());
+        let mind = Arc::new(
+            crate::mind::Mind::open(root.path(), root.path(), "qmd".into(), history.clone())
+                .unwrap(),
+        );
+        let control = Arc::new(RecordingBrandingControl::default());
+        let wallet = Address::from_str("0x1111111111111111111111111111111111111111").unwrap();
+        let mut blockchain = BlockchainConfig::default();
+        let token_contract = blockchain.token_contract.unwrap();
+        blockchain.xmtp_wallet = Some(wallet);
+        let observer = Arc::new(TokenEye::new(
+            token_contract,
+            Arc::new(StaticBalanceTransport {
+                balance: U256::from_u64(100_000),
+            }),
+            std::time::Duration::from_secs(60),
+        ));
+        let bot = public_bot(root.path())
+            .with_mind(mind)
+            .with_branding_control(control.clone())
+            .with_token_observance(Some(observer), blockchain);
+        // Restore an established contact; the heartbeat needs no new incoming message.
+        bot.contacts.load_or_create("aabbcc").unwrap();
+        history
+            .record(
+                "aabbcc",
+                Some(&wallet.to_string()),
+                "retained-dm",
+                "hello",
+                None,
+            )
+            .unwrap();
+        let follow_up = bot.resume_branding().await.unwrap();
+        assert!(
+            follow_up.contains("queued by the background runtime"),
+            "{follow_up}"
+        );
+        assert_eq!(control.offers.load(Ordering::SeqCst), 1);
+        assert!(bot.resume_branding().await.unwrap().is_empty());
+        assert_eq!(control.offers.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn group_control_text_cannot_dispatch_and_replay_does_not_reply() {
+        let root = tempfile::tempdir().unwrap();
+        let history =
+            Arc::new(crate::conversation_history::ConversationHistory::open(root.path()).unwrap());
+        let mind = Arc::new(
+            crate::mind::Mind::open(root.path(), root.path(), "qmd".into(), history.clone())
+                .unwrap(),
+        );
+        let bot = public_bot(root.path()).with_mind(mind);
+        let group = "b".repeat(64);
+        assert!(
+            bot.receive_group("1", OPERATOR_ID, None, &group, "/exec true", false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(history.entries().unwrap().is_empty());
+        assert!(
+            bot.receive_group("2", OPERATOR_ID, None, &group, "hello tentacle", true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(history.entries().unwrap().len(), 1);
+        assert!(history.entries().unwrap()[0].group.is_some());
+        assert!(!history.entries().unwrap()[0].operator);
+    }
+
+    #[tokio::test]
     async fn natural_profile_controls_continue_through_branding_offer_admission() {
         let root = tempfile::tempdir().unwrap();
         let model = Arc::new(RecordingModel {
@@ -3341,7 +3575,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(reply.contains("readable by its operator"));
+        assert!(reply.contains("my operator and configured model"));
         for (i, role) in [
             PrincipalRole::Operator,
             PrincipalRole::User,

@@ -61,3 +61,21 @@ export async function catchUpDirectMessages(options: {
 
   return { conversations: dms.length, messages, truncated };
 }
+
+/** Bounded group observation catch-up never sends old replies or enters the personal lane. */
+export async function catchUpGroupMessages(options: {
+  conversations: { syncAll(): Promise<unknown>; listGroups(options: { limit: number; orderBy: ListConversationsOrderBy }): CatchUpDm[] };
+  selfInboxId: string;
+  handle: (message: CatchUpMessage, conversation: CatchUpDm) => Promise<void>;
+  now?: number;
+}): Promise<void> {
+  await options.conversations.syncAll();
+  const cutoff = BigInt((options.now ?? Date.now()) - 14 * 86400 * 1000) * 1_000_000n;
+  for (const group of options.conversations.listGroups({ limit: 64, orderBy: ListConversationsOrderBy.LastActivity })) {
+    const messages = await group.messages({ limit: 128 });
+    messages.sort((a, b) => a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : a.id.localeCompare(b.id));
+    for (const message of messages) {
+      if (message.senderInboxId !== options.selfInboxId && message.sentAtNs >= cutoff) await options.handle(message, group);
+    }
+  }
+}

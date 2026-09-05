@@ -90,6 +90,26 @@ Likewise, Foundry source, mocks, a dry run, or a Base fork do not prove the fund
 Branding-consent/mint/name-repair path. Keep that live-wallet release gate explicitly incomplete
 until it passes, even though the canonical contract deployment and closed implementation exist.
 
+## Living memory (current operator-authorized behavior)
+
+- Ordinary conversation, automatic recall, and background reflection are the primary interface.
+  Keep the existing Rust/Bash architecture; do not add a slash command for each memory action.
+- The current operator authorized private conversation-derived memory, including group observation
+  and discretionary cross-conversation reasoning. `state/agent/SOUL.md`, `MEMORY.md`, and `memory/`
+  form the private mind; Markdown bodies are editable source, metadata retains authenticated provenance.
+- The operator model may use `memory_search`; acolyte and group recall is filtered by audience before
+  context assembly. Group messages never gain operator authority, and private DMs never enter group
+  replies or Council traffic. Legacy strict contact commands remain available for inspection.
+- Reflection chooses sourced understanding and continuing intentions, with precise, rate-limited
+  operator needs. It never executes a command, signs, or sends to acolytes based on model text.
+  The existing Branding runtime retries eligible invitations and preserves refusal/consent gates.
+- Raw evidence has bounded retention; derived notes persist until corrected or forgotten. Confirmed
+  forgetting also invalidates related derived summaries and session/recall caches. Private memory
+  stays outside workspace Git and shared indexes. QMD uses disposable private collections with live
+  source reload; the local lexical fallback must be labeled accurately.
+- Treat older statements below about DM-only observation or never supplying contact-derived context
+  to a model as superseded for this explicitly authorized scoped mind. Role/signing boundaries remain.
+
 ## Markdown agent implementation conventions
 
 - Embedded workspace helper upgrades use protected hash receipts. Upgrade only an unchanged
@@ -230,7 +250,8 @@ until it passes, even though the canonical contract deployment and closed implem
   separate skill-creation request. Shared skills must omit private acolyte details and secrets.
 - Route affirmative retained-contact questions before model inference. Natural requests such as
   “tell me about the users” render concise deterministic prose with a default limit of five contacts;
-  never deliver the internal contact JSON or profile text to a model. Keep the private data root and
+  the living mind instead supplies audience-scoped retained evidence to the model; legacy strict
+  contact reporting remains the fallback when the mind is unavailable. Keep the private data root and
   operator workspace canonically disjoint. Actor-anchored questions about Cthuwu's own notes or
   workspace receive exact local paths from Rust without model egress or file-tool dispatch.
 - Keep authority lanes one request deep, not reorderable. Pin role and durably claim the message ID

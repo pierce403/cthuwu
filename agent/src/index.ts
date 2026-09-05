@@ -14,6 +14,7 @@ import {
   bootstrapGlobalGroup,
   classifyInboundMessage,
   dispatchPersonalText,
+  isGroupMemoryText,
   handleInboundChatControl,
   loadVerifiedRegistration,
   parseChatControlConfig,
@@ -23,7 +24,7 @@ import {
   type GroupLike,
   type TypingControl,
 } from "./chat-control.js";
-import { catchUpDirectMessages, type CatchUpDm, type CatchUpMessage } from "./catch-up.js";
+import { catchUpDirectMessages, catchUpGroupMessages, type CatchUpDm, type CatchUpMessage } from "./catch-up.js";
 import { runErc8004Stdio } from "./erc8004.js";
 import { loadAgentIdentity } from "./identity.js";
 import { resolveOperatorIdentity } from "./operator-identity.js";
@@ -403,7 +404,18 @@ async function main(): Promise<void> {
     }
   };
 
+  const processGroupText = async (message: CatchUpMessage, conversation: CatchUpDm, replay = false): Promise<void> => {
+    if (message.senderInboxId === agent.client.inboxId || !isGroupMemoryText(message.contentType, message.content)) return;
+    const senderAddress = await resolveFreshSenderAddress(agent.client.preferences, message.senderInboxId).catch(() => undefined);
+    const result = await bridge.observeGroup({ messageId: message.id, senderInboxId: message.senderInboxId,
+      ...(senderAddress === undefined ? {} : { senderAddress }), sentAtNs: message.sentAtNs.toString(), conversationId: message.conversationId, text: message.content }, replay);
+    if (!replay && result.type === "reply") await conversation.sendText(result.text);
+  };
+
   agent.on("text", (context) => {
+    if (!context.isDm()) {
+      void processGroupText(context.message, context.conversation).catch(() => diagnostic("group memory processing failed"));
+    }
     if (context.isDm()) {
       void (async () => {
         // This identifier is resolved from the SDK-authenticated sender inbox. It is optional
@@ -430,6 +442,9 @@ async function main(): Promise<void> {
   agent.on("start", () => {
     diagnostic(`connected to XMTP ${identity.environment} as ${agent.address ?? "unknown"}`);
     pruneMovedAssignments();
+    void catchUpGroupMessages({ conversations: agent.client.conversations, selfInboxId: agent.client.inboxId,
+      handle: (message, conversation) => processGroupText(message, conversation, true),
+    }).catch(() => diagnostic("group memory catch-up incomplete; live observation continues"));
     void catchUpDirectMessages({
       conversations: agent.client.conversations,
       selfInboxId: agent.client.inboxId,

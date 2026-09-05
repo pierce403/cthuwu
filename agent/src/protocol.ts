@@ -3,7 +3,7 @@ import { createInterface, type Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
 export type InboundText = {
-  type: "inbound_text" | "reject_inbound" | "reject_oversized";
+  type: "inbound_text" | "group_text" | "group_observation" | "reject_inbound" | "reject_oversized";
   id: string;
   messageId: string;
   senderInboxId: string;
@@ -108,6 +108,12 @@ export class JsonlBridge {
     return this.#request("inbound_text", message);
   }
 
+  async observeGroup(message: Omit<InboundText, "type" | "id" | "deadlineUnixMs">, replay = false): Promise<SidecarResponse> {
+    // Group overload is dropped locally; it must never become a DM rejection/imprinting frame.
+    if (this.#pending.size >= this.#maxPending) return { type: "ignore", id: message.messageId };
+    return this.#request(replay ? "group_observation" : "group_text", message);
+  }
+
   async rejectOversized(
     message: Omit<InboundText, "type" | "id" | "deadlineUnixMs" | "text">,
   ): Promise<SidecarResponse> {
@@ -115,7 +121,7 @@ export class JsonlBridge {
   }
 
   async #request(
-    eventType: "inbound_text" | "reject_oversized",
+    eventType: "inbound_text" | "group_text" | "group_observation" | "reject_oversized",
     message: Omit<InboundText, "type" | "id" | "deadlineUnixMs">,
   ): Promise<SidecarResponse> {
     if (this.#closed) {

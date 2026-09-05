@@ -1,3 +1,4 @@
+use crate::branding::AcolyteBrandingControl;
 mod agent_context;
 mod autonomy;
 pub mod avatar;
@@ -23,6 +24,7 @@ pub mod hermes;
 pub mod image_gen;
 mod inference;
 mod matching;
+mod mind;
 mod model;
 mod names;
 mod operator;
@@ -1002,6 +1004,15 @@ async fn main() -> Result<()> {
     let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
     let workspace_runtime = Arc::new(workspace_runtime::WorkspaceRuntime::new(&operator_root)?);
     let operator_context = AgentContext::new(&cli.data_dir, &operator_root)?;
+    let history = Arc::new(conversation_history::ConversationHistory::open(
+        &cli.data_dir,
+    )?);
+    let mind = Arc::new(mind::Mind::open(
+        &cli.data_dir,
+        &operator_root,
+        cli.qmd.clone(),
+        history.clone(),
+    )?);
     workspace_runtime.checkpoint("Initialize Markdown workspace and local runtime directories")?;
     let operator_tools = Arc::new(
         LocalOperatorTools::new(
@@ -1016,6 +1027,7 @@ async fn main() -> Result<()> {
     let tasks = Arc::new(operator_tasks::OperatorTasks::open(&cli.data_dir)?);
     let operator_harness = Arc::new(
         OperatorHarness::new(operator_model, operator_tools, operator_context)
+            .with_mind(mind.clone())
             .with_tasks(tasks.clone(), operators.clone())
             .with_operator_transfer(
                 Arc::new(RuntimeOperatorResolver {
@@ -1030,9 +1042,6 @@ async fn main() -> Result<()> {
             .with_registry_control(registry_control.clone()),
     );
     let coaching = Arc::new(coaching::Coaching::open(&cli.data_dir)?.with_mission(&operator_root));
-    let history = Arc::new(conversation_history::ConversationHistory::open(
-        &cli.data_dir,
-    )?);
     let cleanup_history = history.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -1051,6 +1060,7 @@ async fn main() -> Result<()> {
         operator_harness.clone(),
         evolution.clone(),
     )
+    .with_mind(mind.clone())
     .with_conversation_history(history)
     .with_coaching(coaching.clone())
     .with_model_control(router.clone())
@@ -1059,6 +1069,7 @@ async fn main() -> Result<()> {
     .with_registry_control(registry_control)
     .with_branding_control(branding_control.clone())
     .with_token_observance(token_eye.clone(), blockchain.clone());
+    let bot = Arc::new(bot);
 
     info!(
         xmtp_env = cli.xmtp_env.as_str(),
@@ -1174,6 +1185,14 @@ async fn main() -> Result<()> {
         operators.clone(),
         operator_notice_tx.clone(),
     ));
+    let reflection_supervisor = tokio::spawn(supervise_mind(
+        bot.clone(),
+        mind,
+        router.clone(),
+        operators.clone(),
+        branding_control.clone(),
+        operator_notice_tx.clone(),
+    ));
     let coaching_supervisor =
         tokio::spawn(coaching::supervise(coaching, operator_notice_tx.clone()));
     let task_supervisor = tokio::spawn(operator_tasks::supervise(
@@ -1210,6 +1229,7 @@ async fn main() -> Result<()> {
             branding_supervisor.abort();
             task_supervisor.abort();
             coaching_supervisor.abort();
+            reflection_supervisor.abort();
             if *lifecycle_shutdown_tx.borrow() {
                 let shutdown_intent = supervisor
                     .await
@@ -1230,6 +1250,7 @@ async fn main() -> Result<()> {
             branding_supervisor.abort();
             task_supervisor.abort();
             coaching_supervisor.abort();
+            reflection_supervisor.abort();
             let shutdown_intent = supervisor_result
                 .context("autonomous Evolution supervisor task failed")??;
             transport.await?;
@@ -1963,6 +1984,74 @@ async fn send_startup_operator_wakeup_notice(
     }
 }
 
+async fn supervise_mind(
+    bot: Arc<UwUBot>,
+    mind: Arc<mind::Mind>,
+    model: Arc<dyn OperatorModel>,
+    operators: Arc<Mutex<OperatorStore>>,
+    branding: Arc<SharedBrandingControl>,
+    notices: mpsc::Sender<OperatorNotice>,
+) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(60));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let operator = operators.lock().ok().and_then(|store| {
+            store
+                .list()
+                .find(|(_, _, status, _)| *status == "active")
+                .map(|(id, label, _, generation)| (id.to_owned(), label.to_owned(), generation))
+        });
+        let Some((inbox, address, generation)) = operator else {
+            continue;
+        };
+        let follow_up = match tokio::time::timeout(Duration::from_secs(30), bot.resume_branding()).await {
+            Ok(Ok(text)) => text,
+            _ => "Background Branding follow-up could not finish; no successful invitation is claimed.".into(),
+        };
+        let mut facts = branding
+            .operator_growth_facts(&address)
+            .await
+            .unwrap_or_else(|_| {
+                "Branding runtime status unavailable; do not infer funding or mint state.".into()
+            });
+        facts.push_str(&format!("\nBACKGROUND_BRANDING={follow_up}"));
+        let reflection = deadline::scope_authenticated_deadline(
+            deadline::InferenceLane::Operator,
+            Duration::from_secs(125),
+            mind.reflect(model.as_ref(), &facts),
+        )
+        .await;
+        let text = match reflection {
+            Ok(Ok(Some(text))) => text,
+            Ok(Ok(None)) => continue,
+            Ok(Err(error)) | Err(error) => {
+                warn!(%error, "background reflection incomplete");
+                continue;
+            }
+        };
+        let still_active = operators.lock().ok().is_some_and(|store| {
+            store
+                .list()
+                .any(|(id, _, status, g)| id == inbox && status == "active" && g == generation)
+        });
+        if !still_active {
+            continue;
+        }
+        if let Ok((notice, receipt)) = OperatorNotice::with_acknowledgement(inbox, text) {
+            if notices.send(notice).await.is_err() {
+                break;
+            }
+            if !matches!(
+                tokio::time::timeout(Duration::from_secs(30), receipt).await,
+                Ok(Ok(true))
+            ) {
+                warn!("operator need remains in memory; notice delivery was not confirmed");
+            }
+        }
+    }
+}
+
 async fn run_autonomy_supervisor(
     evolution: Arc<Mutex<EvolutionRuntime>>,
     dependencies: AutonomyDependencies,
@@ -2511,7 +2600,7 @@ fn repair_operator_conflict(operators: &mut OperatorStore) -> Result<()> {
     Ok(())
 }
 
-async fn run_stdin(bot: UwUBot, inbox_id: &str) -> Result<()> {
+async fn run_stdin(bot: Arc<UwUBot>, inbox_id: &str) -> Result<()> {
     let session = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

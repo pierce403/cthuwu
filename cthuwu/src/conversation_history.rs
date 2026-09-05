@@ -18,14 +18,18 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 struct Journal {
     entries: Vec<Entry>,
 }
-#[derive(Serialize, Deserialize)]
-struct Entry {
-    inbox: String,
-    address: Option<String>,
-    id: String,
-    received: u64,
-    text: String,
-    reply: Option<String>,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Entry {
+    pub inbox: String,
+    pub address: Option<String>,
+    pub id: String,
+    pub received: u64,
+    pub text: String,
+    pub reply: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub operator: bool,
 }
 pub struct ConversationHistory {
     root: PathBuf,
@@ -110,6 +114,40 @@ impl ConversationHistory {
         text: &str,
         reply: Option<&str>,
     ) -> Result<bool> {
+        self.record_scoped(inbox, address, id, text, reply, None, false)
+    }
+    pub fn record_operator(
+        &self,
+        inbox: &str,
+        id: &str,
+        text: &str,
+        reply: Option<&str>,
+    ) -> Result<bool> {
+        self.record_scoped(inbox, None, id, text, reply, None, true)
+    }
+    pub fn record_group(
+        &self,
+        inbox: &str,
+        address: Option<&str>,
+        id: &str,
+        text: &str,
+        reply: Option<&str>,
+        group: &str,
+    ) -> Result<bool> {
+        let group = normalize_inbox_id(group)?;
+        self.record_scoped(inbox, address, id, text, reply, Some(group), false)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn record_scoped(
+        &self,
+        inbox: &str,
+        address: Option<&str>,
+        id: &str,
+        text: &str,
+        reply: Option<&str>,
+        group: Option<String>,
+        operator: bool,
+    ) -> Result<bool> {
         let inbox = normalize_inbox_id(inbox)?;
         if text.len() > 16384 || reply.is_some_and(|r| r.len() > 16384) || id.len() > 1024 {
             bail!("history entry too large");
@@ -123,7 +161,7 @@ impl ConversationHistory {
         if let Some(entry) = journal
             .entries
             .iter_mut()
-            .find(|e| e.inbox == inbox && e.id == id)
+            .find(|e| e.inbox == inbox && e.id == id && e.group == group && e.operator == operator)
         {
             if let Some(reply) = reply {
                 entry.reply = Some(reply.into());
@@ -140,10 +178,19 @@ impl ConversationHistory {
                 received: now(),
                 text: text.into(),
                 reply: reply.map(str::to_owned),
+                group,
+                operator,
             });
         }
         self.write(&mut journal)?;
         Ok(first)
+    }
+    pub(crate) fn entries(&self) -> Result<Vec<Entry>> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("history lock unavailable"))?;
+        Ok(self.read()?.entries)
     }
     pub fn forget(&self, inbox: &str) -> Result<()> {
         let inbox = normalize_inbox_id(inbox)?;
@@ -152,7 +199,7 @@ impl ConversationHistory {
             .lock()
             .map_err(|_| anyhow::anyhow!("history lock unavailable"))?;
         let mut journal = self.read()?;
-        journal.entries.retain(|e| e.inbox != inbox);
+        journal.entries.retain(|e| e.inbox != inbox && !e.operator);
         self.write(&mut journal)
     }
     pub fn report(&self, target: &str, page: usize) -> Result<String> {
@@ -273,6 +320,8 @@ mod tests {
                 received: now(),
                 text: "x".repeat(16000),
                 reply: None,
+                group: None,
+                operator: false,
             });
         }
         store.write(&mut journal).unwrap();

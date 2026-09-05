@@ -358,3 +358,16 @@ describe("timeout configuration", () => {
     expect(() => parseTimeout("wat")).toThrow("integer");
   });
 });
+
+it("keeps group observation out of the DM lane even under backpressure", async () => {
+  const input = new PassThrough(); const output = new PassThrough();
+  const bridge = new JsonlBridge({ input, output, maxPending: 1 });
+  const line = nextLine(output);
+  const pending = bridge.observeGroup(message(), true);
+  const frame = JSON.parse(await line);
+  expect(frame.type).toBe("group_observation");
+  const ignored = await bridge.observeGroup({ ...message(), messageId: "group-2" });
+  expect(ignored.type).toBe("ignore");
+  input.write(`${JSON.stringify({ type: "ignore", id: frame.id })}\n`);
+  await pending; bridge.close();
+});

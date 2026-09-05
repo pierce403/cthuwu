@@ -453,7 +453,7 @@ pub async fn resolve_operator_inbox(
 }
 
 pub async fn run_xmtp_sidecar(
-    bot: UwUBot,
+    bot: Arc<UwUBot>,
     node: &Path,
     sidecar: &Path,
     data_dir: &Path,
@@ -504,7 +504,6 @@ pub async fn run_xmtp_sidecar(
     let mut stdout = BufReader::new(stdout);
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
-    let bot = Arc::new(bot);
     // Requests in each authority lane are processed in sequential FIFO order. A public DM can progress
     // beside an operator request, while additional same-lane messages queue cleanly up to bounded capacity.
     let public_lane = Arc::new(Semaphore::new(1));
@@ -631,15 +630,23 @@ pub async fn run_xmtp_sidecar(
             error!("ignored invalid XMTP transport metadata");
             continue;
         }
-        let imprint = bot.classify_or_imprint_operator(
-            &request.sender_inbox_id,
-            request.sender_address.as_deref(),
-            &request.sent_at_ns,
-        )?;
-        let role = imprint.role;
-        if let Some(address) = imprint.imprinted_address {
-            info!("Tentacle has imprinted on {address}");
-        }
+        let group = matches!(
+            request.event_type.as_str(),
+            "group_text" | "group_observation"
+        );
+        let role = if group {
+            PrincipalRole::User
+        } else {
+            let imprint = bot.classify_or_imprint_operator(
+                &request.sender_inbox_id,
+                request.sender_address.as_deref(),
+                &request.sent_at_ns,
+            )?;
+            if let Some(address) = imprint.imprinted_address {
+                info!("Tentacle has imprinted on {address}");
+            }
+            imprint.role
+        };
         let first_delivery =
             bot.claim_authenticated_message(&request.message_id, &request.sender_inbox_id)?;
         if request.event_type == "reject_inbound" {
@@ -697,6 +704,18 @@ pub async fn run_xmtp_sidecar(
             let response = match processing_budget(request.deadline_unix_ms, role) {
                 Some(budget) => match timeout(budget, async {
                     scope_authenticated_deadline(inference_lane, budget, async {
+                        if group {
+                            return bot
+                                .receive_group(
+                                    &request.message_id,
+                                    &request.sender_inbox_id,
+                                    request.sender_address.as_deref(),
+                                    &request.conversation_id,
+                                    &request.text,
+                                    request.event_type == "group_observation",
+                                )
+                                .await;
+                        }
                         bot.receive_authenticated_claimed_with_address(
                             &request.message_id,
                             &request.sender_inbox_id,
@@ -1034,11 +1053,15 @@ fn copy_network_environment(command: &mut Command) {
 fn validate_request(request: &InboundText) -> Result<()> {
     if !matches!(
         request.event_type.as_str(),
-        "inbound_text" | "reject_inbound" | "reject_oversized"
+        "inbound_text" | "group_text" | "group_observation" | "reject_inbound" | "reject_oversized"
     ) {
         bail!("unsupported XMTP transport event");
     }
-    if request.event_type != "inbound_text" && !request.text.is_empty() {
+    if matches!(
+        request.event_type.as_str(),
+        "reject_inbound" | "reject_oversized"
+    ) && !request.text.is_empty()
+    {
         bail!("XMTP rejection control frames must not contain message text");
     }
     if request.id.is_empty() || request.id.len() > 128 {
@@ -1067,6 +1090,15 @@ fn validate_request(request: &InboundText) -> Result<()> {
         || request.deadline_unix_ms.saturating_sub(now) > MAX_REQUEST_DEADLINE_MS
     {
         bail!("invalid or expired XMTP request deadline");
+    }
+    if matches!(
+        request.event_type.as_str(),
+        "group_text" | "group_observation"
+    ) {
+        normalize_inbox_id(&request.conversation_id)?;
+        if request.text.len() > 16384 {
+            bail!("oversized group text");
+        }
     }
     if request.conversation_id.is_empty() || request.conversation_id.len() > 512 {
         bail!("invalid XMTP conversation ID");

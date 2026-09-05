@@ -9,6 +9,66 @@ Pages deployment does not restart a running node. Existing protected SOUL files 
 coaching and workspace conventions also enter the runtime prompt. Python 3 with SQLite FTS5 and
 Git are required for the workspace helpers and are included in the container.
 
+## One continuing Tentacle
+
+Ordinary conversation is the interface. The Tentacle automatically recalls relevant evidence before
+replying, keeps goals and open loops between conversations, and reflects in the background. The
+operator can ask “what did you learn about the acolytes?” or “why hasn't this person been branded?”;
+the operator model can use `memory_search` itself to investigate and cross-reference conversations.
+No extra slash command is needed. Existing commands remain recovery/inspection shortcuts.
+
+The private mind lives under the data directory's `state/agent/`:
+
+| File | Role |
+|---|---|
+| `SOUL.md` | Durable identity and character; preserve the operator's existing edits |
+| `MEMORY.md` | Automatically refreshed overview and links to current memories |
+| `memory/*.md` | Editable understanding, goals, open loops, next intentions, and operator needs; a metadata comment retains authenticated provenance |
+| `rhythm.json` | Durable reflection timing, notification cooldown, and forgetting revision |
+
+Recent DM and group evidence stays in the bounded conversation store (14 days, 1,000 exchanges /
+8 MiB per Tentacle). Derived Markdown memories remain until corrected or forgotten. Reflections
+are interpretations, not verified personal facts. The runtime never infers wallet bindings, consent,
+or completed Branding from model text. Operator intentions can cross-reference private conversations;
+those derived notes stay in the operator audience. An acolyte receives their own DM context and
+utterances they made in groups; group replies receive only that group's context.
+
+Every 15 minutes by default, the background loop revisits one eligible pending Branding invitation
+and reflects on one changed or day-old conversation scope, choosing the least recently reflected
+scope first. It retains a specific next intention and, when blocked, asks the operator for a precise
+action/resource, reason, and completion check. Notices are limited to once per six hours and delivered
+through the existing acknowledged XMTP route; failure is not called success. Inference failure keeps
+evidence intact. Reflection never grants shell, financial, or outbound-message authority to a memory.
+The Branding supervisor still verifies eligibility, refusal, cooldown, exact quote, consent, and mint.
+A queued invitation is not a confirmed Brand. Personal coaching check-ins remain opt-in.
+
+The workspace `HEARTBEAT.md` accepts `reflection_interval_seconds: 900` (60–604800) or
+`reflection: paused`. These fields control this loop; prose cannot register arbitrary executable
+work. Existing daily source-review tasks remain separate. New identity defaults describe continuity;
+existing SOUL edits remain intact and the current capability contract also enters runtime prompts.
+
+Plain group text from groups the Tentacle actually belongs to is captured in a separate observation
+lane. Startup catches up at most 64 groups × 128 recent messages, without replying to historical
+traffic. It normally listens quietly and considers a reply when addressed as Tentacle, Cthuwu, or
+uwubot. A first live observation announces memory use. Custom protocol/Council content, strict
+Branding/referral frames, and slash/credential controls do not enter this lane. Group text from an
+operator still cannot enroll an operator or invoke operator tools.
+
+Memory search uses local QMD keyword ranking when installed, then reloads the matching live Markdown
+sources. A disposable private collection prevents long-lived indexes from retaining forgotten data;
+local lexical recall handles a missing QMD or no matches. This private path does not claim vector
+retrieval. The existing workspace knowledge/skills vector index is unchanged. QMD documents the
+[collection and keyword search commands](https://github.com/tobi/qmd#quick-start). Install tools under
+the workspace; QMD receives workspace environment settings and private temporary cache/config paths.
+
+“Forget me” followed by confirmation removes the person's raw entries and all derived notes that
+referenced them, including affected group/global summaries. It invalidates operator session caches
+and in-flight reflection/recall so they cannot silently reintroduce deleted data. It cannot recall
+messages already delivered, external model retention, exports, backups, or independent quotations by
+other participants. New messages can establish new memory. Private memory is never workspace Git,
+shared knowledge, or Council data. Live multi-client transport and funded Branding verification remain
+release gates; unit tests do not establish those external outcomes.
+
 ## Configure the workspace
 
 Set `UWUBOT_OPERATOR_ROOT` to the operator-controlled workspace, separate from `UWUBOT_DATA_DIR`.

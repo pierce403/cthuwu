@@ -176,7 +176,11 @@ impl AgentContext {
             workspace_memory: self.workspace_root.join("MEMORY.md"),
             workspace_skills: self.workspace_root.join("skills"),
             protected_soul: self.instance_root.join("SOUL.md"),
-            protected_memory: self.instance_root.join("memories/MEMORY.md"),
+            protected_memory: if self.instance_root.join("MEMORY.md").exists() {
+                self.instance_root.join("MEMORY.md")
+            } else {
+                self.instance_root.join("memories/MEMORY.md")
+            },
             protected_operator_profile: self
                 .instance_root
                 .join("operators")
@@ -199,10 +203,15 @@ impl AgentContext {
     pub fn render(&self, operator_inbox_id: &str) -> Result<String> {
         let operator_inbox_id = normalize_inbox_id(operator_inbox_id)?;
         let soul = read_designated_file(&self.instance_root.join("SOUL.md"), MAX_SOUL_BYTES)?;
-        let memory = read_designated_file(
+        let mut memory = read_designated_file(
             &self.instance_root.join("memories/MEMORY.md"),
             MAX_MEMORY_BYTES,
         )?;
+        let living_index = self.instance_root.join("MEMORY.md");
+        if living_index.exists() {
+            memory.push_str("\nCURRENT LIVING MEMORY INDEX (supersedes legacy statements that conversations are unavailable):\n");
+            memory.push_str(&read_designated_file(&living_index, 32000)?);
+        }
         let operator_path = self
             .instance_root
             .join("operators")

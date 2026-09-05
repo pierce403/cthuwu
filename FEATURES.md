@@ -16,10 +16,22 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
+## Continuing identity, memory, and initiative
+
+- **Stability**: in-progress; implemented locally, live operator/group verification pending.
+- [x] Unify ordinary operator/acolyte conversation with persistent SOUL, high-level MEMORY, editable private memory documents, goals, and open loops.
+- [x] Automatically retrieve relevant scoped evidence; let the operator model choose cross-conversation `memory_search` queries without requiring a user command.
+- [x] Capture plain group conversation in an unprivileged lane; catch up recent history quietly and reply when addressed without importing private DM context.
+- [x] Reflect every 15 minutes by default, retain intentions across restart, and send precise operator needs with cooldown and delivery acknowledgement.
+- [x] Revisit eligible pending Branding from background work using the existing refusal, quote, consent, cooldown, and mint boundaries.
+- [x] Support QMD keyword ranking through disposable private collections, with live source reload and a labeled local lexical fallback.
+- [x] Explain memory use and cascade confirmed forgetting through derived summaries and operator session/recall state.
+- [ ] Validate deployed node reflection quality, real QMD integration, group streaming/catch-up, and funded consensual Branding after upgrading the binary and sidecar together.
+
 ## Operator-readable acolyte conversations
 
 - [x] Persist private incoming acolyte text and generated replies with authenticated inbox/address and local receipt time.
-- [x] Provide native `/history <address|inbox> [page]` and natural conversation questions with an explicit identifier in the authenticated active operator lane.
+- [x] Keep native `/history <address|inbox> [page]` as a recovery shortcut; ordinary operator questions use the shared mind and discretionary recall.
 - [x] Bound retention to 14 days, 1,000 exchanges / 8 MiB per Tentacle; paginate Unicode safely and label replies as delivery-unconfirmed.
 - [x] Exclude credential commands and strict controls; disclose operator access and erase transcripts on confirmed forgetting.
 - [ ] Verify a newly captured acolyte conversation through the live operator XMTP route after runtime upgrade; historical messages are not backfilled.

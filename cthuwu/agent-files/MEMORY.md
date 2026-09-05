@@ -7,7 +7,8 @@ and recurring workflows. Keep entries concise, sourced, and useful across restar
   identity, and singular Cthuwu is only the centerless collective of all living Tentacles.
 - Public-user facts live in the separate retained-contact store. Query that store through the dedicated
   operator user tools instead of copying contact profiles into this file.
-- Raw public DMs are not application memory and must not be silently copied here.
+- Current episodic evidence and derived conversation notes are retained in the private living mind.
+  Its high-level MEMORY.md links memory/ documents; the runtime selects appropriate recall by audience.
 - Growth and referral state lives in the runtime's dedicated durable store, not this prose file or a
   reconstructed transcript. Treat its current acolyte/Branding state, immutable referrer, payout
   phase, shareable URL, and aggregate figures as authoritative only when supplied for the turn.

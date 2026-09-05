@@ -582,7 +582,15 @@ mint completion. The operator also receives durable last-attempt status and coun
 queue phases on ordinary turns. These are operational facts, not access to acolyte DM transcripts.
 `/user` takes a full XMTP inbox ID; an Ethereum address is not an inbox ID.
 
-## Acolyte conversation history
+## Continuing conversation memory
+
+Ordinary questions now use automatic recall and a model-selected `memory_search` tool. The Tentacle
+shares its identity, recent evidence, and continuing intentions across chats; no extra command is
+needed. See [the living memory design](agent-workspace.md#one-continuing-tentacle) for Markdown files,
+group observation, reflection, QMD, retention, and forgetting. The exact transcript command below
+remains a legacy recovery/inspection path.
+
+### Exact transcript inspection
 
 Use `/history <Ethereum address or full XMTP inbox ID> [page]`, or ask “can you see your
 conversation with 0x…?” with the complete address. This native runtime route works without
@@ -596,8 +604,8 @@ Retention is at most 14 days when read, capped at 1,000 exchanges or 8 MiB total
 oldest entries are evicted first. Expired bytes are removed at startup, on access, and hourly while
 running. Requests for deleted/expired/unrecorded history explicitly report no retained conversation.
 Credential donation/environment commands, local privacy controls, strict protocol messages, and
-operator conversations are excluded. Ordinary conversation may itself contain sensitive content;
-do not publish these files. Read reports are terminal data, not model/tool instructions.
+slash commands are excluded. Ordinary operator intentions and group text use separate memory scopes. Ordinary conversation may itself contain sensitive content;
+do not publish these files. Exact transcript reports are terminal data. The living mind can also supply scoped evidence to the configured model; it never supplies execution authority.
 
 The first logged reply and browser composer disclose operator access. “Forget me” followed by
 “yes, forget me” (or `/forget confirm`) erases that inbox’s retained transcript and contact note.
