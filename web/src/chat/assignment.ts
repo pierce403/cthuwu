@@ -68,7 +68,7 @@ export type TentacleAssignment =
       notice: string;
     }
   | {
-      source: "intro-unconfigured";
+      source: "intro-unconfigured" | "unverified";
       address: string;
       notice: string;
     }
@@ -919,10 +919,15 @@ export function createJsonRpcClient(endpoint: string, fetcher: typeof fetch): Rp
   let pending: Pending[] = [];
   let scheduled = false;
 
-  const flush = async (): Promise<void> => {
-    scheduled = false;
-    const batch = pending;
-    pending = [];
+  const retryableRead = (request: Pending): boolean => [
+    "eth_chainId", "eth_blockNumber", "eth_getBlockByNumber", "eth_getCode",
+    "eth_call", "eth_getLogs", "eth_getTransactionReceipt",
+  ].includes(request.method);
+  const send = async (batch: Pending[], attempt = 0): Promise<void> => {
+    const retry = async (requests: Pending[]): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      await send(requests, attempt + 1);
+    };
     try {
       const response = await fetcher(endpoint, {
         method: "POST",
@@ -930,7 +935,12 @@ export function createJsonRpcClient(endpoint: string, fetcher: typeof fetch): Rp
         body: JSON.stringify(batch.map(({ id: requestId, method, params }) => ({
           jsonrpc: "2.0", id: requestId, method, params,
         }))),
+        signal: AbortSignal.timeout(20_000),
       });
+      if ([429, 502, 503, 504].includes(response.status) && attempt < 2 && batch.every(retryableRead)) {
+        await response.body?.cancel();
+        return await retry(batch);
+      }
       const length = Number(response.headers.get("content-length"));
       if (!response.ok || (Number.isFinite(length) && length > 128 * 1024)) {
         throw new Error(`Base RPC failed with HTTP ${response.status}`);
@@ -941,18 +951,43 @@ export function createJsonRpcClient(endpoint: string, fetcher: typeof fetch): Rp
       if (!Array.isArray(parsed) || parsed.length !== batch.length) {
         throw new Error("Base RPC returned an invalid batch response");
       }
-      const byId = new Map(parsed.filter(isRecord).map((item) => [item.id, item]));
+      const expectedIds = new Set(batch.map((request) => request.id));
+      const byId = new Map<number, Record<string, unknown>>();
+      for (const item of parsed) {
+        if (!isRecord(item) || !expectedIds.has(item.id as number) ||
+          byId.has(item.id as number) || item.jsonrpc !== "2.0" ||
+          (("error" in item) === ("result" in item))) {
+          throw new Error("Base RPC returned an invalid response");
+        }
+        byId.set(item.id as number, item);
+      }
+      const retryable: Pending[] = [];
       for (const request of batch) {
-        const item = byId.get(request.id);
-        if (!item || item.jsonrpc !== "2.0" || "error" in item || !("result" in item)) {
-          request.reject(new Error("Base RPC returned an invalid response"));
+        const item = byId.get(request.id)!;
+        if ("error" in item) {
+          const code = isRecord(item.error) && Number.isSafeInteger(item.error.code)
+            ? item.error.code as number : undefined;
+          if (code === -32005 && attempt < 2 && retryableRead(request)) {
+            retryable.push(request);
+          } else {
+            // Never expose arbitrary provider text, endpoint credentials, or request arguments.
+            const reason = code === -32005 ? "rate limit" : "request rejected";
+            request.reject(new Error(`Base RPC ${request.method}: ${reason}${code === undefined ? "" : ` (code ${code})`}; retry the connection`));
+          }
         } else {
           request.resolve(item.result);
         }
       }
+      if (retryable.length) await retry(retryable);
     } catch (error) {
       for (const request of batch) request.reject(error);
     }
+  };
+  const flush = (): void => {
+    scheduled = false;
+    const batch = pending;
+    pending = [];
+    void send(batch);
   };
   return {
     request: (method, params) => new Promise((resolve, reject) => {

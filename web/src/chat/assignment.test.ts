@@ -347,6 +347,44 @@ describe("canonical Tentacle assignment", () => {
     await expect(client.request("eth_chainId", [])).rejects.toThrow(/invalid response/u);
   });
 
+  it("retries only rate-limited reads without changing their pinned block", async () => {
+    const fetcher = vi.fn(async (_input, init) => {
+      const requests = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(requests.map((request: { id: number }) =>
+        request.id === 2 && fetcher.mock.calls.length === 1
+          ? { jsonrpc: "2.0", id: request.id, error: { code: -32005, message: "limit exceeded" } }
+          : { jsonrpc: "2.0", id: request.id, result: "0x1" },
+      )));
+    });
+    const client = createJsonRpcClient("https://rpc.example/", fetcher as typeof fetch);
+    await expect(Promise.all([
+      client.request("eth_getCode", ["contract", "0x123"]),
+      client.request("eth_call", [{ to: "contract" }, "0x123"]),
+    ])).resolves.toEqual(["0x1", "0x1"]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual([
+      { jsonrpc: "2.0", id: 2, method: "eth_call", params: [{ to: "contract" }, "0x123"] },
+    ]);
+  });
+
+  it("reports a rejected method and code without exposing provider text", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify([
+      { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "secret provider diagnostics" } },
+    ])));
+    const client = createJsonRpcClient("https://rpc.example/", fetcher as typeof fetch);
+    await expect(client.request("eth_call", [])).rejects.toThrow(
+      "Base RPC eth_call: request rejected (code -32000); retry the connection",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds HTTP rate-limit retries", async () => {
+    const fetcher = vi.fn(async () => new Response("busy", { status: 429 }));
+    const client = createJsonRpcClient("https://rpc.example/", fetcher as typeof fetch);
+    await expect(client.request("eth_chainId", [])).rejects.toThrow("HTTP 429");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it("micro-batches concurrent Base reads into one HTTP request", async () => {
     const fetcher = vi.fn(async (_input, init) => {
       const requests = JSON.parse(String(init?.body)) as Array<{ id: number; method: string }>;

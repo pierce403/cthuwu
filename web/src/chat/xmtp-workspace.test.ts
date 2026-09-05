@@ -282,6 +282,11 @@ async function waitFor(check: () => boolean): Promise<void> {
   await vi.waitFor(() => expect(check()).toBe(true));
 }
 
+async function startVerified(workspace: XmtpMultiChannelWorkspace): Promise<void> {
+  await workspace.start();
+  await workspace.revalidateAssignment("connect");
+}
+
 describe("multi-channel XMTP workspace", () => {
   beforeEach(() => localStorage.clear());
 
@@ -371,7 +376,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => intro),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     expect(value.client.conversations.createDmWithIdentifier).toHaveBeenCalledWith(
       { identifier: address, identifierKind: IdentifierKind.Ethereum },
       { messageDisappearingSettings: { fromNs: 1n, inNs: 1_209_600_000_000_000n } },
@@ -392,9 +397,9 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => resolved),
       storage: localStorage,
     });
-    await workspace.start();
-    expect(value.client.conversations.createDm).toHaveBeenCalledWith(
-      tentacle,
+    await startVerified(workspace);
+    expect(value.client.conversations.createDmWithIdentifier).toHaveBeenCalledWith(
+      { identifier: address, identifierKind: IdentifierKind.Ethereum },
       { messageDisappearingSettings: { fromNs: 1n, inNs: 1_209_600_000_000_000n } },
     );
     expect(value.sentControls).toEqual([]);
@@ -427,7 +432,7 @@ describe("multi-channel XMTP workspace", () => {
         storage: localStorage,
       },
     );
-    await workspace.start();
+    await startVerified(workspace);
     expect(first.direct.sendText).toHaveBeenCalledWith(
       `[[cthuwu:referral-attribution:v1;referrer=${referrer}]]`,
     );
@@ -445,7 +450,7 @@ describe("multi-channel XMTP workspace", () => {
         storage: localStorage,
       },
     );
-    await recovered.start();
+    await startVerified(recovered);
     expect(unacknowledged.direct.sendText).toHaveBeenCalledWith(
       `[[cthuwu:referral-attribution:v1;referrer=${referrer}]]`,
     );
@@ -468,7 +473,7 @@ describe("multi-channel XMTP workspace", () => {
         storage: localStorage,
       },
     );
-    await finalRestart.start();
+    await startVerified(finalRestart);
     expect(acknowledged.direct.sendText).not.toHaveBeenCalled();
     await finalRestart.close();
   });
@@ -483,7 +488,7 @@ describe("multi-channel XMTP workspace", () => {
       nowMs: () => 1_800_000_000_000,
       storage: localStorage,
     });
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
       requestId: string;
@@ -505,7 +510,7 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
-  it("fails closed as liveness-unavailable when deep-linked tentacle is dead and does not answer ping pong", async () => {
+  it("warns when a deep-linked Tentacle does not answer ping pong while keeping Direct usable", async () => {
     const value = fixture();
     const anchorConfig = { ...config, tentacleAnchor: address };
     const workspace = new XmtpMultiChannelWorkspace(value.client as never, anchorConfig, identity, {
@@ -514,12 +519,12 @@ describe("multi-channel XMTP workspace", () => {
       nowMs: () => 1_800_000_000_000,
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     expect(workspace.snapshot()).toMatchObject({
       assignmentState: "liveness-unavailable",
-      assignmentNotice: expect.stringMatching(/The deep-linked Tentacle did not answer the liveness check/u),
+      verificationWarning: expect.stringMatching(/The deep-linked Tentacle did not answer the liveness check/u),
     });
-    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(false);
+    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
     await workspace.close();
   });
 
@@ -529,7 +534,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => rotated),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBeNull();
     await workspace.close();
   });
@@ -556,7 +561,7 @@ describe("multi-channel XMTP workspace", () => {
       nowMs: () => 1_800_000_000_000,
       storage: localStorage,
     });
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
       requestId: string; expiresAtNs: string; targetAgentId: string;
@@ -628,7 +633,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.direct.stream.mock.calls.length === 1);
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(value.sentControls).toEqual([]);
@@ -680,7 +685,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    await workspace.start();
+    await startVerified(workspace);
     expect(workspace.snapshot().assignmentState).toBe("registry-unavailable");
     expect(value.sentControls).toEqual([]);
 
@@ -701,7 +706,9 @@ describe("multi-channel XMTP workspace", () => {
       blockNumber: "122",
       blockHash: `0x${"8".repeat(64)}`,
     };
-    value.client.preferences.fetchInboxStates.mockRejectedValueOnce(
+    value.client.preferences.fetchInboxStates.mockResolvedValueOnce([
+      { inboxId: tentacle, recoveryIdentifier: { identifier: address, identifierKind: IdentifierKind.Ethereum }, installations: [], accountIdentifiers: [{ identifier: address, identifierKind: IdentifierKind.Ethereum }] },
+    ]).mockRejectedValueOnce(
       new Error(`failed https://rpc.example/private-key for inbox ${tentacle}`),
     );
     const logger = {
@@ -718,7 +725,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    await workspace.start();
+    await startVerified(workspace);
     const diagnostics = JSON.stringify(logger.warn.mock.calls);
     expect(diagnostics).toContain("<redacted-endpoint>");
     expect(diagnostics).toContain("<redacted-id>");
@@ -749,12 +756,12 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.direct.send.mock.calls.length === 1);
     await starting;
     expect(workspace.snapshot()).toMatchObject({
       assignmentState: "liveness-unavailable",
-      assignmentNotice: expect.stringMatching(/0\/1 probes sent/u),
+      verificationWarning: expect.stringMatching(/0\/1 probes sent/u),
     });
 
     releaseSend();
@@ -784,7 +791,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
       requestId: string;
@@ -828,7 +835,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
       requestId: string; expiresAtNs: string;
@@ -855,7 +862,7 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
-  it("keeps a no-response liveness result explicit and never falls through to intro", async () => {
+  it("keeps a no-response liveness warning explicit while retaining the initial Direct route", async () => {
     const value = fixture();
     const candidate = {
       wallet: address,
@@ -876,7 +883,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     value.streams.probe.push(
       textMessage("ordinary-probe-dm-traffic", directId, 1_800_000_000_001_000_000n),
@@ -884,18 +891,18 @@ describe("multi-channel XMTP workspace", () => {
     await starting;
     expect(workspace.snapshot()).toMatchObject({
       assignmentState: "liveness-unavailable",
-      assignmentNotice: expect.stringMatching(
+      verificationWarning: expect.stringMatching(
         /No ranked Tentacle answered.*1\/1 probes sent; 0 responses observed.*current sidecar/u,
       ),
     });
     expect(value.sentControls).toHaveLength(1);
     expect(verifyCandidate).not.toHaveBeenCalled();
-    expect(value.client.conversations.createDmWithIdentifier).not.toHaveBeenCalled();
+    expect(value.client.conversations.createDmWithIdentifier).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem(`cthuwu.rotation.v1:production:${identity.address}`)).toBeNull();
 
     await workspace.revalidateAssignment("retry");
     expect(value.sentControls).toHaveLength(1);
-    expect(value.client.conversations.createDmWithIdentifier).not.toHaveBeenCalled();
+    expect(value.client.conversations.createDmWithIdentifier).toHaveBeenCalledTimes(1);
     await workspace.close();
   });
 
@@ -922,7 +929,7 @@ describe("multi-channel XMTP workspace", () => {
       storage: localStorage,
     });
 
-    await expect(workspace.start()).rejects.toThrow(/directory offline/u);
+    await expect(startVerified(workspace)).rejects.toThrow(/directory offline/u);
     await workspace.revalidateAssignment("periodic");
     await workspace.revalidateAssignment("resume");
     expect(loadCandidates).toHaveBeenCalledTimes(1);
@@ -955,7 +962,7 @@ describe("multi-channel XMTP workspace", () => {
       nowMs: () => now,
       storage: localStorage,
     });
-    const starting = workspace.start();
+    const starting = startVerified(workspace);
     await waitFor(() => value.sentControls.length === 1);
     const query = livenessQueryCodec.decode(value.sentControls[0] as never) as {
       requestId: string;
@@ -976,7 +983,7 @@ describe("multi-channel XMTP workspace", () => {
     expect(verifyCandidate).not.toHaveBeenCalled();
     expect(workspace.snapshot()).toMatchObject({
       assignmentState: "liveness-unavailable",
-      assignmentNotice: expect.stringMatching(/1 response observed/u),
+      verificationWarning: expect.stringMatching(/1 response observed/u),
     });
     await workspace.close();
   });
@@ -987,7 +994,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => configuredFallback),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     expect(value.client.conversations.streamAllMessages.mock.invocationCallOrder[0]).toBeLessThan(
       value.direct.send.mock.invocationCallOrder[0]!,
     );
@@ -1060,7 +1067,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: resolver,
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({
@@ -1103,6 +1110,60 @@ describe("multi-channel XMTP workspace", () => {
     await workspace.close();
   });
 
+  it("starts and sends while Base is pending, then keeps Direct usable after RPC failure", async () => {
+    const value = fixture();
+    let rejectCheck!: (error: Error) => void;
+    const check = new Promise<TentacleAssignment>((_resolve, reject) => { rejectCheck = reject; });
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: () => check,
+    });
+    await workspace.start();
+    expect(workspace.snapshot().channels.direct.retentionVerified).toBe(true);
+    expect(workspace.snapshot().tentacleName).toContain("unverified");
+    await workspace.send("direct", "hello before Base replies");
+    expect(value.direct.sendText).toHaveBeenCalledWith("hello before Base replies");
+    rejectCheck(new RegistryUnavailableError("Base RPC offline"));
+    await workspace.revalidateAssignment("retry");
+    expect(workspace.snapshot().verificationWarning).toContain("Base RPC offline");
+    await workspace.send("direct", "still connected");
+    expect(value.direct.sendText).toHaveBeenCalledWith("still connected");
+    expect(value.sentControls).toEqual([]);
+    await workspace.close();
+  });
+
+  it("does not redirect an open chat when a late Base result names a different target", async () => {
+    const value = fixture();
+    let finish!: (assignment: TentacleAssignment) => void;
+    const check = new Promise<TentacleAssignment>((resolve) => { finish = resolve; });
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: () => check,
+    });
+    await workspace.start();
+    finish({ ...rotated, address: "0x9999999999999999999999999999999999999999" });
+    await workspace.revalidateAssignment("retry");
+    expect(workspace.snapshot().assignedTentacleAddress).toBe(address);
+    expect(workspace.snapshot().verificationWarning).toContain("no messages were moved");
+    expect(value.client.conversations.createDm).not.toHaveBeenCalled();
+    await workspace.send("direct", "same recipient");
+    await workspace.close();
+  });
+
+  it("ignores a Base result delivered after the workspace closes", async () => {
+    const value = fixture();
+    let finish!: (assignment: TentacleAssignment) => void;
+    const check = new Promise<TentacleAssignment>((resolve) => { finish = resolve; });
+    const workspace = new XmtpMultiChannelWorkspace(value.client as never, config, identity, {
+      resolveAssignment: () => check,
+    });
+    await workspace.start();
+    await workspace.close();
+    finish(rotated);
+    await workspace.revalidateAssignment("retry");
+    expect(workspace.snapshot().connected).toBe(false);
+    expect(value.sentControls).toEqual([]);
+    expect(value.client.conversations.createDm).not.toHaveBeenCalled();
+  });
+
   it("backs off automatic registry retries after an outage while preserving explicit retry", async () => {
     const value = fixture();
     const resolver = vi.fn(async () => { throw new RegistryUnavailableError("Base RPC rate limited"); });
@@ -1110,7 +1171,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: resolver,
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     expect(resolver).toHaveBeenCalledTimes(1);
     await workspace.revalidateAssignment("resume");
     await workspace.revalidateAssignment("periodic");
@@ -1126,7 +1187,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => configuredFallback),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({
@@ -1164,7 +1225,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => configuredFallback),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({
@@ -1263,7 +1324,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => configuredFallback),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({
@@ -1290,7 +1351,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => configuredFallback),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({
@@ -1311,7 +1372,7 @@ describe("multi-channel XMTP workspace", () => {
       resolveAssignment: vi.fn(async () => resolved),
       storage: localStorage,
     });
-    await workspace.start();
+    await startVerified(workspace);
     const join = joinCodec.decode(value.sentControls[0] as never);
     if (!isJoinControl(join)) throw new Error("join control did not decode");
     value.streams.messages.push({

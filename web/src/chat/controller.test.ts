@@ -115,6 +115,25 @@ describe("three-channel chat controller", () => {
     });
   });
 
+  it("shows a dismissible verification warning without disabling chat", async () => {
+    const snapshot = initialSnapshot();
+    snapshot.assignmentState = "registry-unavailable";
+    snapshot.verificationWarning = "Base verification unavailable; chat remains open";
+    const workspace = fakeWorkspace(snapshot);
+    const controller = initializeChatController(config, identity, {
+      createWorkspace: vi.fn(async () => workspace),
+    });
+    await controller.connect();
+    const notice = document.querySelector<HTMLElement>(".verification-notice")!;
+    expect(notice.hidden).toBe(false);
+    expect(notice.textContent).toContain("Base verification unavailable");
+    expect(document.querySelector<HTMLTextAreaElement>("#message")!.disabled).toBe(false);
+    notice.querySelector<HTMLButtonElement>("button")!.click();
+    workspace.emit();
+    expect(notice.hidden).toBe(true);
+    await controller.close();
+  });
+
   it("renders text safely and sends through the exact active tab", async () => {
     const workspace = fakeWorkspace();
     const controller = initializeChatController(config, identity, {

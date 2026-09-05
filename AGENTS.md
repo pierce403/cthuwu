@@ -537,6 +537,11 @@ until it passes, even though the canonical contract deployment and closed implem
   never promise exact output.
 - Use structured errors and actionable CLI messages.
 - Add tests around identity persistence, replay/idempotency, message filtering, contact files, and configuration parsing.
+- Browser Direct chat opens immediately over XMTP to the requested, retained, or default address.
+  Canonical Base verification runs in the background; RPC/liveness/registration failures warn
+  out of band without disabling authenticated Direct chat. Do not label the contact verified or
+  grant group/Branding authority until the relevant checks pass. Preserve XMTP wallet binding,
+  consent, and retention checks; never silently reroute an initially open chat on a late result.
 - Keep browser accessibility and keyboard use working.
 
 ## Durable learning

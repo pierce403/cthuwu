@@ -2,6 +2,19 @@
 
 Last reviewed: 2026-09-05
 
+- Updated operator-requested browser policy: Direct connects immediately to the link/retained/default
+  address with XMTP wallet binding, consent, and retention checks. Base runs in the background;
+  outages or invalid registrations warn separately and do not disable Direct. Unverified targets
+  cannot grant group enrollment or Branding authority. Late Base results cannot silently reroute
+  an initially opened chat; closed workspaces ignore those results. This supersedes older notes
+  describing Base/liveness outages as Direct blockers.
+
+- Base routing RPC errors now identify the method and numeric provider code without echoing raw
+  provider text. Retry known read-only calls at most twice for HTTP 429/502/503/504 or RPC -32005,
+  keeping IDs, parameters, and pinned blocks unchanged. Reject malformed/duplicate batch IDs.
+  A live unminted routing check passed during diagnosis; the reported intermittent failure was
+  not reproduced, so do not claim its provider-side cause is confirmed.
+
 - Referral welcome belongs inside the chat card, with its own grid row and styles. Inserting it
   before chat adds a third shell grid item and pushes chat below the mascot on desktop. Center
   the shell’s content as a unit and top-align its columns; centering only the mascot while pinning
@@ -42,7 +55,7 @@ Last reviewed: 2026-09-05
   The browser persists the successful handoff, displays that freshly verified name (or `Tentacle
   #<agentId>`), and binds non-intro enrollment to
   a one-use short-lived liveness grant. A process does not repeat the race on periodic/resume checks.
-  No responder leaves Direct explicitly unavailable rather than selecting the unprobed intro
+  No responder leaves registration unverified with a warning; Direct can remain on the initial
   Tentacle; deliberate Retry opens a fresh workspace and one new bounded race. Active Branding
   remains absolute.
 - Explicit `#t=` links select the sole eligible identity from that same complete Agent0 directory,

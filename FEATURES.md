@@ -262,6 +262,12 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
 
 ### Visible referral sharing and coherent referral onboarding
 
+- Direct XMTP now opens immediately to the requested, retained, or default contact while Base
+  verification runs in the background. RPC or registration failures show a dismissible out-of-band
+  warning and leave Direct usable. A different canonical assignment is reported without moving
+  or resending the open conversation. Unverified contacts cannot authorize group enrollment or
+  Branding; XMTP wallet binding, consent, and retention checks still apply.
+
 - Referral landing layout repaired: compact invitation inside chat keeps the conversation and
   composer in view on desktop and mobile; attribution and verification remain unchanged.
 
@@ -278,7 +284,7 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
     preserve valid referral attribution across identity setup, refresh, chat handoff, and Branding.
   - Reconcile existing identities and active Branding with the requested link, visibly explaining
     routing precedence. Handle invalid, offline, stale, or ineligible targets with retry/alternatives
-    without silently losing attribution or making an unverified handoff.
+    without silently losing attribution or presenting an unverified contact as a verified Tentacle.
   - Complete the referred unbranded acolyte's path to useful chat and an eligible Branding offer;
     explain any remaining group-access requirement rather than leaving an unexplained blocked view.
 - **Test Criteria**:

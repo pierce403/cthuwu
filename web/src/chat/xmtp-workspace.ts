@@ -289,6 +289,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   private readonly storage: Storage | undefined;
   private assignmentState: AssignmentState = "checking";
   private assignmentNotice = "Checking the canonical assignment…";
+  private verificationWarning?: string;
   private tentacleName = "Tentacle";
   private connected = false;
   private closed = false;
@@ -348,7 +349,17 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     // response or newly delivered group cannot be missed between sync and subscription.
     await this.startStreams();
     this.connected = true;
-    await this.revalidateAssignment("connect");
+    const provisional: TentacleAssignment = {
+      source: "unverified",
+      address: this.config.tentacleAnchor ?? this.retainedRotationAddress ?? this.config.botAddress,
+      notice: "XMTP connected · checking Tentacle registration in the background…",
+    };
+    await this.handoffDirect(provisional);
+    if (this.closed) return;
+    this.currentAssignment = provisional;
+    this.assignmentState = "unverified";
+    this.assignmentNotice = provisional.notice;
+    void this.revalidateAssignment("connect").catch(() => undefined);
     this.refreshTimer = setInterval(() => {
       void this.revalidateAssignment("periodic").catch((error) => {
         this.assignmentNotice = error instanceof Error ? error.message : "Assignment refresh failed";
@@ -365,6 +376,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       connected: this.connected,
       assignmentState: this.assignmentState,
       assignmentNotice: this.assignmentNotice,
+      verificationWarning: this.verificationWarning,
       tentacleName: this.tentacleName,
       ...(this.currentAssignment ? { assignedTentacleAddress: this.currentAssignment.address } : {}),
       channels: Object.fromEntries(
@@ -491,7 +503,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
     if (this.closed) return;
     if (reason !== "periodic") {
       this.assignmentState = "checking";
-      this.assignmentNotice = "Checking the canonical assignment…";
+      this.assignmentNotice = this.direct ? "XMTP connected · checking Base in the background…" : "Checking the canonical assignment…";
       this.emit();
     }
     if (reason === "retry") {
@@ -505,6 +517,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         { ...this.config, rotationAnchor: this.retainedRotationAddress },
         this.identity,
       );
+      if (this.closed) return;
       if (assignment.source === "liveness-required") {
         assignment = await this.selectLiveAssignment(reason);
       } else if (assignment.source === "anchor-verified" && this.config.tentacleAnchor && !this.pendingLivenessRequestId) {
@@ -527,11 +540,24 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
           throw error;
         }
       }
+      if (this.closed) return;
+      if (this.currentAssignment?.source === "unverified" &&
+          assignment.address.toLowerCase() !== this.currentAssignment.address.toLowerCase()) {
+        this.assignmentState = "unverified";
+        this.assignmentNotice = "XMTP connected · current target is not the canonical assignment";
+        this.verificationWarning = `Base routing points to ${assignment.address}. Your current conversation has been kept open; no messages were moved or resent.`;
+        this.emit();
+        return;
+      }
+      this.verificationWarning = undefined;
       this.registryFailureCount = 0;
       this.nextAutomaticRegistryAttemptAt = 0;
-      const changed = routeKey(assignment) !== routeKey(this.currentAssignment);
+      const promotingCurrentTarget = this.currentAssignment?.source === "unverified" &&
+        assignment.address.toLowerCase() === this.currentAssignment.address.toLowerCase();
+      const changed = !promotingCurrentTarget && routeKey(assignment) !== routeKey(this.currentAssignment);
       if (changed || !this.direct) {
         await this.handoffDirect(assignment);
+        if (this.closed) return;
         this.currentAssignment = assignment;
         this.assignmentState = assignment.source;
         this.assignmentNotice = assignment.notice;
@@ -552,8 +578,9 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
         }
         await this.verifyCurrentDirect(assignment);
         await this.revalidateBoundGroupsIndependently();
+        if (this.closed) return;
         this.currentAssignment = assignment;
-        this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : "Intro Tentacle";
+        this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : assignment.source === "unverified" ? "XMTP contact · unverified" : "Intro Tentacle";
         this.assignmentState = assignment.source;
         this.assignmentNotice = assignment.notice;
         this.restoreVerifiedChannels();
@@ -564,8 +591,10 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
           this.unpersistedLivenessCandidate = undefined;
         }
       }
+      await this.sendReferralAttributionIfNeeded();
       this.emit();
     } catch (error) {
+      if (this.closed) return;
       if (
         error instanceof RegistryUnavailableError ||
         error instanceof DirectVerificationUnavailableError ||
@@ -582,8 +611,16 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
             ? "liveness-unavailable"
             : "registry-unavailable";
         this.assignmentNotice = error.message;
-        // A configured canonical read outage freezes only Branding-dependent routing. Global remains
-        // bound to the previously authenticated logical channel and is never reinterpreted as fallback.
+        // Base availability is not an XMTP authorization or retention check. Keep a verified
+        // direct conversation usable and surface registry/liveness failures outside the transcript.
+        if (!(error instanceof DirectVerificationUnavailableError) && this.direct) {
+          this.verificationWarning = `Tentacle verification could not be completed. ${error.message}. You can keep chatting; registration is not confirmed.`;
+          this.assignmentNotice = "XMTP connected · Tentacle verification unavailable";
+          this.blockChannel("acolytes", error.message);
+          this.channels.acolytes.retentionVerified = false;
+          this.emit();
+          return;
+        }
         this.blockChannel("direct", error.message);
         this.blockChannel("acolytes", error.message);
         this.channels.direct.retentionVerified = false;
@@ -593,6 +630,9 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       }
       const message = error instanceof Error ? error.message : "XMTP assignment handoff failed";
       this.assignmentNotice = `Assignment retry required: ${message}`;
+      if (this.direct) {
+        this.verificationWarning = `Tentacle verification failed: ${message}. Your XMTP conversation remains open.`;
+      }
       if (!this.direct) {
         this.setChannelIssue("direct", "error", message);
         this.setChannelIssue("acolytes", "error", message);
@@ -964,17 +1004,18 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       throw new RegistryUnavailableError("Direct consent could not be verified as Allowed");
     }
     await repairDirectRetention(direct);
+    if (this.closed) return;
     this.direct = direct;
     this.currentTentacleInboxId = peerInboxId;
     this.conversations.set(direct.id, direct);
     this.trustedChannelByConversation.set(direct.id, "direct");
     this.bindChannel("direct", [direct.id], direct.id, true);
-    this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : "Intro Tentacle";
+    this.tentacleName = isVerifiedTentacle(assignment) ? assignment.name : assignment.source === "unverified" ? "XMTP contact · unverified" : "Intro Tentacle";
     await this.loadHistory("direct", false);
     // The browser-local first-valid pin is only a hint until the authenticated Direct sender binds
     // it at the Tentacle. Retry after handoff/reconnect until an authenticated terminal ACK appears
     // in Direct history; the Tentacle's durable first-write rule makes retries idempotent.
-    await this.sendReferralAttributionIfNeeded(true);
+    if (assignment.source !== "unverified") await this.sendReferralAttributionIfNeeded(true);
   }
 
   private async verifyCurrentDirect(assignment: TentacleAssignment): Promise<void> {
@@ -1029,7 +1070,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
       this.emit();
       return;
     }
-    if (this.currentAssignment?.source === "intro-unconfigured") {
+    if (this.currentAssignment?.source === "intro-unconfigured" || this.currentAssignment?.source === "unverified") {
       this.setChannelIssue(
         "acolytes",
         "awaiting-assignment",
@@ -1480,7 +1521,7 @@ export class XmtpMultiChannelWorkspace implements ChatWorkspace {
   }
 
   private async sendReferralAttributionIfNeeded(force = false): Promise<void> {
-    if (!this.config.referrer || !this.direct || !this.currentTentacleInboxId) return;
+    if (this.currentAssignment?.source === "unverified" || !this.config.referrer || !this.direct || !this.currentTentacleInboxId) return;
     let persisted = false;
     try {
       persisted = this.storage?.getItem(

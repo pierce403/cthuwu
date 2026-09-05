@@ -36,6 +36,7 @@ export interface ChannelSnapshot extends ChannelBinding {
 }
 
 export type AssignmentState =
+  | "unverified"
   | "checking"
   | "intro-unconfigured"
   | "intro-fallback"
@@ -53,6 +54,7 @@ export interface WorkspaceSnapshot {
   connected: boolean;
   assignmentState: AssignmentState;
   assignmentNotice: string;
+  verificationWarning?: string;
   tentacleName: string;
   assignedTentacleAddress?: string;
   channels: Record<ChatChannel, ChannelSnapshot>;

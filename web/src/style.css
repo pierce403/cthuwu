@@ -2977,3 +2977,31 @@ html[data-motion="paused"] .message {
 .operator-referral button { border: 1px solid var(--line-strong); border-radius: .7rem; padding: .7rem; background: var(--mint); color: #10251f; font-weight: 750; cursor: pointer; }
 .operator-referral button[hidden] { display: none; }
 .operator-direct-only { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+
+.verification-notice {
+  position: fixed;
+  z-index: 30;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: 35dvh;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 1rem;
+  background: #21152f;
+  box-shadow: 0 1rem 3rem #0008;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.verification-notice[hidden] { display: none; }
+.verification-notice p { margin: 0 0 0.6rem; }
+.verification-notice button {
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.8rem;
+  background: var(--mint);
+  color: #10251f;
+  cursor: pointer;
+}

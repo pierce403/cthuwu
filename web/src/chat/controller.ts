@@ -104,6 +104,22 @@ export function initializeChatController(
   dependencies: ControllerDependencies = {},
 ): ChatController {
   const elements = chatElements();
+  const verificationNotice = document.createElement("aside");
+  verificationNotice.className = "verification-notice";
+  verificationNotice.setAttribute("aria-label", "Tentacle verification");
+  verificationNotice.hidden = true;
+  const verificationText = document.createElement("p");
+  verificationText.setAttribute("role", "status");
+  const dismissVerification = document.createElement("button");
+  dismissVerification.type = "button";
+  dismissVerification.textContent = "Dismiss";
+  let dismissedWarning: string | undefined;
+  dismissVerification.addEventListener("click", () => {
+    dismissedWarning = latest?.verificationWarning;
+    verificationNotice.hidden = true;
+  });
+  verificationNotice.append(verificationText, dismissVerification);
+  elements.root.after(verificationNotice);
   const createWorkspace = dependencies.createWorkspace ?? createXmtpWorkspace;
   let workspace: ChatWorkspace | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -165,6 +181,8 @@ export function initializeChatController(
         : referralAcknowledgement.referrer;
     }
 
+    verificationText.textContent = snapshot.verificationWarning ?? "";
+    verificationNotice.hidden = !snapshot.verificationWarning || snapshot.verificationWarning === dismissedWarning;
     elements.root.dataset.state = snapshot.connected ? "connected" : "retryable-error";
     const verifiedOperatorDirect = snapshot.connected && channelId === "direct" &&
       channel.retentionVerified && Boolean(channel.writeConversationId) &&
@@ -332,7 +350,9 @@ export function initializeChatController(
     }
 
     updateComposerControls();
-    if (!operatorSurface && dependencies.brandingOffers !== false) {
+    if (!operatorSurface && dependencies.brandingOffers !== false &&
+        snapshot.assignmentState !== "checking" && snapshot.assignmentState !== "unverified" &&
+        snapshot.assignmentState !== "registry-unavailable" && snapshot.assignmentState !== "liveness-unavailable") {
       reconcileBranding(latestOffer, latestConsent, latestReceipt, latestDeclinedOfferId, latestRequest);
     }
     elements.retention.hidden = false;
@@ -512,6 +532,7 @@ export function initializeChatController(
     const current = workspace;
     workspace = undefined;
     latest = undefined;
+    verificationNotice.hidden = true;
     if (current) await current.close().catch(() => undefined);
   };
 
