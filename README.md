@@ -27,7 +27,11 @@ Cthuwu has two user-facing pieces:
 
 Start with [the Markdown agent and operator guide](docs/agent-workspace.md) for Bash-based work,
 local retrieval, dynamic skills, coaching goals, background tasks, multiple Tentacles, referrals,
-operator transfer, and backup API keys.
+operator transfer, and backup API keys. Each Tentacle keeps source in workspace `code/`, follows
+the prime tentacle configured in `CODE.md`, and supports reviewed `/update` jobs. Daily reviews
+consider useful improvements; source installation selects a coherent release for deliberate restart.
+Temporary files, learned tools, home, and package caches stay in the workspace by default, and
+workspace Git checkpoints record why changes happened.
 
 The detailed product contract and remaining release gates live in [FEATURES.md](FEATURES.md).
 The Council protocol is documented in [docs/protocol/README.md](docs/protocol/README.md).
@@ -340,7 +344,7 @@ Nature exist; an established node with a lost Nature must restore a consistent b
 For an offline contact-flow harness:
 
 ```bash
-./uwu.sh --data-dir /tmp/cthuwu-harness --stdin-inbox 012345abcdef
+./uwu.sh --data-dir ../cthuwu-harness-data --stdin-inbox 012345abcdef
 ```
 
 Each input line is the next message from that test inbox. Nature activates with the same safe local
@@ -468,8 +472,10 @@ The command fails without changing the ACL if the name has no Ethereum address o
 no inbox on XMTP production. It otherwise writes an active ACL record and exits; there is no XMTP
 activation proof to copy. Restart the Tentacle and newly authored messages from that inbox enter the
 operator harness. ACL management
-is not hot-reloaded: stop the Tentacle before adding, listing, or revoking, then restart after a
-change.
+is not hot-reloaded: stop the Tentacle before local CLI changes, then restart afterward. For a live
+transfer, send `/operator <address-or-ENS>` followed by the returned `/operator confirm <token>`.
+Both steps require a real registered inbox in the configured XMTP environment; confirmation
+re-resolves the original identity and rejects changed bindings. `/operator-switch` remains an alias.
 
 On first start, Cthuwu seeds protected instance Markdown for its identity and curated shared memory;
 it seeds a separate profile for each authenticated operator inbox on first use and never overwrites
@@ -486,8 +492,8 @@ Ask Cthuwu “where are your notes?” to receive an exact local report of the a
 protected soul/shared memory, current operator profile, retained-contact root, workspace memory,
 project-instruction root, and skill locations. That route calls neither a model nor a file tool.
 
-Natural-language dialogue history is bounded in memory and isolated per operator inbox; it does not
-silently become a persistent transcript.
+Natural-language dialogue history and tool receipts are bounded and persisted privately by operator
+inbox and model route. Changing the selected provider/model clears that prior context.
 
 ```bash
 ./uwu.sh operator list
@@ -503,7 +509,8 @@ can have multiple installations, every installation authorized for that inbox re
 authority. Revoke the Cthuwu role and the compromised XMTP installation immediately if any device or
 installation key may be lost: stop the node first, persist the local revocation, then restart it.
 
-Once active, the operator may use direct `/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
+Once active, the operator may use `/update`, `/operator`, `/task`, `/env`, `/referrals`, and direct
+`/exec`, `/files`, `/read`, `/write`, `/edit`, `/search`,
 `/qmd`, `/provider`, `/model`, `/users`, `/user`, and `/growth` commands. `/growth` returns the
 current conversion funnel, paid referral total, and exact operator recruitment link. Evolution adds `/nature`,
 `/adjust <trait> <value>`, `/lineage`, `/metrics`, `/judgment`, `/spawn [child-id]`,
@@ -513,19 +520,34 @@ bounded value and adds a visible stress event. `/provider` and `/model` change t
 persisted node-wide inference route without accepting a URL or credential over XMTP, and route changes
 clear bounded in-process operator dialogue history. Each ordinary-language turn receives an exact
 prompt inventory built from its closed schema. Bounded file/discovery/search tools form the base. A
-current authenticated message that explicitly names a command can activate one natural `exec` call
-bound to exactly that command—prefer backticks, as in “please run `cargo test`.” It remains
-unsandboxed RCE as the `uwubot` account. Natural requests such as “update yourself,” “sync with
-upstream,” or “submit this fix upstream” instead activate a separate typed repository-maintenance
-workflow. It reports Git/`gh` capability and sanitized topology, refuses dirty or unsafe roots and
+current authenticated natural request permits iterative `exec` for the requested work, with bounded
+tool calls and receipts. Explicit no-execution instructions still win. Bash runs as the `uwubot`
+account with workspace-local home, temporary, tool, and package-cache paths; this is not an OS
+sandbox. Ordinary work stores files and tools in the workspace. Modifying the surrounding OS
+requires explicit operator intent. Other repository diagnosis, fork maintenance, and contribution
+requests can use the retained typed repository-maintenance workflow. It reports Git/`gh` capability
+and sanitized topology, refuses dirty or unsafe roots and
 remotes, fast-forwards a clean canonical checkout, merges canonical upstream into a fork without
 discarding local work, runs the checked-in validation policy, and uses authenticated `gh` for a PR
 only after an explicit request and successful receipt. It never force-pushes or claims that updated
 source changed the currently running executable; use `/repo <typed-json>` for the equivalent direct
-operation. An explicit request for a new reusable skill can activate one
+operation. For managed self-updates, use `/update` or “update yourself”: it follows `CODE.md`, reviews source under
+`code/`, fast-forwards and installs if there is no divergence, and records selective adoption/defer
+reasons otherwise. The operator can override a deferred feature. An installed release contains a
+paired Rust binary and Node transport; `releases/active.json` takes effect on deliberate restart,
+with source commits and install state reported separately from the running binary.
+
+The default prime review first runs after one day and repeats daily. It inspects and records useful
+ideas without adopting/installing them. `/task interval <id> <seconds>` changes its cadence;
+pause/remove persist across restart. Workspace changes are committed locally with reasons after
+mutating tool calls, excluding source checkout, temporary files, tools, caches, releases, and secrets.
+See [the workspace guide](docs/agent-workspace.md) for exact paths, commands, and build prerequisites.
+
+An explicit request for a new reusable skill can activate one
 create-only write to `skills/<lowercase-kebab-name>/SKILL.md`; canonical frontmatter is generated,
-existing paths and overwrites are refused, and the skill is indexed on the next turn. General model
-writes and edits remain unavailable, so use direct `/write` and `/edit`. The safe launcher defaults
+existing paths and overwrites are refused, and the skill is indexed on the next turn. The workspace
+CLI can refine/archive/retire skills through authorized Bash; direct `/write` and `/edit` remain
+available for exact changes. The safe launcher defaults
 `UWUBOT_OPERATOR_ROOT` to the repository root;
 set it explicitly for a narrower production workspace. QMD is an optional external adapter; set
 `UWUBOT_QMD` to a compatible executable that supports `qmd query <query> --json`. Public users are
@@ -641,7 +663,7 @@ Run that opt-in local scenario without starting the XMTP DM sidecar or a model a
 
 ```bash
 cargo run --manifest-path cthuwu/Cargo.toml --package cthuwu -- \
-  --data-dir /tmp/cthuwu-council-sim --xmtp-env local --council-simulate
+  --data-dir ../cthuwu-council-sim-data --xmtp-env local --council-simulate
 ```
 
 It prints a deterministic JSON report and stores its combined replay-safe checkpoint under

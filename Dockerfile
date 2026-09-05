@@ -15,6 +15,7 @@ COPY cthuwu/Cargo.toml cthuwu/Cargo.lock ./
 COPY cthuwu/crates ./crates
 COPY cthuwu/agent-files ./agent-files
 COPY scripts/workspace.py /build/scripts/workspace.py
+COPY scripts/code.py /build/scripts/code.py
 COPY cthuwu/src ./src
 RUN cargo build --package cthuwu --locked --release
 
@@ -26,6 +27,7 @@ RUN apt-get update \
     && mkdir -p /opt/cthuwu/agent /data /workspace \
     && chown -R node:node /opt/cthuwu /data /workspace
 COPY --from=rust-build /build/cthuwu/target/release/uwubot /usr/local/bin/uwubot
+COPY scripts/release-entrypoint.py /opt/cthuwu/release-entrypoint.py
 COPY --from=agent-build --chown=node:node /build/agent/dist /opt/cthuwu/agent/dist
 COPY --from=agent-build --chown=node:node /build/agent/node_modules /opt/cthuwu/agent/node_modules
 COPY --from=agent-build --chown=node:node /build/agent/package.json /opt/cthuwu/agent/package.json
@@ -39,4 +41,4 @@ ENV UWUBOT_DATA_DIR=/data \
 
 USER node
 VOLUME ["/data", "/workspace"]
-ENTRYPOINT ["/usr/local/bin/uwubot"]
+ENTRYPOINT ["python3", "/opt/cthuwu/release-entrypoint.py"]

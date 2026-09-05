@@ -204,8 +204,12 @@ def skill(root, name, description, instructions, retire=False):
 def upstream(root, repository):
     """Read-only source monitor: fetches a verified public GitHub origin, never checks out code."""
     repo = contained(root, repository)
+    local_home = contained(root, "tools/home")
+    local_tmp = contained(root, "tmp")
+    local_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    local_tmp.mkdir(parents=True, exist_ok=True, mode=0o700)
     def git(*args):
-        return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", *args], cwd=repo, capture_output=True, text=True, check=True, timeout=90, env={"PATH": os.defpath, "HOME": "/nonexistent", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}).stdout.strip()
+        return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", *args], cwd=repo, capture_output=True, text=True, check=True, timeout=90, env={"PATH": os.defpath, "HOME": str(local_home), "TMPDIR": str(local_tmp), "TMP": str(local_tmp), "TEMP": str(local_tmp), "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}).stdout.strip()
     remote = git("remote", "get-url", "origin")
     if not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?", remote):
         raise ValueError("upstream monitoring requires a credential-free HTTPS GitHub origin")

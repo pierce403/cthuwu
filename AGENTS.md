@@ -92,18 +92,46 @@ until it passes, even though the canonical contract deployment and closed implem
 
 ## Markdown agent implementation conventions
 
+- Embedded workspace helper upgrades use protected hash receipts. Upgrade only an unchanged
+  recorded helper; preserve local edits and unknown copies and report their divergence. Keep
+  the installed source, installed binary/sidecar pair, running commit, and bootstrap launcher
+  distinct when explaining self-updates.
+
 - `docs/agent-workspace.md` describes the current commands and limits. The existing Rust loop is
   retained; Bash and the stdlib Python CLI supply extensibility without a second agent harness.
+- Keep all ordinary agent-created information, temporary files, installations, and caches inside
+  the workspace. Use workspace `tmp/`, `tools/home`, and package-specific directories under `tools/`
+  for Python, npm/pnpm, Cargo/rustup, Brew, and XDG. Set subprocess environment and PATH accordingly.
+  Do not use `/tmp`, the host user's home, or system package prefixes for agent work. Modifying the
+  surrounding OS requires explicit operator intent; workspace defaults are not a shell sandbox.
+  Preserve existing protected runtime data separately rather than moving secrets into workspace Git.
+- Track workspace changes with local Git checkpoints and `WORKSPACE_LOG.md` after mutating tool
+  calls. A shell invocation may group multiple writes; never claim one commit per intermediate write
+  or silently report a failed checkpoint as success. Exclude nested `code/`, temporary files, tools,
+  caches, builds, releases, indexes, and secrets. Workspace history is not automatically published.
+- Keep managed source in `code/` on its own branch. `CODE.md` configures the prime tentacle upstream
+  (default `https://github.com/pierce403/cthuwu`) and records accepted/deferred changes and divergence
+  reasons. `/update` authorizes queued review and installation: fast-forward a clean nondiverged
+  branch, otherwise adopt reviewed useful changes while preserving intentional local work. Follow
+  an operator override of a deferred feature; characterful reluctance never justifies refusing it.
+- Keep source, installed release, and running binary receipts distinct. Releases pair the Rust
+  binary and Node sidecar and select the next start through validated `releases/active.json`.
+  Deliberate restart through the launcher/entrypoint activates that pair; installation is not a
+  running-process update. Missing inference, Rust/Node tools, conflicts, or failures remain visible.
 - The primary product mission is helping acolytes with goals they choose. Workspace MISSION.md
   guides the operator/public prompts, while individual goals/preferences stay outside the workspace.
 - Shared semantic indexing is limited to knowledge and active skills. Never index credentials,
   sessions, contacts, or private coaching state; retrieval must recheck deletion/source hashes.
 - Keep recurring registrations in the protected operator task store. Markdown alone cannot schedule
   work. Restart, unknown effects, and model outages must not automatically replay actions or mark
-  them complete. Transfers invalidate old epochs; source changes never imply deployment.
+  them complete. The runtime seeds a daily prime review per active epoch, first due after one day;
+  it inspects and records improvement ideas without code adoption or installation. Pause/removal
+  must survive restart, cadence uses `/task interval`, and transfers invalidate old epochs. Source
+  changes never imply deployment. Describe local advantages proudly only when supported by evidence.
 - Generic environment adapters must preserve old working keys, redact status, constrain loader
   variables, and keep credential failover within the selected remote provider/privacy policy.
-- Run `python3 scripts/test_workspace.py` alongside the Rust and browser suites for this CLI.
+- Run `python3 scripts/test_workspace.py`, `python3 scripts/test_code.py`, and
+  `python3 scripts/test_release_entrypoint.py` alongside the Rust and browser suites for these helpers.
   If this workspace reports cached rust-lld undefined hidden symbols after switching build/check
   modes, `cargo clean -p cthuwu` followed by sequential `CARGO_INCREMENTAL=0 cargo test` and Clippy
   recovered the local build. Do not treat a failed link as a passing test run.
@@ -139,8 +167,11 @@ until it passes, even though the canonical contract deployment and closed implem
   role from authenticated `senderInboxId` and `sentAtNs` before lane selection; an
   authorization boundary must not privilege older messages delivered later. Every valid
   installation attached to an authorized inbox inherits authority; preserve stale-message quarantine and
-  revoked tombstones, and document XMTP installation revocation after compromise. Local CLI ACL changes require a stopped node and restart. Confirmed `/operator-switch` updates
-  the running shared ACL atomically; fence task epochs and recheck authority before subsequent tools.
+  revoked tombstones, and document XMTP installation revocation after compromise. Local CLI ACL
+  changes require a stopped node and restart. Confirmed `/operator` (legacy `/operator-switch`)
+  verifies a real registered inbox and re-resolves the original ENS/address at confirmation;
+  reject missing or changed bindings. Update the shared ACL atomically, fence task epochs, and
+  recheck authority before subsequent tools.
 - Keep public and operator model tool schemas closed and disjoint. Public gets at most configured
   web search. Build the operator schema and authoritative prompt inventory from the current
   authenticated message: bounded workspace list/read/create/write/edit/delete, literal search,
@@ -207,7 +238,7 @@ until it passes, even though the canonical contract deployment and closed implem
   oversized content in JSONL: `reject_oversized` carries metadata plus an empty `text`, and Rust must
   validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
   Never open a contact or dispatch a model/tool on that path. Retry requires a new XMTP message,
-  shortened when oversized. Enforce the 2–300 second bridge deadline above the 1–300 second tool
+  shortened when oversized. Enforce the 2–300 second bridge deadline above the 1–900 second tool
   limit and preserve the response reserve. Derive role-specific inference and provider deadlines
   only after authenticated role classification in Rust. The default 300-second bridge envelope leaves
   299 seconds for operator work; cap public work at 120 seconds and its remote phase at 30 seconds.

@@ -1,6 +1,6 @@
 # Cthuwu memory
 
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-05
 
 - Root onboarding links use the browser-only fragment `#t=<tentacle-wallet>&r=<referrer-wallet>`.
   It is not included in the HTTP request. A `t` route requires
@@ -32,6 +32,35 @@ Last reviewed: 2026-09-04
 
 ## Markdown agent implementation (2026-09-04)
 
+- The follow-up implementation keeps source in workspace `code/` on an independent branch.
+  `CODE.md` defaults to `https://github.com/pierce403/cthuwu`; call whichever configured compatible
+  upstream it points to the prime tentacle. `/update` queues model-reviewed fetch/adoption/install:
+  no divergence means fast-forward/install; divergent branches retain explicit accepted/deferred
+  reasons, and operator overrides take precedence over the Tentacle's preference.
+- Installed releases pair a Rust binary and Node sidecar under `releases/<commit>/`.
+  `releases/active.json` selects the next-start bundle; launcher and container entrypoint validate
+  paths, manifest, and hashes before use. Installation does not hot-replace the process. Preserve
+  the existing private data directory and distinguish running, checked-out, and installed commits.
+  Builds use the validated Rust 1.98 toolchain/Node 22+ and locked dependencies; the runtime image
+  lacks a compiler. The per-tool ceiling defaults to 900 seconds, ordinary exec defaults to 120,
+  and scheduled work retains its 15-minute budget without extending foreground XMTP deadlines.
+- Agent storage defaults stay inside the workspace: `tmp/`, `tools/home`, workspace package
+  prefixes/caches for Python, npm/pnpm, Cargo/rustup, Brew, and XDG. Do not use system `/tmp`, install
+  tools into the host user's home, or mutate the OS unless the operator explicitly requests an
+  environment change. OS permissions still bound Bash; these defaults are not a chroot. Existing
+  protected identity, secrets, sessions, goals, and task registrations stay in their separate data root.
+- Workspace Git history checkpoints mutating tool calls with reasons in `WORKSPACE_LOG.md`. One shell call may
+  group multiple filesystem writes. Exclude `code/`, temporary/tool/build/release/index output,
+  and secrets; never publish workspace history automatically or claim a failed commit succeeded.
+- The existing task supervisor seeds one prime review per active operator epoch, first due after
+  86,400 seconds. It inspects source and records sourced coaching/improvement ideas without adopting
+  code. `/task interval <id> <seconds>` adjusts cadence; pause/removal survive restart. Removed
+  defaults retain tombstones within the 100-registration bound. New epochs get new defaults; old
+  tasks remain fenced. Interrupted or failed work still pauses rather than silently replaying.
+- `/operator` is the canonical hot-transfer command; `/operator-switch` remains compatible. Verify
+  a registered XMTP inbox, then re-resolve the original ENS name/address at confirmation. A missing
+  inbox, changed binding, expired token, or changed operator generation preserves current authority.
+  SDK network lookup, not a deterministically derived hypothetical ID, establishes registration.
 - The operator approved the roadmap and direct publishing to main. Retain the Rust harness with
   iterative Bash; do not add pi/Hermes as dependencies. The product's primary mission is practical,
   consent-based life coaching. `docs/agent-workspace.md` is the command and boundary reference.
@@ -44,7 +73,7 @@ Last reviewed: 2026-09-04
 - `/operator/` uses one Browser SDK client across all DMs; selection does not recreate the identity.
   It keeps names/unreads, in-memory per-thread drafts, catch-up, and peer-bound referral activation.
   A saved contact is not an operator-authority claim. Live two-node delivery remains unverified.
-- `/operator-switch` commits a confirmed hot transfer, with an offline `operator switch` equivalent.
+- `/operator` commits a confirmed hot transfer, with an offline `operator switch` equivalent.
   Old operator tasks cannot run under the new epoch. Referral reminders retain historical attribution
   but use the current verified operator, and cannot deliver the old operator's link to the new one.
 - `/env` replaces service-specific commands as the primary operator interface. Compatible model-key
@@ -55,6 +84,11 @@ Last reviewed: 2026-09-04
   model or funding availability. The operator's MISSION.md guides coaching; recruitment cannot
   substitute for progress on the acolyte's chosen goal. No actual embedding model was installed or
   production XMTP/Branding transaction exercised during this implementation.
+
+- Self-update verification: 660 Rust workspace tests, 127 sidecar tests, and 25 Python helper
+  tests pass locally; launcher and installer checks pass. Production XMTP transfer/update/restart
+  and a real compiler-backed self-install remain live release gates. Helper fixtures validate Git
+  topology and activation with a small fake build rather than spending model credentials.
 
 ## Product
 

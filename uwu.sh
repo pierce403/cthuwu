@@ -6,9 +6,11 @@ readonly UWU_MIN_NODE_MAJOR=22
 readonly UWU_MIN_RUST_VERSION="1.97.0"
 readonly UWU_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly UWU_REPO_ROOT="$UWU_SCRIPT_DIR"
-readonly UWU_AGENT_DIR="$UWU_REPO_ROOT/agent"
+readonly UWU_SOURCE_AGENT_DIR="$UWU_REPO_ROOT/agent"
 readonly UWU_MANIFEST="$UWU_REPO_ROOT/cthuwu/Cargo.toml"
-readonly UWU_TARGET_DIR="$UWU_REPO_ROOT/cthuwu/target/uwu"
+readonly UWU_RELEASE_HELPER="$UWU_REPO_ROOT/scripts/release-entrypoint.py"
+UWU_AGENT_DIR="$UWU_SOURCE_AGENT_DIR"
+UWU_TARGET_DIR="$UWU_REPO_ROOT/cthuwu/target/uwu"
 
 UWU_NODE_BIN=""
 UWU_NODE_MAJOR=""
@@ -19,6 +21,11 @@ UWU_RUSTC_COMMAND=()
 UWU_RUSTC_BIN=""
 UWU_RUST_HOST=""
 UWU_BINARY=""
+UWU_OPERATOR_ROOT=""
+UWU_WORKSPACE_ENV_READY=0
+UWU_HOST_RUSTC=""
+UWU_HOST_CARGO=""
+UWU_PYTHON_BIN=""
 UWU_XMTP_ENV=""
 UWU_DATA_DIR=""
 UWU_DATA_DIR_SET=0
@@ -40,6 +47,10 @@ uwu_die() {
 # Toolchain and build helpers must not inherit identity material or model credentials. Persistent
 # XMTP keys are file-backed and are removed from the final Rust process too.
 uwu_without_runtime_secrets() {
+  local workspace_command=()
+  if ((UWU_WORKSPACE_ENV_READY == 1)); then
+    workspace_command=("$UWU_PYTHON_BIN" "$UWU_RELEASE_HELPER" --workspace-env "$UWU_OPERATOR_ROOT")
+  fi
   env \
     -u UWUBOT_MODEL_API_KEY \
     -u UWUBOT_VENICE_API_KEY \
@@ -55,7 +66,7 @@ uwu_without_runtime_secrets() {
     -u CARGO_BUILD_RUSTC \
     -u CARGO_BUILD_RUSTC_WRAPPER \
     -u CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER \
-    "$@"
+    "${workspace_command[@]}" "$@"
 }
 
 uwu_version_at_least() {
@@ -133,6 +144,7 @@ uwu_validate_ambient_configuration() {
 uwu_parse_arguments() {
   uwu_reject_unsafe_arguments "$@"
   UWU_XMTP_ENV="${UWUBOT_XMTP_ENV-production}"
+  UWU_OPERATOR_ROOT="${UWUBOT_OPERATOR_ROOT:-$UWU_REPO_ROOT}"
   if [[ "${UWUBOT_DATA_DIR+x}" == x ]]; then
     UWU_DATA_DIR="$UWUBOT_DATA_DIR"
     UWU_DATA_DIR_SET=1
@@ -164,6 +176,15 @@ uwu_parse_arguments() {
         UWU_DATA_DIR_SET=1
         shift
         ;;
+      --operator-root)
+        (($# >= 2)) || uwu_die "--operator-root requires a value"
+        UWU_OPERATOR_ROOT="$2"
+        shift 2
+        ;;
+      --operator-root=*)
+        UWU_OPERATOR_ROOT="${1#*=}"
+        shift
+        ;;
       --model-api-key | --model-api-key=*)
         uwu_die "pass model credentials only through UWUBOT_MODEL_API_KEY, never command-line arguments"
         ;;
@@ -188,6 +209,7 @@ uwu_parse_arguments() {
   done
 
   uwu_validate_environment "$UWU_XMTP_ENV"
+  [[ -n "$UWU_OPERATOR_ROOT" ]] || uwu_die "the operator workspace may not be empty"
   if ((UWU_DATA_DIR_SET == 1)); then
     [[ -n "$UWU_DATA_DIR" ]] || uwu_die "the data directory may not be empty"
   fi
@@ -195,6 +217,55 @@ uwu_parse_arguments() {
     uwu_die "the data directory may not contain line breaks"
   [[ -z "$UWU_DATA_DIR" || "$UWU_DATA_DIR" != *$'\r'* ]] || \
     uwu_die "the data directory may not contain line breaks"
+}
+
+uwu_prepare_workspace() {
+  command -v python3 >/dev/null 2>&1 || uwu_die "Python 3 is required for workspace and release management"
+  UWU_PYTHON_BIN="$(command -v python3)"
+  local tool tool_path readonly_paths="" compiler_paths=""
+  for tool in node npm python3 rustup rustc cargo; do
+    tool_path="$(command -v "$tool")" || continue
+    [[ "$tool_path" == /* ]] || continue
+    readonly_paths+="${readonly_paths:+:}$(dirname -- "$tool_path")"
+  done
+  # Resolve installed rustup proxies while their original configuration is still available. The
+  # actual compiler/Cargo can then be read without letting them write to the host's tool homes.
+  if command -v rustup >/dev/null 2>&1; then
+    UWU_HOST_RUSTC="$(uwu_without_runtime_secrets rustup which rustc 2>/dev/null)" || UWU_HOST_RUSTC=""
+    UWU_HOST_CARGO="$(uwu_without_runtime_secrets rustup which cargo 2>/dev/null)" || UWU_HOST_CARGO=""
+  fi
+  # Actual toolchain directories must precede rustup's proxy directory. The child runtime uses
+  # workspace-local RUSTUP_HOME, so a host proxy alone cannot find its installed toolchain.
+  for tool_path in "$UWU_HOST_RUSTC" "$UWU_HOST_CARGO"; do
+    [[ "$tool_path" == /* && -x "$tool_path" ]] || continue
+    compiler_paths+="${compiler_paths:+:}$(dirname -- "$tool_path")"
+  done
+  export UWUBOT_READONLY_TOOL_PATH="${compiler_paths}${compiler_paths:+${readonly_paths:+:}}${readonly_paths}"
+  UWU_OPERATOR_ROOT="$(uwu_without_runtime_secrets "$UWU_PYTHON_BIN" "$UWU_RELEASE_HELPER" \
+    --workspace-env "$UWU_OPERATOR_ROOT" "$UWU_PYTHON_BIN" -c \
+    'import os; print(os.environ["UWUBOT_OPERATOR_ROOT"])')" || uwu_die "could not prepare the operator workspace"
+  UWU_WORKSPACE_ENV_READY=1
+  export PATH="$UWU_OPERATOR_ROOT/tools/bin:$UWU_OPERATOR_ROOT/tools/venv/bin:$UWU_OPERATOR_ROOT/tools/pnpm:$UWU_OPERATOR_ROOT/tools/cargo/bin:$UWU_OPERATOR_ROOT/tools/npm/bin:$UWU_OPERATOR_ROOT/tools/brew/bin:$UWU_OPERATOR_ROOT/tools/brew/sbin:$PATH"
+  UWU_TARGET_DIR="$UWU_OPERATOR_ROOT/tools/build/uwu"
+  UWU_AGENT_DIR="$UWU_OPERATOR_ROOT/tools/bootstrap-agent"
+  UWU_BUILD_LOCK_PATH="$UWU_OPERATOR_ROOT/tools/build/.uwu-build.lock"
+}
+
+uwu_select_installed_release() {
+  local selection status=0
+  selection="$(uwu_without_runtime_secrets "$UWU_PYTHON_BIN" "$UWU_RELEASE_HELPER" --select "$UWU_OPERATOR_ROOT")" || status=$?
+  if ((status == 3)); then
+    unset UWUBOT_RUNNING_SOURCE
+    return 1
+  fi
+  ((status == 0)) || uwu_die "installed release validation failed; startup stopped"
+  local fields=()
+  while IFS= read -r line; do fields+=("$line"); done <<<"$selection"
+  ((${#fields[@]} == 3)) || uwu_die "installed release selection returned invalid metadata"
+  UWU_BINARY="${fields[0]}"
+  export UWUBOT_SIDECAR="${fields[1]}"
+  export UWUBOT_RUNNING_SOURCE="${fields[2]}"
+  uwu_log "using installed source ${UWUBOT_RUNNING_SOURCE:0:12}; no rebuild is needed"
 }
 
 uwu_ensure_node() {
@@ -254,6 +325,15 @@ uwu_configure_rust_commands() {
 uwu_ensure_rust() {
   local rustc_bin cargo_bin rustup_bin
 
+  if [[ -x "$UWU_HOST_RUSTC" && -x "$UWU_HOST_CARGO" ]]; then
+    UWU_RUSTC_COMMAND=("$UWU_HOST_RUSTC")
+    UWU_RUSTC_BIN="$UWU_HOST_RUSTC"
+    UWU_CARGO_COMMAND=("$UWU_HOST_CARGO")
+    if uwu_configure_rust_commands; then
+      return
+    fi
+  fi
+
   if command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
     rustc_bin="$(command -v rustc)"
     cargo_bin="$(command -v cargo)"
@@ -271,7 +351,7 @@ uwu_ensure_rust() {
 
   if ! uwu_without_runtime_secrets "$rustup_bin" run "$UWU_MIN_RUST_VERSION" \
     rustc --version >/dev/null 2>&1; then
-    uwu_log "installing Rust $UWU_MIN_RUST_VERSION with rustup"
+    uwu_log "installing Rust $UWU_MIN_RUST_VERSION into the operator workspace with rustup"
     uwu_without_runtime_secrets "$rustup_bin" toolchain install \
       "$UWU_MIN_RUST_VERSION" --profile minimal
   fi
@@ -409,6 +489,8 @@ uwu_acquire_build_lock() {
 }
 
 uwu_build_runtime() {
+  uwu_without_runtime_secrets "$UWU_PYTHON_BIN" "$UWU_RELEASE_HELPER" \
+    --stage-agent "$UWU_OPERATOR_ROOT" "$UWU_SOURCE_AGENT_DIR"
   local lock_file="$UWU_AGENT_DIR/package-lock.json"
   local stamp_file="$UWU_AGENT_DIR/node_modules/.cthuwu-package-lock.sha256"
   local lock_hash expected_stamp existing_stamp=""
@@ -610,32 +692,35 @@ uwu_main() {
   uwu_validate_effective_uid "$EUID"
   uwu_parse_arguments "$@"
   uwu_validate_ambient_configuration
-  uwu_ensure_node
-
   if ((UWU_DATA_DIR_SET == 0)); then
     UWU_DATA_DIR="$(uwu_default_data_directory)"
   fi
+  uwu_prepare_workspace
+  uwu_ensure_node
   UWU_DATA_DIR="$(uwu_prepare_data_directory "$UWU_DATA_DIR")"
 
   export UWUBOT_DATA_DIR="$UWU_DATA_DIR"
   export UWUBOT_XMTP_ENV="$UWU_XMTP_ENV"
   export UWUBOT_NODE="$UWU_NODE_BIN"
   export UWUBOT_SIDECAR="$UWU_AGENT_DIR/dist/index.js"
-  export UWUBOT_OPERATOR_ROOT="${UWUBOT_OPERATOR_ROOT:-$UWU_REPO_ROOT}"
+  export UWUBOT_OPERATOR_ROOT="$UWU_OPERATOR_ROOT"
 
   UWU_RUNTIME_LOCK_PATH="$UWU_DATA_DIR/.uwubot.lock"
   uwu_acquire_runtime_lock
   trap uwu_release_all_locks EXIT
 
-  uwu_ensure_rust
-  uwu_acquire_build_lock
-  uwu_build_runtime
-  uwu_release_build_lock
+  if ! uwu_select_installed_release; then
+    uwu_ensure_rust
+    uwu_acquire_build_lock
+    uwu_build_runtime
+    uwu_release_build_lock
+  fi
 
   uwu_log "starting uwubot on XMTP $UWU_XMTP_ENV"
   uwu_log "persistent state: $UWU_DATA_DIR"
   uwu_log "console activity shows XMTP delivery, thinking, and tool phases; message bodies and secrets stay private"
   exec env -u XMTP_WALLET_KEY -u XMTP_DB_ENCRYPTION_KEY \
+    "$UWU_PYTHON_BIN" "$UWU_RELEASE_HELPER" --workspace-env "$UWU_OPERATOR_ROOT" \
     "$UWU_BINARY" "${UWU_BOT_ARGS[@]}"
 }
 

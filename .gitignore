@@ -38,3 +38,6 @@ contacts/
 __pycache__/
 *.pyc
 .knowledge-index/
+/tmp/
+/tools/
+/releases/

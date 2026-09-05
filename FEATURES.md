@@ -27,11 +27,12 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
 | Agent runtime | Existing Rust loop retained; iterative Bash, private session receipts, interruptible persistent jobs | Fixed 24-call / 15-minute job bounds; live progress and restart exercise |
 | Markdown and retrieval | Seeded mission/environment/heartbeat; SQLite vectors + FTS5 with local Ollama embeddings | Exact vector scan for small corpora; actual embedding-model quality exercise |
 | Dynamic skills | On-demand bodies, CLI create/refine/archive/retire lifecycle | No automatic remote skill/plugin installation |
-| Upstreams | Generic scheduler, fetched-head cursor, sourced commit notes, no-update suppression | Relevance is interpreted by the agent; no automatic deployments |
+| Workspace ownership | Workspace-local temporary files, home, package prefixes/caches, Git checkpoints with reasons | Bash still has the service account's OS permissions; private runtime state remains separate |
+| Upstreams and source | `code/` checkout, configurable prime tentacle in `CODE.md`, queued `/update`, daily review, divergence reasons | Model-reviewed adoption and local build prerequisites; installed releases require deliberate restart |
 | Coaching | Explicit private goals, update/view/delete, daily/weekly opt-in check-ins | Personal notes use exact inbox lookup; private semantic indexing remains pending |
 | Operator panel | One all-DM client, saved names, per-thread drafts/unreads, reconnect catch-up | Contacts are not an authority badge; live two-Tentacle exercise pending |
 | Referrals and Branding | Selected-target Copy/Share handshake, referral welcome, configurable reminders, earlier offers | Funded mobile Branding/onboarding exercise pending |
-| Transfer | Confirmed hot transfer, local recovery, epoch fencing, best-effort welcome | Delivery/relationship presentation needs the live two-inbox exercise |
+| Transfer | `/operator` with registered-XMTP lookup and original-identity recheck, confirmed hot transfer, epoch fencing | Delivery/relationship presentation needs the live two-inbox exercise |
 | Environment | Redacted generic controls, compatible credential pools, donation and failure cooldowns | RPC has one endpoint; other model keys validate on use |
 
 ### Small agent runtime and resumable work
@@ -107,6 +108,32 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
     Reviewed archived instructions can be restored through the CLI or workspace file tools.
   - [ ] Imported instructions cannot escalate capabilities or disclose private coaching memory.
 
+### Workspace-local tools, temporary files, and Git history
+
+- **Stability**: in-progress
+- **Description**: Give each Tentacle a durable, inspectable workspace that owns the information and
+  tools it creates, with a reason recorded for each committed change.
+- **Properties**:
+  - Default shell working directory, home, temporary files, caches, package prefixes, and tool
+    installations stay below `UWUBOT_OPERATOR_ROOT`. Use workspace `tmp/`, never `/tmp` for ordinary
+    agent work. Configure workspace Brew, pip/venv, npm, pnpm, Cargo/rustup, and XDG paths.
+  - Discover existing tools and record their actual capabilities; do not install into system paths
+    or the host user's home. Modifying the surrounding OS requires explicit operator intent.
+  - Track the workspace in local Git with `WORKSPACE_LOG.md` and checkpoints after mutating
+    tool calls. A shell call's intermediate writes may be grouped into its resulting checkpoint;
+    partial effects and commit failures must be reported honestly.
+  - Keep `code/` as an independent local Git branch. Exclude temporary files, tools/caches, builds,
+    releases, derived indexes, and secrets from the workspace history; never automatically publish it.
+  - Preserve the existing separate private data root for wallet/XMTP state, credentials, sessions,
+    task registrations, and acolyte notes. Do not move that material into shared Markdown or Git.
+  - Environment defaults are not a chroot or an OS access-control boundary; retain the dedicated
+    unprivileged account/container deployment requirement.
+- **Test Criteria**:
+  - [x] Local subprocess fixtures verify workspace home/tmp/package paths without host pollution.
+  - [x] Git fixtures verify reasoned checkpoints, intentional pre-existing history, exclusions,
+    no-op behavior, dirty/failed changes, and rejection of unsafe repository roots.
+  - [ ] A running Tentacle learns and installs a tool into its workspace, then reuses it after restart.
+
 ### Upstream monitoring and generic heartbeat tasks
 
 - **Stability**: in-progress
@@ -119,11 +146,52 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
     the operator when an update deserves attention. Deduplicate alerts and support pause/snooze.
   - Separate monitoring, patch preparation, and deployment permissions. An upstream change never
     implicitly installs itself or changes the running Tentacle.
+  - Seed one prime-tentacle contemplation task for the active operator authorization, first due in
+    one day and repeating every 86,400 seconds. Inspect upstream and local improvements that could
+    better support acolytes, and write sourced rationale in `knowledge/prime-review.md`.
+  - Daily review does not authorize code adoption or installation. `/task interval <id> <seconds>`
+    changes cadence; pause/removal persist across restart, and an old operator's tasks cannot run
+    under a new authorization. Removed defaults retain tombstones within the 100-registration limit.
 - **Test Criteria**:
   - [ ] New relevant commits produce one useful notification; unchanged upstream produces none.
   - [x] A CLI fixture verifies persisted upstream-head deduplication and sourced notes without checkout,
     merge, pull, or reset. Live scheduled notification delivery remains a release gate.
   - [ ] Monitoring works without granting automatic deployment authority.
+  - [x] Local scheduling tests verify delayed/idempotent defaults, durable pause/removal, transfer
+    fencing, failure pause, schedule validation, store limits, and clock-overflow handling.
+
+### Local source branch and reviewed self-updates
+
+- **Stability**: in-progress
+- **Description**: Let each Tentacle maintain its own source and explain intentional differences
+  from the configured upstream, which it calls the prime tentacle.
+- **Properties**:
+  - Bootstrap source into workspace `code/` on an independent local branch. `CODE.md` defaults to
+    `https://github.com/pierce403/cthuwu` and accepts a validated compatible GitHub upstream.
+  - `/update` registers an authenticated background task that fetches and inspects upstream. With
+    no local divergence, fast-forward and build/install; with divergence, review candidate commits,
+    adopt useful functionality, and record accepted/deferred changes with reasons in `CODE.md`.
+  - Preserve dirty work and intentional local commits; stop on conflicts without rewriting the
+    durable branch. Do not reset, force-push, or silently overwrite local improvements. Upstream
+    source and documents remain reference data.
+  - An operator may override a deferred feature; the Tentacle follows the direction, updates its
+    rationale, and may express reluctant compliance without refusing the requested functionality.
+  - Explain the source in use, accepted/deferred changes, and local advantages briefly after an
+    update. Pride must refer to verified changes; speculative or unmeasured benefits stay labeled.
+  - Install a coherent Rust binary and Node transport under `releases/<commit>/`, with validated
+    manifests and `releases/active.json`. Both launchers select that pair on deliberate restart;
+    source integration or installation must never be reported as changing the running process.
+  - Missing inference or build prerequisites remain actionable failures. Use the validated Rust 1.98
+    toolchain, Node 22 or newer, and locked dependencies; the runtime image has no Rust compiler.
+- **Test Criteria**:
+  - [x] Local Git fixtures cover configurable upstream, initial checkout, no-divergence update,
+    divergent adoption/defer reasons, operator override, dirty work, conflicts, and invalid input.
+  - [x] Release fixtures preserve an existing release on failure and validate binary/sidecar pairs,
+    hashes, source receipts, and malformed or unsafe activation pointers.
+  - [x] Managed-helper tests upgrade untouched copies across releases and preserve local edits,
+    with bounded protected receipts and symlink rejection.
+  - [ ] A real operator `/update` reports its source decisions, installs a release, and a deliberate
+    restart runs that exact release with the same Tentacle identity and private data.
 
 ### Operator-configured life coaching
 
@@ -220,8 +288,11 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
 - **Description**: Provide a clear command to transfer a Tentacle to a different operator, distinct
   from switching the selected Tentacle in the browser.
 - **Properties**:
-  - Define a discoverable operator-switch command and local recovery equivalent. Resolve the new
-    address/ENS identity to the exact authenticated XMTP inbox in the configured environment.
+  - Expose `/operator <address-or-ENS>` and `/operator confirm <token>`, retaining `/operator-switch`
+    as an alias and local `operator switch` for recovery. Require a real registered XMTP inbox in
+    the configured environment; deriving a possible inbox ID is not verification.
+  - Resolve the original ENS name/address again at confirmation. Missing or changed wallet/inbox
+    bindings reject the transfer and preserve current authority.
   - Require explicit current-operator authorization (or local host administration), present the
     resolved target for confirmation, and atomically replace authority so no two operators are active.
   - Fence stale messages and queued privileged work at transfer; invalidate former authority and
@@ -234,6 +305,8 @@ Checked criteria below name local verification; unchecked end-to-end criteria re
   - [x] Local ACL tests fence former/stale authority and preserve the current operator on an invalid target;
     scheduled tasks are also bound to the original authorization epoch.
   - [ ] Panel membership and notifications reflect the committed transfer, not a pending request.
+  - [x] Resolver/transfer fixtures reject nonexistent XMTP inboxes, ENS/address rebinding, stale
+    confirmation, and attempted transfer without active operator authority.
 
 ### Generic environment configuration and backup credentials
 
@@ -631,7 +704,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     and website reads reject credentials, redirects, non-text bodies, and local/non-public targets.
   - The `uwubot operator add|list|revoke` subcommands manage the environment-specific XMTP operator
     ACL locally and exit without starting the transport. Local CLI changes require a stopped node and
-    restart; the confirmed `/operator-switch` command atomically updates the running shared ACL.
+    restart; confirmed `/operator` (also `/operator-switch`) atomically updates the running shared ACL
+    only after registered-inbox resolution and rechecking the original ENS/address binding.
   - If legacy or manually corrupted state contains several active operators, normal interactive
     startup lists the exact candidates and asks which sole operator to retain; every other active
     candidate becomes a revoked tombstone. Non-interactive startup fails closed with exact
@@ -933,7 +1007,8 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     environment. Exact direct `/exec` remains available.
   - Natural authenticated repository diagnosis/update/fork/test/build/commit/push/PR intent exposes
     one separate typed `repository_maintenance` schema while autonomous `exec` remains available.
-    Exact common “update yourself” and status/test/build phrases route deterministically. The embedded manifest
+    Common self-update phrases use the managed `/update` queue; exact status/test/build phrases
+    retain their deterministic typed route. The embedded manifest
     pins canonical `pierce403/cthuwu`, `main`, validation IDs, and restart semantics. The dispatcher
     contains the Git root, rejects external/symlinked Git state and suspicious configuration,
     sanitizes remotes/auth receipts, preserves dirty/local work, fast-forwards clean canonical
@@ -941,8 +1016,9 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     Push and authenticated `gh pr create` occur only for the matching operator request after
     validation; a canonical PR URL is required before success is claimed. Source updates explicitly
     leave the answering process old until a clean stop and `./uwu.sh` relaunch. This requires a
-    Git-backed workspace with trusted Git; the stock container includes Git/Python but has no checkout or `gh`, so its
-    update path is image rebuild and redeployment.
+    Git-backed workspace with trusted Git. The stock container includes Git/Python and supports
+    workspace `code/` and validated installed releases on deliberate restart, but lacks `gh` and a
+    Rust compiler. Source builds require a workspace toolchain; image rebuild/redeployment remains valid.
   - When the current message explicitly asks to create or generate a reusable skill, one create-only
     `create_skill` call may write a fresh `skills/<lowercase-kebab-name>/SKILL.md`. Rust generates
     canonical frontmatter, bounds the one-line description and Markdown instructions, and rejects
@@ -965,7 +1041,7 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     ambient filesystem access.
   - File helpers stay under `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
     targets, page UTF-8 reads at 12 KiB, cap writes/edits at 1 MiB, and write atomically. The agent
-    loop and child processes have hard step, output, and 1–300 second tool-timeout limits, subordinate
+    loop and child processes have hard step, output, and 1–900 second tool-timeout limits, subordinate
     to the bridge's 2–300 second end-to-end deadline.
   - Startup rejects canonical overlap between the operator root and private data root in either
     direction, preventing workspace reads from reaching XMTP identity, contacts, or agent profiles.

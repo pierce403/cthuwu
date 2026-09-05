@@ -4,34 +4,151 @@ The implementation keeps the existing Rust loop. Bash, Markdown skills, and a sm
 provide extensibility; pi and Hermes are design inspirations, not additional running harnesses.
 The primary mission is helping willing acolytes pursue goals they choose.
 
-Upgrade the checkout, then restart the Tentacle through `./uwu.sh` using its existing data directory.
-A GitHub push or Pages deployment does not restart a running node. Existing protected SOUL files
-are preserved; the new coaching instructions also enter the runtime prompt. Python 3 with SQLite
-FTS5 and Git are required for the workspace CLI and are included in the container.
+Start or restart the Tentacle through `./uwu.sh` using its existing data directory. A GitHub push or
+Pages deployment does not restart a running node. Existing protected SOUL files are preserved;
+coaching and workspace conventions also enter the runtime prompt. Python 3 with SQLite FTS5 and
+Git are required for the workspace helpers and are included in the container.
 
 ## Configure the workspace
 
 Set `UWUBOT_OPERATOR_ROOT` to the operator-controlled workspace, separate from `UWUBOT_DATA_DIR`.
 First startup seeds missing files and directories without replacing your edits:
 
+On later starts, shipped `scripts/code.py` and `scripts/workspace.py` upgrade when their contents
+still match the recorded version. Protected hash receipts identify that version. Locally edited or
+unrecognized helpers stay intact and appear as explicit helper divergence in the operator context;
+review them before adopting an updated helper. `CODE.md` and other operator Markdown remain editable.
+
 | Location | Purpose |
 |---|---|
 | `MISSION.md` | Operator coaching mission, tone, practices, and priorities; also supplied to public coaching |
 | `ENVIRONMENT.md` | Verified commands, services, prerequisites, observation dates, and failures |
+| `CODE.md` | Configured prime tentacle upstream, source state, and reasons for local divergence |
+| `WORKSPACE_LOG.md` | Reasons for local Git checkpoints after changed tool calls |
 | `HEARTBEAT.md` and `tasks/` | Monitoring instructions, relevance criteria, checkpoints, and upstream cursors |
 | `knowledge/` | Sourced research with dates and reported/observed/inferred distinctions |
 | `skills/<name>/SKILL.md` | Reusable procedures; compact index in context, bodies read when relevant |
 | `scripts/workspace.py` | Discoverable CLI for indexing, retrieval, skill revisions, and upstream checks |
+| `scripts/code.py` | Source checkout, reviewed integration, and workspace release installation |
+| `code/` | Independent Git checkout on this Tentacle's local branch |
+| `tmp/` | Scratch files and subprocess temporary files |
+| `tools/` | Workspace home, package installations, caches, and tool configuration |
+| `releases/` | Installed source-specific runtime bundles and the next-start selection |
 | `state/agent/` under the **data directory** | Protected SOUL, per-operator profiles, session receipts, and authorized task registrations |
 | `state/coaching/<inbox>/` under the **data directory** | Private acolyte goals and reminder preferences |
 
 `AGENTS.md` or the existing supported workspace instruction file supplies local conventions.
-Markdown is guidance and source material. It cannot authorize shell execution, transfers, recurring
-work, credential changes, or access to another person's data.
+Markdown is guidance and source material. `CODE.md` supplies the validated upstream configuration;
+it cannot grant shell authority, transfer operators, install itself, or access another person's
+data. The daily review is a runtime default controlled through `/task`, not arbitrary executable
+instructions discovered in a heartbeat file.
 
 An ordinary operator request can discover installed commands through `--help`, run bounded Bash,
 inspect results, and record useful findings. The node account's OS permissions remain the shell
 boundary. Public acolytes receive no shell or workspace-file tool.
+
+## Keep work and tools inside the workspace
+
+The agent's default working directory, temporary directory, home, package prefixes, and caches are
+inside `UWUBOT_OPERATOR_ROOT`. Use `tmp/` instead of `/tmp`, and install tools into `tools/` instead
+of the system or the host user's home. Workspace paths include `tools/home`, `tools/venv`,
+`tools/pip`, `tools/npm`, `tools/npm-cache`, `tools/pnpm`, `tools/pnpm-store`, `tools/cargo`,
+`tools/rustup`, `tools/brew`, and `tools/xdg`. Child processes receive matching environment values
+and a PATH that discovers workspace tools. Package directories are prepared; their existence does
+not mean Brew, a Python virtual environment, Rust, or an embedding model is installed.
+
+Environment discovery should record verified capabilities in `ENVIRONMENT.md`. Use a workspace
+virtual environment or package prefix for missing tools. Changing the surrounding OS requires an
+explicit operator request to modify that environment; ordinary task work must stay in the workspace.
+These defaults guide package managers and the agent, while OS permissions still bound Bash. An
+absolute path or a tool that ignores its environment can leave the root, so this is not a filesystem
+sandbox. Protected wallet, XMTP, credentials, sessions, and personal notes remain in the separate
+existing data directory; they are not copied into the workspace or its Git history.
+
+The workspace has its own Git history, separate from the nested `code/` repository. Mutating tool
+calls produce a workspace checkpoint and an entry in `WORKSPACE_LOG.md`. A shell invocation can change
+several files; the checkpoint records the resulting change together rather than claiming a commit
+for every intermediate filesystem write. Temporary files, installed tools, build/release output,
+the source checkout, derived indexes, and secret material are excluded. Git records local history;
+it does not publish the workspace or source branch automatically. Inspect the checkpoint receipt
+if a command or commit fails before repeating work.
+
+Existing Git history and staged work are preserved. The journal records changes observed after its
+startup baseline; it does not adopt pre-existing dirty files as new agent work. Linked/external Git
+directories and symlinked metadata are rejected. If a tool touches an existing dirty/staged path,
+the journal leaves it uncommitted and reports that operator review is needed. Reasons describe the
+runtime action without copying the operator's prompt, command, credentials, or private conversation
+into commit messages.
+Ignored directories and obvious secret filenames are excluded, but Git is not a secret classifier:
+do not put sensitive material in ordinary workspace notes. Checkpoints are bounded to 4,096 files
+and 4 MiB per file; rotate the reason log when requested.
+
+## Review and install source updates
+
+The Tentacle keeps its source under workspace `code/` on its own branch. `CODE.md` defaults to
+`https://github.com/pierce403/cthuwu`; the configured upstream is called the **prime tentacle**.
+An operator can edit the validated GitHub upstream setting to follow another compatible source:
+
+```markdown
+---
+upstream: https://github.com/pierce403/cthuwu.git
+branch: main
+---
+```
+
+Keep personal rationale in the Markdown body. The helper refreshes its generated source-state
+section between `<!-- code-state:start -->` and `<!-- code-state:end -->`, preserving surrounding
+prose. The local branch is named `tentacle`; changing the upstream to an unrelated repository is
+rejected instead of replacing local history.
+
+Existing Markdown and intentional local code are preserved. An unavailable upstream or missing
+build tool produces a concrete failure receipt rather than a claim that the update succeeded.
+
+Send `/update` in the authenticated operator DM, or `/update <requested functionality or commit>`
+to override a preference. Common requests such as “update yourself” use the same managed path.
+It registers a background job, so `/task list`,
+`pause`, and `steer` remain available during a long fetch or build. A working model is needed for
+the agent's review and explanation. The task inspects the fetched source and local branch, then:
+
+- If there is no local divergence, fast-forward to the prime tentacle and build/install the result.
+- If the branch differs, review candidate changes, adopt useful functionality while preserving
+  intentional local work, and record deferred changes and the reasons in `CODE.md`.
+- If the operator disagrees, accept their requested functionality and update the rationale. The
+  Tentacle may complain in character; it must still follow the instruction and report actual results.
+
+The final reply briefly names the source in use, accepted and deferred changes, reasons for local
+differences, and the install/restart state. Pride in improvements must refer to verified changes;
+speculative ideas and unmeasured benefits remain labeled as such. Dirty work is preserved; a conflict
+stops integration with a failure receipt rather than resetting or overwriting the durable branch.
+
+Installation builds a coherent Rust binary and Node transport bundle under `releases/<commit>/`.
+`releases/active.json` selects the installed commit for the next launch. It does not replace the
+running process in place. Stop the current Tentacle cleanly, then relaunch with the same workspace
+and data directory; `uwu.sh` and the container entrypoint validate the paired release paths and
+hashes before selecting it. Until that restart succeeds, distinguish the running binary from the
+checked-out and installed commits. Use the validated Rust 1.98 toolchain and Node 22 or newer with
+the project's locked dependencies. The stock runtime image includes Git/Python but not the Rust compiler; provide a
+workspace-local build toolchain or rebuild/redeploy the image instead of claiming a successful build.
+
+The agent uses the small CLI directly through Bash; these commands are also available for deliberate
+local maintenance from the workspace:
+
+```bash
+python3 scripts/code.py --help
+python3 scripts/code.py status
+python3 scripts/code.py review
+python3 scripts/code.py update
+python3 scripts/code.py accept <full-commit-sha> --reason "Verified improvement requested by the operator"
+python3 scripts/code.py defer <full-commit-sha> --reason "Specific compatibility tradeoff"
+python3 scripts/code.py install
+```
+
+`init` creates the checkout when needed. `review` fetches bounded commit/diff context without
+adoption or installation. `accept` and `defer` select up to 20 full commit IDs from the current
+review and require a reason of at most 800 characters. Accepted selections are prepared in a
+temporary worktree below workspace `tmp/`, tested, and built before advancing the durable branch.
+Merge commits need deliberate review of their constituent changes; the helper will not guess a
+cherry-pick parent. Missing dependencies or conflicts preserve the prior installed release.
 
 ## Retrieve knowledge and learn skills
 
@@ -44,8 +161,11 @@ python3 scripts/workspace.py search "habit planning"
 python3 scripts/workspace.py skill morning-routine --description "Plan a small morning routine" --file tasks/verified-procedure.md
 ```
 
-The first two retrieval commands use keyword search. To enable semantic retrieval, install an
-embedding model in the local Ollama service, then use the **same model ID** for indexing and queries:
+The first two retrieval commands use keyword search. To enable semantic retrieval, run a local
+Ollama service with model storage in workspace `tools/ollama/models` (`OLLAMA_MODELS` in the
+workspace environment), install an embedding model there, then use the **same model ID** for
+indexing and queries. A separately managed host Ollama service uses its own storage settings;
+configure those deliberately before downloading models through it.
 
 ```bash
 python3 scripts/workspace.py index --model <installed-embedding-model>
@@ -80,16 +200,30 @@ Send these in the operator DM:
 /task add 86400 Read HEARTBEAT.md and check the configured upstreams; notify me only about relevant changes
 /task list
 /task pause <id>
+/task interval <id> 172800
 /task steer <id> <updated request>
 /task resume <id>
 /task remove <id>
 ```
 
 Tasks have a separate 15-minute budget, a 24-tool-call ceiling, and one execution slot per Tentacle.
+Ordinary shell calls default to 120 seconds; the configurable per-tool ceiling defaults to 900.
+The source helper bounds one build/validation attempt to ten minutes. All calls still fit within
+the job's remaining budget; a longer timeout cannot extend a foreground XMTP reply deadline.
 Recurring intervals range from one minute to one year; at most 100 registrations are retained.
 Task controls remain available while a job runs. Ordinary foreground requests receive a busy
 response instead of holding up a following pause/steer command. One-off starts and results return to the authorizing
 operator inbox. Recurring jobs can return exactly `[NO_UPDATE]` to suppress an unchanged result.
+
+Each active operator authorization gets a default prime-tentacle review, first due one day after
+registration and then every 86,400 seconds. It runs `python3 scripts/code.py review`, considers
+useful upstream changes and local coaching improvements, and records sourced findings in
+`knowledge/prime-review.md`. Daily review can inspect and write notes; it does not adopt or install
+source. `/update` supplies that explicit operator request. Use `/task list` to find the review ID,
+`/task interval <id> <seconds>` to change cadence, or `pause`/`remove` to disable it. Paused and
+removed defaults stay disabled after restart; a removed builtin remains visible as a tombstone and
+can be restored with `resume`. A new operator authorization gets its own review, never the former
+operator's task or private history. The existing 100-registration store limit still applies.
 
 Registrations are atomically persisted and bound to the operator's authorization generation.
 Restart pauses interrupted jobs, and failures or uncertain timeouts pause recurring work. Resume
@@ -108,7 +242,7 @@ The helper accepts a credential-free HTTPS GitHub `origin`, fetches its default-
 records up to 30 commit summaries with source/date/head, and persists the inspected commit.
 Unchanged heads return `changed: false`. The agent interprets relevance using `HEARTBEAT.md` and
 can inspect diffs with Bash. Fetching never checks out, installs, deploys, or restarts upstream code.
-Registration through `/task` is required; editing heartbeat Markdown alone does not schedule work.
+Additional registrations use `/task`; editing heartbeat Markdown alone does not schedule work.
 
 ## Coach acolytes with explicit memory
 
@@ -159,9 +293,11 @@ link; former-operator reminders cannot be delivered to the new operator. Eligibl
 receive an earlier Branding offer, while durable declines and explicit transaction consent remain
 required.
 
-Transfer with `/operator-switch <address-or-ENS>`, review the resolved wallet/inbox, then send the
-returned `/operator-switch confirm <token>` within five minutes. Resolution is checked again before
-the atomic replacement. The former operator receives the result and the new operator gets a
+Transfer with `/operator <address-or-ENS>`, review the resolved wallet/inbox, then send the returned
+`/operator confirm <token>` within five minutes. The address must have a real registered inbox on
+the configured XMTP network. Confirmation resolves the original ENS name or address again and
+rejects a missing or changed wallet/inbox binding before replacing authority. `/operator-switch`
+remains a compatibility alias. The former operator receives the result and the new operator gets a
 best-effort welcome DM. All installations of the destination inbox gain authority. Old jobs and
 stale messages remain fenced; profiles/history are not copied. Offline recovery is
 `./uwu.sh --data-dir <existing-data-directory> operator switch <address-or-ENS>` while stopped.

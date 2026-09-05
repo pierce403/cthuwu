@@ -30,10 +30,12 @@ mod principal;
 mod repository_maintenance;
 pub mod scales;
 mod sidecar;
+mod source_workspace;
 mod storage;
 pub mod token_eye;
 pub mod token_gov;
 mod web_search;
+mod workspace_runtime;
 
 use agent_context::AgentContext;
 use anyhow::{Context, Result, bail, ensure};
@@ -381,7 +383,7 @@ struct Cli {
     #[arg(
         long,
         env = "UWUBOT_OPERATOR_TOOL_TIMEOUT_SECONDS",
-        default_value_t = 240
+        default_value_t = 900
     )]
     operator_tool_timeout_seconds: u64,
 
@@ -996,13 +998,16 @@ async fn main() -> Result<()> {
     let model: Arc<dyn Model> = router.clone();
     let operator_model: Arc<dyn OperatorModel> = router.clone();
     let (operator_notice_tx, operator_notice_rx) = mpsc::channel(32);
+    let workspace_runtime = Arc::new(workspace_runtime::WorkspaceRuntime::new(&operator_root)?);
     let operator_context = AgentContext::new(&cli.data_dir, &operator_root)?;
+    workspace_runtime.checkpoint("Initialize Markdown workspace and local runtime directories")?;
     let operator_tools = Arc::new(
         LocalOperatorTools::new(
             &operator_root,
             cli.qmd.clone(),
             cli.operator_tool_timeout_seconds,
         )?
+        .with_workspace_runtime(workspace_runtime.clone())
         .with_contacts(contacts.clone())
         .with_environment(router.environment()),
     );
@@ -1139,6 +1144,10 @@ async fn main() -> Result<()> {
         })
     };
 
+    let source_bootstrap = tokio::spawn(source_workspace::bootstrap(
+        operator_root.clone(),
+        workspace_runtime,
+    ));
     let wakeup_supervisor = tokio::spawn(send_startup_operator_wakeup_notice(
         operators.clone(),
         operator_notice_tx.clone(),
@@ -1179,6 +1188,7 @@ async fn main() -> Result<()> {
     tokio::pin!(transport);
     tokio::select! {
         transport_result = &mut transport => {
+            source_bootstrap.abort();
             wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();
@@ -1198,6 +1208,7 @@ async fn main() -> Result<()> {
             }
         }
         supervisor_result = &mut supervisor => {
+            source_bootstrap.abort();
             wakeup_supervisor.abort();
             registration_supervisor.abort();
             branding_supervisor.abort();

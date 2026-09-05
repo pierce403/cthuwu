@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly TEST_REPO_ROOT="$(cd -- "$TEST_SCRIPT_DIR/.." && pwd -P)"
+readonly TEST_TEMP_PARENT="$(dirname -- "$TEST_REPO_ROOT")/tmp"
 
 # shellcheck source=../uwu.sh
 source "$TEST_REPO_ROOT/uwu.sh"
@@ -35,7 +36,7 @@ cleanup_test_root() {
     wait "$runtime_holder_pid" 2>/dev/null || true
   fi
   if [[ -n "${test_root:-}" && -d "$test_root" && \
-    "$test_root" == "${TMPDIR:-/tmp}/cthuwu-uwu-test."* ]]; then
+    "$test_root" == "$TEST_TEMP_PARENT/cthuwu-uwu-test."* ]]; then
     chmod -R u+rwX -- "$test_root"
     rm -rf -- "$test_root"
   fi
@@ -56,7 +57,8 @@ for environment in dev production local; do
 done
 test_rejected "invalid XMTP environment" uwu_validate_environment staging
 
-test_root="$(mktemp -d "${TMPDIR:-/tmp}/cthuwu-uwu-test.XXXXXX")"
+mkdir -p -- "$TEST_TEMP_PARENT"
+test_root="$(mktemp -d "$TEST_TEMP_PARENT/cthuwu-uwu-test.XXXXXX")"
 trap cleanup_test_root EXIT
 
 export UWUBOT_XMTP_ENV=dev
@@ -74,6 +76,13 @@ test_equal ollama "${UWU_BOT_ARGS[1]}" "second forwarded argument"
 unset UWUBOT_XMTP_ENV UWUBOT_DATA_DIR
 uwu_parse_arguments
 test_equal production "$UWU_XMTP_ENV" "default XMTP environment"
+export UWUBOT_OPERATOR_ROOT="$test_root/from-workspace-environment"
+uwu_parse_arguments --operator-root "$test_root/from-workspace-cli" --model ollama
+test_equal "$test_root/from-workspace-cli" "$UWU_OPERATOR_ROOT" "CLI workspace override"
+test_equal 2 "${#UWU_BOT_ARGS[@]}" "workspace argument is handled by launcher"
+test_rejected "empty CLI workspace" uwu_parse_arguments --operator-root=
+unset UWUBOT_OPERATOR_ROOT
+uwu_parse_arguments
 
 secret_marker="model-secret-must-not-appear"
 search_secret_marker="search-secret-must-not-appear"
@@ -246,5 +255,49 @@ unset UWUBOT_WEB_SEARCH_API_KEY
 unset XMTP_WALLET_KEY XMTP_DB_ENCRYPTION_KEY
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET
 unset RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+
+# A selected workspace owns every launcher cache/build destination, including source bootstrap.
+UWU_OPERATOR_ROOT="$test_root/operator-workspace"
+uwu_prepare_workspace
+test_equal "$test_root/operator-workspace/tools/build/uwu" "$UWU_TARGET_DIR" "workspace build target"
+test_equal "$test_root/operator-workspace/tools/bootstrap-agent" "$UWU_AGENT_DIR" "workspace sidecar build"
+actual_tmp="$(uwu_without_runtime_secrets /bin/sh -c 'printf "%s" "$TMPDIR"')"
+test_equal "$UWU_OPERATOR_ROOT/tmp" "$actual_tmp" "workspace child temporary directory"
+actual_home="$(uwu_without_runtime_secrets /bin/sh -c 'printf "%s" "$HOME"')"
+test_equal "$UWU_OPERATOR_ROOT/tools/home" "$actual_home" "workspace child home"
+test_rejected "absent release reported as selected" uwu_select_installed_release
+
+# Existing rustup toolchains and custom Node installations remain readable after HOME/RUSTUP_HOME
+# move into an empty workspace. Calling a host rustup proxy here would fail this regression test.
+(
+  readonly fake_bin="$test_root/custom-node-and-proxies"
+  readonly fake_compiler="$test_root/preinstalled-rust-toolchain/bin"
+  mkdir -p "$fake_bin" "$fake_compiler"
+  cat >"$fake_bin/rustup" <<'RUSTUP'
+#!/bin/sh
+test "$1" = which || exit 70
+printf '%s/%s\n' "$FAKE_COMPILER_BIN" "$2"
+RUSTUP
+  for name in rustc cargo; do
+    printf '#!/bin/sh\nexit 71\n' >"$fake_bin/$name"
+    printf '#!/bin/sh\nprintf "preinstalled-%s\\n"\n' "$name" >"$fake_compiler/$name"
+  done
+  for name in node npm; do
+    printf '#!/bin/sh\nprintf "custom-%s\\n"\n' "$name" >"$fake_bin/$name"
+  done
+  chmod 700 "$fake_bin"/* "$fake_compiler"/*
+  export FAKE_COMPILER_BIN="$fake_compiler"
+  export PATH="$fake_bin:$PATH"
+  UWU_OPERATOR_ROOT="$test_root/toolchain-workspace"
+  UWU_WORKSPACE_ENV_READY=0
+  uwu_prepare_workspace
+  [[ ! -d "$UWU_OPERATOR_ROOT/tools/rustup/toolchains" ]] || test_fail "host toolchain was copied into workspace"
+  actual_tools="$(uwu_without_runtime_secrets /bin/sh -c 'rustc --version; cargo --version; node --version; npm --version')"
+  test_equal $'preinstalled-rustc\npreinstalled-cargo\ncustom-node\ncustom-npm' "$actual_tools" \
+    "child resolves actual host compilers and custom Node with empty workspace Rust home"
+  actual_rustup="$(uwu_without_runtime_secrets /bin/sh -c 'printf "%s" "$RUSTUP_HOME"')"
+  test_equal "$UWU_OPERATOR_ROOT/tools/rustup" "$actual_rustup" "toolchain access preserves workspace Rust home"
+)
+python3 "$TEST_REPO_ROOT/scripts/test_release_entrypoint.py"
 
 printf 'uwu.sh tests passed\n'

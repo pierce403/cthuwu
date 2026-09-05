@@ -431,9 +431,14 @@ impl RepositoryMaintenance {
             ExecutableTrust::Authentication,
             &pinned_authentication_executables,
         )?;
+        let local_environment = crate::workspace_runtime::environment_for(&workspace_root)?;
+        let validation_search = std::env::join_paths(
+            std::env::split_paths(std::ffi::OsStr::new(&local_environment["PATH"]))
+                .chain(std::env::split_paths(&executable_path)),
+        )?;
         let validation_path = sanitized_command_path(
             &workspace_root,
-            &executable_path,
+            &validation_search,
             ExecutableTrust::Validation,
             &[],
         )?;
@@ -2334,7 +2339,16 @@ impl RepositoryMaintenance {
         } else {
             &self.authentication_path
         };
-        run_bounded_command(program, args, root, limit, capability, command_path).await
+        run_bounded_command(
+            program,
+            args,
+            root,
+            limit,
+            capability,
+            command_path,
+            &self.workspace_root,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -2914,7 +2928,10 @@ fn resolve_executable_in_path(
         }
         let resolved_directory =
             fs::canonicalize(&directory).context("resolving executable search directory")?;
-        if resolved_directory.starts_with(workspace_root) {
+        if resolved_directory.starts_with(workspace_root)
+            && !(matches!(trust, ExecutableTrust::Validation)
+                && resolved_directory.starts_with(workspace_root.join("tools")))
+        {
             continue;
         }
         let candidate = directory.join(name);
@@ -2928,7 +2945,10 @@ fn resolve_executable_in_path(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error).context("resolving maintenance executable"),
         };
-        if resolved.starts_with(workspace_root) {
+        if resolved.starts_with(workspace_root)
+            && !(matches!(trust, ExecutableTrust::Validation)
+                && resolved.starts_with(workspace_root.join("tools")))
+        {
             continue;
         }
         let metadata = fs::metadata(&resolved)?;
@@ -2953,7 +2973,7 @@ fn resolve_executable_in_path(
             resolved
         } else {
             // Rustup/npm shims depend on argv[0], so validation preserves the absolute shim path
-            // after proving both it and its target are outside the writable workspace. Validation
+            // for preinstalled or workspace/tools executables. Validation
             // children receive no GitHub or SSH authentication environment.
             candidate
         }));
@@ -2996,7 +3016,11 @@ fn sanitized_command_path(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error).context("resolving child executable search directory"),
         };
-        if resolved.starts_with(workspace_root) || !resolved.is_dir() {
+        if (resolved.starts_with(workspace_root)
+            && !(matches!(trust, ExecutableTrust::Validation)
+                && resolved.starts_with(workspace_root.join("tools"))))
+            || !resolved.is_dir()
+        {
             continue;
         }
         if matches!(trust, ExecutableTrust::Authentication)
@@ -3413,6 +3437,7 @@ async fn run_bounded_command<I, S>(
     limit: Duration,
     capability: CommandCapability,
     command_path: &OsStr,
+    workspace_root: &Path,
 ) -> Result<CommandResult>
 where
     I: IntoIterator<Item = S>,
@@ -3423,6 +3448,7 @@ where
         .args(args)
         .current_dir(cwd)
         .env_clear()
+        .envs(crate::workspace_runtime::environment_for(workspace_root)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3434,35 +3460,14 @@ where
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("PATH", command_path);
-    for name in [
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "TMPDIR",
-        "XDG_CACHE_HOME",
-        "XDG_DATA_HOME",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    if matches!(
-        capability,
-        CommandCapability::Local | CommandCapability::GitNetwork | CommandCapability::GithubCli
-    ) && let Some(value) = std::env::var_os("XDG_CONFIG_HOME")
-    {
-        command.env("XDG_CONFIG_HOME", value);
-    }
     if matches!(capability, CommandCapability::GitNetwork)
         && let Some(value) = std::env::var_os("SSH_AUTH_SOCK")
     {
         command.env("SSH_AUTH_SOCK", value);
     }
     if matches!(capability, CommandCapability::GithubCli) {
-        for name in ["GH_CONFIG_DIR", "GH_HOST", "GH_TOKEN", "GITHUB_TOKEN"] {
+        command.env("GH_CONFIG_DIR", workspace_root.join("tools/xdg/config/gh"));
+        for name in ["GH_HOST", "GH_TOKEN", "GITHUB_TOKEN"] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
@@ -3843,6 +3848,7 @@ mod tests {
             Duration::from_secs(5),
             CommandCapability::Validation,
             &validation_path,
+            &fixture.checkout,
         )
         .await
         .unwrap();
@@ -3972,6 +3978,7 @@ mod tests {
                 Duration::from_secs(5),
                 capability,
                 &authentication_path,
+                &fixture.checkout,
             )
             .await
             .unwrap();

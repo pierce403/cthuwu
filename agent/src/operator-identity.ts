@@ -34,6 +34,8 @@ async function resolveInboxWithXmtp(
   environment: XmtpEnvironment,
 ): Promise<string | null> {
   const backend = await createBackend({ env: environment });
+  // This queries XMTP's registered identity association. generateInboxId would
+  // also produce an ID for an address that has never created an XMTP inbox.
   return getInboxIdForIdentifier(backend, {
     identifier: address.toLowerCase(),
     identifierKind: IdentifierKind.Ethereum,
@@ -76,6 +78,10 @@ export async function resolveOperatorIdentity(
       throw new Error(`ENS name ${JSON.stringify(normalizedName)} has no Ethereum address`);
     }
     address = getAddress(resolved);
+  }
+
+  if (address === "0x0000000000000000000000000000000000000000") {
+    throw new Error("operator identity must not resolve to the zero address");
   }
 
   const inboxId = await (dependencies.resolveInbox ?? resolveInboxWithXmtp)(

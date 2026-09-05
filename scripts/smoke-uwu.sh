@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 readonly SMOKE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SMOKE_REPO_ROOT="$(cd -- "$SMOKE_SCRIPT_DIR/.." && pwd -P)"
+readonly SMOKE_TEMP_PARENT="$(dirname -- "$SMOKE_REPO_ROOT")/tmp"
 
 smoke_fail() {
   printf 'uwu.sh smoke test failed: %s\n' "$*" >&2
@@ -12,13 +13,14 @@ smoke_fail() {
 
 cleanup_smoke_root() {
   if [[ -n "${smoke_root:-}" && -d "$smoke_root" && \
-    "$smoke_root" == "${TMPDIR:-/tmp}/cthuwu-uwu-smoke."* ]]; then
+    "$smoke_root" == "$SMOKE_TEMP_PARENT/cthuwu-uwu-smoke."* ]]; then
     chmod -R u+rwX -- "$smoke_root"
     rm -rf -- "$smoke_root"
   fi
 }
 
-smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/cthuwu-uwu-smoke.XXXXXX")"
+mkdir -p -- "$SMOKE_TEMP_PARENT"
+smoke_root="$(mktemp -d "$SMOKE_TEMP_PARENT/cthuwu-uwu-smoke.XXXXXX")"
 trap cleanup_smoke_root EXIT
 state_dir="$smoke_root/persistent state"
 wrong_target_dir="$smoke_root/ambient cargo target"
@@ -53,7 +55,7 @@ smoke_environment=(
 
 [[ "$(<"$state_dir/state/environment")" == production ]] || \
   smoke_fail "second start did not reuse the persisted environment state"
-[[ -f "$SMOKE_REPO_ROOT/agent/node_modules/typescript/bin/tsc" ]] || \
+[[ -f "$SMOKE_REPO_ROOT/tools/bootstrap-agent/node_modules/typescript/bin/tsc" ]] || \
   smoke_fail "NODE_ENV=production omitted a required build dependency"
 
 printf 'uwu.sh production-default two-start smoke test passed\n'
