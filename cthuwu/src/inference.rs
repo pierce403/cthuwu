@@ -32,15 +32,15 @@ use tracing::{info, warn};
 pub const DEFAULT_VENICE_MODEL: &str = "e2ee-deepseek-v4-flash";
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen3:8b";
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
-pub const DEFAULT_OLLAMA_TIMEOUT_SECONDS: u64 = 75;
-pub const DEFAULT_VENICE_TIMEOUT_SECONDS: u64 = 120;
+pub const DEFAULT_OLLAMA_TIMEOUT_SECONDS: u64 = 90;
+pub const DEFAULT_VENICE_TIMEOUT_SECONDS: u64 = 300;
 const VENICE_ENDPOINT: &str = "https://api.venice.ai/api/v1";
 const INFERENCE_CONFIG_VERSION: u32 = 1;
 const MAX_INFERENCE_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_VENICE_KEY_BYTES: u64 = 4 * 1024;
 const MAX_MODEL_ID_CHARS: usize = 128;
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
-const PUBLIC_REMOTE_ATTEMPT_LIMIT: Duration = Duration::from_secs(30);
+const PUBLIC_REMOTE_ATTEMPT_LIMIT: Duration = Duration::from_secs(120);
 const MIN_PROVIDER_ATTEMPT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -768,13 +768,13 @@ impl ModelControl for InferenceRouter {
             )
         };
         let deadline = InferenceDeadline::current(InferenceLane::Operator)?
-            .capped(Duration::from_secs(150))?;
+            .capped(Duration::from_secs(420))?;
         let mut providers = vec![selection.provider];
         if selection.provider != Provider::Ollama {
             providers.push(Provider::Ollama);
         }
         let mut lines = vec![format!(
-            "INFERENCE: selected `{}`; per-probe 30s, total 150s. Tiny synthetic probes may incur provider usage.",
+            "INFERENCE: selected `{}`; per-probe 90s, total 420s. Tiny synthetic probes may incur provider usage.",
             selection.provider.as_str()
         )];
         for provider in providers {
@@ -834,7 +834,7 @@ impl ModelControl for InferenceRouter {
                     ));
                     continue;
                 };
-                let probe = deadline.capped(Duration::from_secs(30))?;
+                let probe = deadline.capped(Duration::from_secs(90))?;
                 let messages = [
                     serde_json::json!({"role":"user", "content":"Diagnostic probe. Reply briefly with OK. No external actions."}),
                 ];
@@ -2153,8 +2153,8 @@ mod tests {
         assert!(status.contains("TEE-ONLY"));
         assert!(status.contains("`qwen3:8b`"));
         assert!(status.contains("VENICE CREDENTIAL CONFIGURED: NO"));
-        assert!(status.contains("PUBLIC CHAT <= 30S"));
-        assert!(status.contains("OPERATOR <= 120S"));
+        assert!(status.contains("PUBLIC CHAT <= 120S"));
+        assert!(status.contains("OPERATOR <= 300S"));
     }
 
     #[test]
@@ -2180,7 +2180,7 @@ mod tests {
         assert_eq!(candidates[0].provider, Provider::Venice);
 
         let (public_budget, public_reserve) =
-            scope_authenticated_deadline(InferenceLane::Public, Duration::from_secs(120), async {
+            scope_authenticated_deadline(InferenceLane::Public, Duration::from_secs(240), async {
                 let deadline = InferenceDeadline::current(InferenceLane::Public).unwrap();
                 let (_, budget, reserve) = router
                     .attempt_deadline(deadline, &candidates[0], &candidates[1..])
@@ -2199,7 +2199,7 @@ mod tests {
 
         let (operator_budget, operator_reserve) = scope_authenticated_deadline(
             InferenceLane::Operator,
-            Duration::from_secs(299),
+            Duration::from_secs(599),
             async {
                 let deadline = InferenceDeadline::current(InferenceLane::Operator).unwrap();
                 let (_, budget, reserve) = router
@@ -2217,7 +2217,8 @@ mod tests {
                 + DETERMINISTIC_FALLBACK_RESERVE.as_secs(),
         );
         assert_eq!(operator_reserve, expected_operator_reserve);
-        let expected_operator_budget = Duration::from_secs(299) - expected_operator_reserve;
+        let expected_operator_budget = (Duration::from_secs(599) - expected_operator_reserve)
+            .min(Duration::from_secs(DEFAULT_VENICE_TIMEOUT_SECONDS));
         assert!(operator_budget <= expected_operator_budget);
         assert!(operator_budget >= expected_operator_budget - Duration::from_millis(10));
     }

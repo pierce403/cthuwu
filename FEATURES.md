@@ -16,6 +16,13 @@ reciprocal invitations—not through deception, coercion, spam, privacy violatio
 promises. Each Tentacle—not Cthuwu—owns a durable ERC-8004 identity, and a restart changes only
 its runtime incarnation. Legacy Council `CthulhuId` names remain wire-compatibility namespaces only.
 
+## Longer inference budgets and concise replies
+
+- [x] Align the default 600-second XMTP envelope with a 300-second Venice operator cap, 120-second public remote cap, 90-second local phases, and retained fallback/completion reserves.
+- [x] Extend generic compatible-provider and diagnostic budgets; retain authenticated deadline clamps and explicit shorter overrides.
+- [x] Prompt both lanes for short direct routine replies without clipping code, tool arguments, or essential receipts.
+- [ ] Confirm timeout frequency and typical reply length on the operator's live Venice/XMTP route after restart.
+
 ## Inference outage recovery
 
 - [x] Explicit `/env set UWUBOT_VENICE_PRIVACY <tee|standard>` hot-applies and persists; legacy/default mode remains TEE. Standard mode validates the credential and exact text/tool model without attestation. No automatic privacy downgrade.
@@ -780,16 +787,16 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     that durable claim before returning a role-specific first `Reply` or duplicate `Ignore`. It never
     opens a contact or dispatches content, a model, or a tool. Clients retry with a shorter, newly
     authored XMTP message rather than replaying the old ID.
-  - The bridge supplies a locally generated 2–300 second end-to-end deadline. Rust validates it,
-    reserves one second for the response, caps authenticated public work at 120 seconds, and cancels
-    work when the applicable lane budget closes. The default bridge envelope is 300 seconds, leaving
-    at most 299 seconds of authenticated operator work.
+  - The bridge supplies a locally generated 2–900 second end-to-end deadline. Rust validates it,
+    reserves one second for the response, caps authenticated public work at 240 seconds, and cancels
+    work when the applicable lane budget closes. The default bridge envelope is 600 seconds, leaving
+    at most 599 seconds of authenticated operator work.
   - Each provider candidate is bounded by the remaining authenticated deadline after an explicit
-    local-fallback reserve. Public remote work is capped at 30 seconds; operator Venice defaults to a
-    configurable 120-second cap. Operator remote work first reserves two local model phases of up to
-    the 75-second safety cap, or a smaller configured Ollama timeout, each; one model-selected tool
-    phase of up to 30 seconds; and a one-second deterministic margin: 181 seconds by default, so
-    Venice can effectively use about 118 seconds. Individual
+    local-fallback reserve. Public remote work is capped at 120 seconds; operator Venice defaults to a
+    configurable 300-second cap. Operator remote work first reserves two local model phases of up to
+    the 90-second safety cap, or a smaller configured Ollama timeout, each; one model-selected tool
+    phase of up to 30 seconds; and a one-second deterministic margin: 211 seconds by default,
+    leaving room for Venice's full 300-second cap. Individual
     catalog, attestation, completion, continuation, repair, and search phases derive their timeout
     from that candidate. Public completions request at most 300 output tokens and remain bounded to
     4,000 characters before the final transport bound.
@@ -914,7 +921,7 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
     `state/venice.key`.
   - Ollama and generic OpenAI-compatible chat-completions endpoints are configured without code
     changes. Loopback clients bypass ambient proxy settings. Ollama's configured timeout is bounded,
-    and routed local model phases have a 75-second safety cap so a larger setting cannot consume the
+    and routed local model phases have a 90-second safety cap so a larger setting cannot consume the
     continuation reserve. `UWUBOT_VENICE_TIMEOUT_SECONDS` independently configures Venice's
     1–300 second provider cap.
   - Profile text is labeled as untrusted user data, not injected as a system message.
@@ -1057,7 +1064,7 @@ See [docs/acolyte-channels.md](docs/acolyte-channels.md) for the trust and wire 
   - File helpers stay under `UWUBOT_OPERATOR_ROOT`, reject parent traversal and direct symlink
     targets, page UTF-8 reads at 12 KiB, cap writes/edits at 1 MiB, and write atomically. The agent
     loop and child processes have hard step, output, and 1–900 second tool-timeout limits, subordinate
-    to the bridge's 2–300 second end-to-end deadline.
+    to the bridge's 2–900 second end-to-end deadline.
   - Startup rejects canonical overlap between the operator root and private data root in either
     direction, preventing workspace reads from reaching XMTP identity, contacts, or agent profiles.
   - `exec` starts in the operator root with a secret-stripped environment, but is intentionally

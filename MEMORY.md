@@ -2,6 +2,11 @@
 
 Last reviewed: 2026-09-05
 
+- Inference timeout increases must update both the Node bridge default/max and Rust's deadline
+  validator; otherwise the shorter outer envelope still cancels the request. Defaults now allow
+  600s XMTP, 300s Venice operator, 120s public remote, and 90s local phases. Explicit environment
+  overrides still win. Concision belongs in prose prompts; do not shrink tool JSON or clip receipts.
+
 - Venice defaults to TEE, but explicit `/env set UWUBOT_VENICE_PRIVACY standard` now persists a
   non-attested TLS route; use `z-ai-glm-5-3-flash` for GLM 5.3 Flash. Privacy/model switches need
   no working LLM. `/force-update` is a fixed one-shot task using the embedded helper to install
@@ -146,14 +151,13 @@ Last reviewed: 2026-09-05
   name 1%, hopes 0.8%, offered resources 0.6%, and needs 0.4%, floored to whole UWU from a fresh
   treasury observation and capped at 1% per event. The exact authenticated event and confirmed
   transfer receipt are required; free-form model-rated ideas do not authorize spending.
-- The bridge's default end-to-end envelope is 300 seconds. Rust preserves one second for the XMTP
+- The bridge's default end-to-end envelope is 600 seconds. Rust preserves one second for the XMTP
   response, then applies role-specific inference budgets only after authenticating the sender: public
-  work is capped at 120 seconds and public remote inference at 30 seconds, while operator work can
-  use at most 299 seconds. An operator remote route reserves two capped local model phases (up to the
-  75-second safety cap, or a smaller configured Ollama timeout, each), one model-selected tool phase
-  (up to 30 seconds), and one deterministic second. The default 181-second reserve makes Venice's
-  effective maximum about 118 seconds despite its
-  configurable 120-second cap. Model-selected tools preserve a final local completion; budget skips
+  work is capped at 240 seconds and public remote inference at 120 seconds, while operator work can
+  use at most 599 seconds. An operator remote route reserves two capped local model phases (up to the
+  90-second safety cap, or a smaller configured Ollama timeout, each), one model-selected tool phase
+  (up to 30 seconds), and one deterministic second. The default 211-second reserve leaves room for Venice's
+  full default 300-second cap. Model-selected tools preserve a final local completion; budget skips
   do not trigger provider cooldown, and failure cooldown is isolated by lane.
 - Authenticated operator inference permits 24 model-selected tool calls plus a final completion
   step. The request deadline, per-tool timeout, bounded receipts, and final-completion reserve still

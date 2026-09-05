@@ -27,7 +27,7 @@ use tracing::{error, info};
 // This matches the sidecar's limit for JSONL received from Rust. It also leaves ample room for a
 // 16 KiB text message after worst-case JSON string escaping plus bounded protocol metadata.
 const MAX_SIDECAR_FRAME_BYTES: usize = 256 * 1024;
-const MAX_REQUEST_DEADLINE_MS: u64 = 300_000;
+const MAX_REQUEST_DEADLINE_MS: u64 = 900_000;
 const RESPONSE_RESERVE_MS: u64 = 1_000;
 const TRANSPORT_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "XMTP_DB_DIRECTORY",

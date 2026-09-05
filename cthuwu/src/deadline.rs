@@ -4,11 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const DEFAULT_PUBLIC_WORK_BUDGET: Duration = Duration::from_secs(120);
-pub(crate) const DEFAULT_OPERATOR_WORK_BUDGET: Duration = Duration::from_secs(300);
+pub(crate) const DEFAULT_PUBLIC_WORK_BUDGET: Duration = Duration::from_secs(240);
+pub(crate) const DEFAULT_OPERATOR_WORK_BUDGET: Duration = Duration::from_secs(600);
 pub(crate) const DETERMINISTIC_FALLBACK_RESERVE: Duration = Duration::from_secs(1);
-pub(crate) const LOCAL_MODEL_PHASE_LIMIT: Duration = Duration::from_secs(75);
-pub(crate) const DEFAULT_OPERATOR_CONTINUATION_RESERVE: Duration = Duration::from_secs(76);
+pub(crate) const LOCAL_MODEL_PHASE_LIMIT: Duration = Duration::from_secs(90);
+pub(crate) const DEFAULT_OPERATOR_CONTINUATION_RESERVE: Duration = Duration::from_secs(91);
 pub(crate) const OPERATOR_MODEL_TOOL_PHASE_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

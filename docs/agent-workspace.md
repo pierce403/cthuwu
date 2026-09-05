@@ -363,7 +363,7 @@ local Ollama separately, using a tiny synthetic completion with a tool schema, n
 conversation history. Venice probes use the current credential pool and fresh catalog checks, plus attestation when TEE mode is selected. Failures distinguish authentication/access, credit, rate limits, connectivity, model
 compatibility, and attestation problems without printing keys or raw provider errors. Up to
 three enabled credential slots are tested, including cooling-down slots; disabled slots stay
-disabled. Each probe has a 30-second cap within a 150-second inference budget and the incoming
+disabled. Each probe has a 90-second cap within a 420-second inference budget and the incoming
 request deadline. Probes can incur small provider charges. A successful fallback is never
 reported as proof that Venice works.
 
@@ -418,3 +418,20 @@ installed commit, source divergence, and why main was selected; workspace change
 Installation does not restart the live process. Restart through `./uwu.sh` (or the container's
 entrypoint) with the same protected data and workspace to activate the release. **Older binaries
 cannot recognize this new command:** update and restart the host checkout once to bootstrap it.
+
+## Timeouts and concise replies
+
+Default XMTP replies now have a 600-second envelope (`UWUBOT_REPLY_TIMEOUT_MS`, allowed 2–900
+seconds). Public work remains capped at 240 seconds, with up to 120 seconds per remote candidate.
+Venice operator candidates default to 300 seconds (`UWUBOT_VENICE_TIMEOUT_SECONDS`); generic
+OpenAI-compatible candidates default to 180 seconds. Ollama defaults to 90 seconds per phase.
+Catalog and attestation phases allow 30 seconds each, always within the candidate's total budget.
+The operator route reserves 211 seconds for local fallback, a tool phase, and final completion.
+Existing explicit environment overrides remain effective; increasing defaults does not override a
+shorter configured bridge or provider timeout. Updated Rust and sidecar builds must run together.
+
+Routine public replies target 1–3 short sentences, normally under 80 words; operator replies target
+under 120 words. Both answer directly and avoid repeated introductions and persona boilerplate.
+Requested detail, complete code, tool arguments, and essential diagnostic receipts remain available;
+these are prose instructions, not destructive truncation of structured output. A slow or unavailable
+provider can still time out; longer budgets do not establish service health.

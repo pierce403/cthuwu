@@ -245,10 +245,10 @@ until it passes, even though the canonical contract deployment and closed implem
   oversized content in JSONL: `reject_oversized` carries metadata plus an empty `text`, and Rust must
   validate, classify, and durably claim before a role-specific first `Reply` or duplicate `Ignore`.
   Never open a contact or dispatch a model/tool on that path. Retry requires a new XMTP message,
-  shortened when oversized. Enforce the 2–300 second bridge deadline above the 1–900 second tool
+  shortened when oversized. Enforce the 2–900 second bridge deadline above the 1–900 second tool
   limit and preserve the response reserve. Derive role-specific inference and provider deadlines
-  only after authenticated role classification in Rust. The default 300-second bridge envelope leaves
-  299 seconds for operator work; cap public work at 120 seconds and its remote phase at 30 seconds.
+  only after authenticated role classification in Rust. The default 600-second bridge envelope leaves
+  599 seconds for operator work; cap public work at 240 seconds and its remote phase at 120 seconds.
   Before operator remote inference, reserve two capped local model phases, one 30-second
   model-selected tool phase, and the deterministic margin; model-selected tools must preserve the
   final local completion. Clamp every catalog, attestation, completion, tool, and repair phase to the

@@ -83,7 +83,7 @@ rejection path makes the claim an at-most-once tombstone: replaying the same XMT
 message**, with a new message ID, after capacity becomes available; an oversized message must also be
 shortened.
 
-`uwubot` must answer within 300 seconds (configurable from 2–300 seconds with
+`uwubot` must answer within 600 seconds (configurable from 2–900 seconds with
 `UWUBOT_REPLY_TIMEOUT_MS`) using exactly one of:
 
 ```jsonl
@@ -94,7 +94,7 @@ shortened.
 Unknown, late, and malformed lines are ignored. A matching malformed or
 oversized reply fails its request immediately instead of waiting for the
 timeout. `deadlineUnixMs` is created locally by the bridge from that same timeout; Rust reserves
-time to return a deadline result, authenticates the role, caps public work at 120 seconds, and
+time to return a deadline result, authenticates the role, caps public work at 240 seconds, and
 cancels active work before the bridge drops the pending ID. Provider attempts derive their own
 smaller budgets from that authenticated deadline. Group messages and non-text content never cross
 this boundary.

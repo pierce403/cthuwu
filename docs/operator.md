@@ -458,14 +458,13 @@ UWUBOT_OPERATOR_TOOL_TIMEOUT_SECONDS=900 \
 ```
 
 The configured per-tool ceiling must be between 1 and 900 seconds and defaults to 900. Ordinary
-shell calls default to 120 seconds unless a longer timeout is requested. The sidecar's 2–300 second
+shell calls default to 120 seconds unless a longer timeout is requested. The sidecar's 2–900 second
 end-to-end reply deadline always wins and reserves one second for the response. Its default envelope
-is 300 seconds, leaving at most 299 seconds for authenticated operator work. Before Venice starts,
-the route reserves two capped local model phases (up to the 75-second safety cap, or a smaller
+is 600 seconds, leaving at most 599 seconds for authenticated operator work. Before Venice starts,
+the route reserves two capped local model phases (up to the 90-second safety cap, or a smaller
 configured Ollama timeout, each), one ordinary model-selected tool phase of up to 30 seconds, and a one-second
-deterministic margin. That is 181
-seconds under default settings, so Venice can effectively use about 118 seconds even though
-`UWUBOT_VENICE_TIMEOUT_SECONDS` defaults to a 120-second cap. Every catalog, attestation,
+deterministic margin. That is 211 seconds under default settings, leaving enough room for
+`UWUBOT_VENICE_TIMEOUT_SECONDS` to use its full default 300-second cap. Every catalog, attestation,
 completion, continuation, and repair request is clamped to the remaining operator candidate
 deadline. Provider failure cooldown is lane-aware, so a public-lane failure does not suppress an
 operator attempt. File helpers

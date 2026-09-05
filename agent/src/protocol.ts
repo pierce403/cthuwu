@@ -44,7 +44,7 @@ type Pending = {
   timer: NodeJS.Timeout;
 };
 
-const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_REPLY_BYTES = 16 * 1024;
 const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
 const DEFAULT_MAX_PENDING = 64;
@@ -61,8 +61,8 @@ export function parseTimeout(value: string | undefined): number {
     throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be an integer number of milliseconds");
   }
   const timeout = Number(value);
-  if (!Number.isSafeInteger(timeout) || timeout < 2_000 || timeout > 300_000) {
-    throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be between 2000 and 300000");
+  if (!Number.isSafeInteger(timeout) || timeout < 2_000 || timeout > 900_000) {
+    throw new Error("UWUBOT_REPLY_TIMEOUT_MS must be between 2000 and 900000");
   }
   return timeout;
 }

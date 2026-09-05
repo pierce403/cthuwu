@@ -631,7 +631,7 @@ uses a metadata-only rejection control frame with an empty `text`; after classif
 claim, Rust returns a role-specific first reply or ignores a duplicate, without contact, model, or
 tool dispatch. These tombstones mean retrying the same network message can never execute later—the
 client must send a new XMTP message after capacity returns, and shorten an oversized message. The
-bridge's configured 2–300 second end-to-end deadline cancels work while reserving one second to
+bridge's configured 2–900 second end-to-end deadline cancels work while reserving one second to
 reply. See the operator guide for the distinct 12 KiB UTF-8 read page and 1 MiB write/edit limits.
 
 ## Council architecture
@@ -690,11 +690,11 @@ the SDK-authenticated sender address. The default is 1 whole UWU and
 `CTHUWU_VENICE_KEY_REWARD_WHOLE` changes it. A queued intent is not a payment: the separately
 configured lifecycle executor must return an exact confirmed Base transfer receipt.
 
-The optional Venice timeout is a 1–300 second cap for operator routes and defaults to 120 seconds:
+The optional Venice timeout is a 1–300 second cap for operator routes and defaults to 300 seconds:
 
 ```bash
 VENICE_API_KEY='...' \
-UWUBOT_VENICE_TIMEOUT_SECONDS=120 \
+UWUBOT_VENICE_TIMEOUT_SECONDS=300 \
 ./uwu.sh
 ```
 
@@ -720,14 +720,13 @@ falls forward to a remote provider. A provider failure enters a short lane-aware
 failures do not suppress longer operator attempts and neither lane repeatedly hits the same failed
 endpoint.
 
-The bridge's default authenticated envelope is 300 seconds and keeps one second for returning the
-XMTP response. Rust applies a 120-second work ceiling to public chat while operator requests may use
-at most 299 seconds. Public remote inference gets at most 30 seconds. Before starting operator
-Venice, Cthuwu reserves two capped local model phases (up to the 75-second safety cap, or a smaller
+The bridge's default authenticated envelope is 600 seconds and keeps one second for returning the
+XMTP response. Rust applies a 240-second work ceiling to public chat while operator requests may use
+at most 599 seconds. Public remote inference gets at most 120 seconds. Before starting operator
+Venice, Cthuwu reserves two capped local model phases (up to the 90-second safety cap, or a smaller
 configured Ollama timeout, each), one model-selected tool phase of up to 30 seconds, and a one-second
-deterministic margin. The default 181-second reserve makes Venice's effective maximum about 118
-seconds even though its
-configured cap defaults to 120 seconds. Model-selected operator tools also preserve enough remaining
+deterministic margin. The default 211-second reserve leaves enough room for Venice's full 300-second cap within
+the 599-second authenticated operator budget. Model-selected operator tools also preserve enough remaining
 time for a final local completion.
 
 The provider cap applies to the whole candidate route—catalog, attestation, completion, optional
@@ -742,13 +741,13 @@ For Ollama's OpenAI-compatible endpoint:
 UWUBOT_MODEL=ollama \
 UWUBOT_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1 \
 UWUBOT_OLLAMA_MODEL=qwen3:8b \
-UWUBOT_OLLAMA_TIMEOUT_SECONDS=75 \
+UWUBOT_OLLAMA_TIMEOUT_SECONDS=90 \
 ./uwu.sh
 ```
 
 Automatic Ollama fallback is restricted to a credential-free loopback HTTP endpoint and bypasses
 ambient HTTP proxy settings. The configured timeout accepts 1–300 seconds, but routed local model
-phases are capped at 75 seconds so a larger setting cannot consume time reserved for continuation;
+phases are capped at 90 seconds so a larger setting cannot consume time reserved for continuation;
 each Ollama HTTP request is clamped again to the candidate's remaining authenticated time. The legacy
 `UWUBOT_MODEL_ENDPOINT` and `UWUBOT_MODEL_NAME` values still override Ollama when
 `UWUBOT_MODEL=ollama` is explicitly selected. That legacy startup override wins for the running

@@ -349,9 +349,11 @@ describe("JSONL uwubot bridge", () => {
 
 describe("timeout configuration", () => {
   it("uses a bounded operator-provided timeout", () => {
-    expect(parseTimeout(undefined)).toBe(300_000);
+    expect(parseTimeout(undefined)).toBe(600_000);
     expect(parseTimeout("2000")).toBe(2_000);
     expect(parseTimeout("300000")).toBe(300_000);
+    expect(parseTimeout("900000")).toBe(900_000);
+    expect(() => parseTimeout("900001")).toThrow("between");
     expect(() => parseTimeout("1999")).toThrow("between");
     expect(() => parseTimeout("wat")).toThrow("integer");
   });

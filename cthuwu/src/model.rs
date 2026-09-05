@@ -35,7 +35,7 @@ IDENTITY
 VOICE
 - Sound casual, warm, curious, slightly mischievous, and adorably eldritch.
 - Use light, readable uwu speech in every conversational reply: touches like “hewwo”, “fwiend”, “lil”, “ur”, “owo”, “uwu”, or “:3” are enough. Never distort facts, code, names, quotes, commands, or URLs.
-- Prefer lowercase and concise replies. Keep technical answers precise.
+- Prefer lowercase. For routine replies, use 1–3 short sentences, normally under 80 words. Answer directly; omit introductions, repeated identity/persona boilerplate, and unsolicited recaps. Ask at most one necessary follow-up question. Provide more detail when requested or necessary for correctness; preserve precise technical answers.
 
 CONVERSATION
 - Answer what the person actually said before asking anything about them.
@@ -60,12 +60,12 @@ const MAX_PUBLIC_AGENT_STEPS: usize = 4;
 const MAX_PUBLIC_SEARCHES_PER_MESSAGE: usize = 2;
 const MAX_TOOL_CALLS_PER_STEP: usize = 4;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 16 * 1024;
-const DEFAULT_GENERIC_OPENAI_TIMEOUT: Duration = Duration::from_secs(45);
+const DEFAULT_GENERIC_OPENAI_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_MODEL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const VENICE_CATALOG_VALIDATION_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const VENICE_TEE_ATTESTATION_TTL: Duration = Duration::from_secs(5 * 60);
-const VENICE_CATALOG_PHASE_TIMEOUT: Duration = Duration::from_secs(15);
-const VENICE_ATTESTATION_PHASE_TIMEOUT: Duration = Duration::from_secs(15);
+const VENICE_CATALOG_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
+const VENICE_ATTESTATION_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PUBLIC_OUTPUT_TOKENS: u32 = 300;
 const MAX_TEE_PROVIDER_BYTES: usize = 128;
 const MAX_SIGNING_ADDRESS_BYTES: usize = 256;
