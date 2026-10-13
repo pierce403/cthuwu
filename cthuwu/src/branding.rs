@@ -1997,6 +1997,7 @@ impl SharedBrandingControl {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait AcolyteBrandingControl: Send + Sync {
     async fn referral_preferences(&self, _arguments: &str) -> Result<String> {

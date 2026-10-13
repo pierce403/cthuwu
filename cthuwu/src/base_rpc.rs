@@ -20,6 +20,7 @@ pub struct RpcProvisionReply {
     pub response: String,
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait BaseRpcControl: Send + Sync {
     fn configured(&self) -> Result<bool>;

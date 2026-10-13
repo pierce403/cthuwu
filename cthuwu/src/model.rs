@@ -114,6 +114,7 @@ impl ModelPolicy {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Model: Send + Sync {
     async fn respond(&self, request: ModelRequest<'_>) -> Result<String>;
