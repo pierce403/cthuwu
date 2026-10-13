@@ -492,6 +492,7 @@ pub fn parse_chain_id_rpc_response(
 }
 
 /// A mockable source of ERC-20 balances used for economic admission.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait TokenBalanceTransport: Send + Sync {
     async fn balance_of(

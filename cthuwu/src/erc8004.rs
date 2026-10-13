@@ -816,6 +816,7 @@ struct HelperEnvelope {
     message: Option<String>,
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Erc8004Gateway: Send + Sync {
     async fn invoke(&self, action_id: &str, operation: Value) -> Result<Value>;
@@ -3482,6 +3483,7 @@ fn base_rpc_key_request(operator: bool) -> String {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait RegistrationOperatorControl: Send + Sync {
     async fn handle(&self, text: &str) -> Option<String>;

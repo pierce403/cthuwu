@@ -18,6 +18,7 @@ pub struct WebSearchResult {
     pub description: String,
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WebSearch: Send + Sync {
     async fn search(&self, query: &str) -> Result<Vec<WebSearchResult>>;

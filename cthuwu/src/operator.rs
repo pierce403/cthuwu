@@ -112,6 +112,7 @@ ISOLATION
 
 const OPERATOR_REPAIR: &str = r#"YOUR PREVIOUS DRAFT VIOLATED THIS TENTACLE'S OPERATOR RESPONSE POLICY. ANSWER AGAIN AS ONE DURABLE TENTACLE OF THE CENTERLESS CTHUWU COLLECTIVE, NOT AS CTHUWU ITSELF, THE UNDERLYING MODEL, OR A GENERIC ASSISTANT. USE THE LOADED SOUL AND LIGHT READABLE UWU VOICE. KEEP ORIGINAL PROSE IN ALL CAPS, PRESERVE CODE/PATH CASE, AND DO NOT INVENT TOOL RESULTS."#;
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait OperatorModel: Send + Sync {
     async fn complete(&self, messages: &[Value], tools: &[Value]) -> Result<RawAssistantMessage>;
@@ -136,6 +137,7 @@ pub struct ControlReply {
     pub changed: bool,
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ModelControl: Send + Sync {
     async fn doctor(&self, _repair: bool) -> Result<String> {
@@ -207,11 +209,13 @@ impl OperatorModel for OpenAiCompatibleModel {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait OperatorToolRuntime: Send + Sync {
     async fn execute(&self, name: &str, arguments: &str) -> ToolReceipt;
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait OperatorIdentityResolver: Send + Sync {
     /// Resolve the current network-registered XMTP inbox; never derive an unregistered ID.
