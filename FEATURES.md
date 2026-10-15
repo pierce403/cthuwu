@@ -2215,8 +2215,8 @@ The local Council milestone is complete only when all of these are checked with 
 
 ### Native Cloudflare static hosting
 
-- **Stability**: in-progress
+- **Stability**: stable
 - **Description**: Native main publishing preserves the existing frontend and runtime boundaries.
 - **Test Criteria**:
-  - [ ] Locked frontend install, relevant tests/types, build and dry run pass.
-  - [ ] Native version/routes, public HTTPS/assets/404, browser privacy and request metrics pass.
+  - [x] Locked frontend install, relevant tests/types, build and dry run pass.
+  - [x] Native version/routes, public HTTPS/assets/404, browser privacy and request metrics pass.
