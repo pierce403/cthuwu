@@ -2212,3 +2212,11 @@ The local Council milestone is complete only when all of these are checked with 
 - [ ] The complete pre-Council Rust, sidecar, web, launcher, Docker, audit, formatting, clippy, and direct-XMTP suites still pass.
 - [x] Documentation and diagnostics make no live XMTP Council or production Council-signature claim,
   preserve the singular-Cthuwu ontology, and scope canonical Base ERC-8004 separately.
+
+### Native Cloudflare static hosting
+
+- **Stability**: in-progress
+- **Description**: Native main publishing preserves the existing frontend and runtime boundaries.
+- **Test Criteria**:
+  - [ ] Locked frontend install, relevant tests/types, build and dry run pass.
+  - [ ] Native version/routes, public HTTPS/assets/404, browser privacy and request metrics pass.

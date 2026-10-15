@@ -1003,3 +1003,11 @@ installed app may receive separate storage.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Cloudflare static publishing
+
+Native Git publishes main from /web using the pinned lockfile and build:cloudflare,
+then npm run deploy. Only the existing static frontend is hosted. Original Pages
+recovery and runtime/integration boundaries remain; credentials stay in Cloudflare
+and previews stay off. Zone request metrics are used with no-transform headers
+to avoid browser analytics injection. Native manifests bind public files to Git.

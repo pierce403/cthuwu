@@ -13,7 +13,10 @@
     "test:lighthouse": "npm run build:browser-tests && node scripts/run-lighthouse.mjs",
     "test:browser": "npm run build:browser-tests && playwright test && node scripts/run-lighthouse.mjs",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:cloudflare": "npm run validate:production-config && npm run build && node scripts/cloudflare-assets.mjs",
+    "deploy": "wrangler deploy --config ../wrangler.jsonc",
+    "check:deploy": "npm run build:cloudflare && wrangler deploy --config ../wrangler.jsonc --dry-run"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "2.23.10",
@@ -29,7 +32,8 @@
     "lighthouse": "13.4.1",
     "typescript": "5.9.3",
     "vite": "7.3.6",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "wrangler": "4.151.0"
   },
   "overrides": {
     "axios": "1.19.0"

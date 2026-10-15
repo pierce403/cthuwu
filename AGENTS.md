@@ -643,3 +643,11 @@ until it passes, even though the canonical contract deployment and closed implem
   RPC candidate must validate as Base mainnet chain 8453, persist owner-only, and hot-load for token
   observation and ERC-8004 without asking anyone to edit an environment variable or restart.
   Operators may replace a loaded key with the same command.
+
+## Cloudflare frontend hosting
+
+The owner-approved static migration uses native main builds. Only web/ is built.
+Keep runtime, private data, wallets and research execution outside hosting.
+Production config validation remains fail-closed; zone request metrics do not
+inject browser analytics. Original Pages/source recovery remains. Deployment
+credentials stay in Cloudflare and previews stay disabled.
