@@ -20,5 +20,11 @@
       "enabled": true,
       "head_sampling_rate": 0.01
     }
-  }
+  },
+  "routes": [
+    {
+      "pattern": "cthuwu.app/*",
+      "zone_name": "cthuwu.app"
+    }
+  ]
 }
