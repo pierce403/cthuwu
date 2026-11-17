@@ -1,5 +1,6 @@
 {
   "name": "@cthuwu/acolyte-branding-contracts",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "license": "Apache-2.0"
 }

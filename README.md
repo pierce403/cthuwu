@@ -1000,10 +1000,6 @@ installed app may receive separate storage.
 - A person can ask Cthuwu in ordinary language to show, correct, or delete their local contact note.
   Deletion cannot erase message copies already delivered over XMTP.
 
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
-
 ## Cloudflare static publishing
 
 Native Git publishes main from /web using the pinned lockfile and build:cloudflare,
@@ -1011,3 +1007,12 @@ then npm run deploy. Only the existing static frontend is hosted. Original Pages
 recovery and runtime/integration boundaries remain; credentials stay in Cloudflare
 and previews stay off. Zone request metrics are used with no-transform headers
 to avoid browser analytics injection. Native manifests bind public files to Git.
+
+## License
+
+Original project code and documentation are licensed under the
+[Apache License 2.0](LICENSE). Third-party dependencies, source excerpts,
+assets, and other third-party material retain their respective licenses and
+copyright notices; this grant does not relicense that material.
+
+Existing project copyright and attribution text is preserved in [NOTICE](NOTICE).
