@@ -94,12 +94,16 @@ macro_rules! define_id {
 define_id!(
     /// Legacy v1 Council coordination namespace retained for wire and snapshot compatibility.
     /// It does not identify an individual Cthulhu and must not key an ERC-8004 identity.
-    CthulhuId, "cthulhu_", "cthulhuId"
+    CthulhuId,
+    "cthulhu_",
+    "cthulhuId"
 );
 define_id!(
     /// Stable identity of one independently operated Tentacle. It survives incarnation restarts
     /// and is the only protocol identifier that may key that Tentacle's ERC-8004 identity.
-    TentacleId, "tentacle_", "tentacleId"
+    TentacleId,
+    "tentacle_",
+    "tentacleId"
 );
 define_id!(CouncilId, "council_", "councilId");
 define_id!(SessionId, "session_", "sessionId");
@@ -109,7 +113,9 @@ define_id!(ProposalId, "proposal_", "proposalId");
 define_id!(MessageId, "msg_", "messageId");
 define_id!(
     /// One runtime generation of a durable Tentacle, never a new agent identity.
-    IncarnationId, "incarnation_", "incarnationId"
+    IncarnationId,
+    "incarnation_",
+    "incarnationId"
 );
 define_id!(PropagationId, "propagation_", "propagationId");
 define_id!(InvitationId, "invite_", "invitationId");
